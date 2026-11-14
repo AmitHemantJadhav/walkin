@@ -492,6 +492,19 @@ async function gemini(contents) {
   return content;
 }
 
+/**
+ * Text as it should be heard: no Markdown, and no stray leading token. A real model once answered
+ * "MD I've previewed and placed a monstera here", which would be read out as "em-dee, I've…".
+ */
+function spoken(text) {
+  return String(text || '')
+    .replace(/[*_#`>~]+/g, '')                        // Markdown emphasis, headings, code, quotes
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')            // [label](url) -> label
+    .replace(/^\s*[A-Z]{2,4}\s+(?=[A-Z])/, '')          // a lone all-caps token before the sentence ("MD I've…")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // Three friendly lines; the raw error only goes to the console.
 const FRIENDLY = {
   network: 'Sorry, I lost the connection for a moment. Try again?',
@@ -533,7 +546,11 @@ async function ask(text) {
   const mark = history.length;
   turnAbort = new AbortController();
   const filler = speak(fillerFor(text), { filler: true });
-  const slow = setTimeout(() => speak("Give me a second, that's taking longer than usual.", { filler: true }), SLOW_MS);
+  // "taking longer than usual" means stuck, not slow: restart the clock whenever a step finishes, so a
+  // multi-step answer (plant advice is ~12 s in 3 rounds) isn't interrupted just before it lands.
+  let slow = 0;
+  const armSlow = () => { clearTimeout(slow); slow = setTimeout(() => speak("Give me a second, that's taking longer than usual.", { filler: true }), SLOW_MS); };
+  armSlow();
   const hard = setTimeout(() => turnAbort && turnAbort.abort(), HARD_DEADLINE_MS);
   try {
     const parts = [{ text }];
@@ -547,7 +564,7 @@ async function ask(text) {
       history.push(content); // unchanged, so thought signatures survive the round trip
       const calls = content.parts.filter((p) => p.functionCall).map((p) => p.functionCall);
       if (!calls.length) {
-        const reply = content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join(' ').trim();
+        const reply = spoken(content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join(' '));
         trimHistory();
         await filler;
         return say(reply || 'Done.');
@@ -559,6 +576,7 @@ async function ask(text) {
         out.push({ functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response } });
       }
       history.push({ role: 'user', parts: out });
+      armSlow();
     }
     trimHistory();
     await filler;

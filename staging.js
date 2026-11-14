@@ -460,6 +460,21 @@ function supportAt(x, y, floor) {
     && pointInPoly(x, y, footprintOf(o)));
 }
 
+/**
+ * The piece `item` is standing on, if any — footprint and height, not just position, so a plant on the
+ * floor beside a table isn't mistaken for one on it. Exposed because a restored layout has to work out
+ * its own support links: uuids are new every reload.
+ */
+export function supportUnder(item) {
+  const w = window.walkin;
+  if (!item || !item.userData.kind) return null;
+  return (w.furniture ? w.furniture.children : []).find((o) => o !== item && o.userData.kind
+    && SUPPORTS.includes(o.userData.kind)
+    && o.userData.floor === item.userData.floor
+    && Math.abs(o.position.z + (FURNITURE[o.userData.kind] || {}).h - item.position.z) < 0.05
+    && pointInPoly(item.position.x, item.position.y, footprintOf(o))) || null;
+}
+
 function footprintOf(o) {
   const spec = FURNITURE[o.userData.kind];
   const c = Math.cos(o.rotation.z), sn = Math.sin(o.rotation.z);
@@ -669,6 +684,7 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
   }
   window.walkin.describeRoom = describeRoom;
   window.walkin.placeObject = placeObject;
+  window.walkin.supportUnder = supportUnder;
   window.walkin.plants = plants;
   window.walkin.suggestPlant = suggestPlant;
 })();

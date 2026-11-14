@@ -226,6 +226,7 @@ whether #51 landed before assuming something is broken.
 | John doesn't answer | check `/api/health`; restart with `GEMINI_MOCK=1` |
 | no hands | reload, allow the camera, check it's the right camera with 📷 |
 | furniture won't move | `walkin.physics.enabled = false` |
+| furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
 | the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all |
 

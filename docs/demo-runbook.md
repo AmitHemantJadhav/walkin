@@ -186,12 +186,18 @@ Six rooms, 32 pieces, and John reads it back:
 
 Then walk through it.
 
-**Why this works, since John still has no `stage_house` tool (#56):** his only staging tool is
-`stage_room`, so the request arrives at `stageRoom` with the whole sentence as the style. Rather than
-furnish the one room you happen to be standing in and call that an answer, `staging.js` honours what
-was asked — *whole house*, *entire home*, *every room*, *all the rooms* — and does the house. "Stage
-this room like the rest of the house" is not that, and stages one room. `walkin.stageHouse('modern')`
-is still there if you'd rather press something.
+**Why this works, and when it might not.** John still has no `stage_house` tool (#56); his only
+staging tool is `stage_room`, so the request arrives at `stageRoom` with the sentence as the style,
+and `staging.js` honours what was asked — *whole house*, *entire home*, *every room*, *all the rooms*
+— instead of furnishing whichever room you happen to be standing in. ("Stage this room like the rest
+of the house" is not that, and stages one room.)
+
+That depends on the sentence surviving the trip. **In mock mode it does**, verified: 6 rooms, 32
+pieces. **With a real Gemini key it depends on the model** — if it tidies the style down to
+`"modern"` before calling the tool, the words are gone and you get one room. It may also just call
+`stage_room` six times, which also works and is slower. Try it once on the day with the real key; if
+it gives you one room, say the line and press **`walkin.stageHouse('modern')`**, which always does
+the house. The real fix is the tool in #56.
 
 Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
 halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass

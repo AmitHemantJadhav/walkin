@@ -21,4 +21,7 @@ Do exactly **one cycle** of the protocol in `MAIN.md` §7, then stop:
 Rules: never push to `main` or `demo`; never force-push; never commit `.env`, keys or `data/`; never print keys;
 no AI attribution in commits, PRs or comments (write as {{WHO}}); never delete a teammate's work.
 If a decision changes the product or you are stuck, label the issue `needs-human`, explain in one comment, move on.
-Keep this cycle under ~15 minutes of work. End with a one-line summary of what you did.
+**Goal:** `MAIN.md` §0 is the goal. In step 5, choose work that moves the first unchecked goal item you own. If yours are
+all done, take a handed-off one or one that unblocks a teammate. The loop runs you again until the goal is true.
+In step 7, list which goal items are now done (with PR numbers) and which one you'll take next.
+Keep this cycle under ~15 minutes of work. End with one line: `GOAL: <n>/<total> done — next: <item>`.

@@ -54,6 +54,7 @@ function label(mask) {
     const id = blobs.length + 1;
     let n = 0, x0 = W, x1 = 0, y0 = H, y1 = 0;
     const cols = new Map();                       // column -> lowest row, for the floor contact
+    const colTop = new Map();                     // column -> highest row, for a split piece's height
     stack.push(i); ids[i] = id;
     while (stack.length) {
       const p = stack.pop(); n++;
@@ -62,6 +63,8 @@ function label(mask) {
       if (y < y0) y0 = y; if (y > y1) y1 = y;
       const low = cols.get(x);
       if (low === undefined || y > low) cols.set(x, y);
+      const hi = colTop.get(x);
+      if (hi === undefined || y < hi) colTop.set(x, y);
       // 4-neighbours, wrapping in x because an equirect joins at the seam
       const up = p - W, dn = p + W;
       if (y > 0 && mask[up] && !ids[up]) { ids[up] = id; stack.push(up); }
@@ -70,15 +73,42 @@ function label(mask) {
       if (mask[l] && !ids[l]) { ids[l] = id; stack.push(l); }
       if (mask[r] && !ids[r]) { ids[r] = id; stack.push(r); }
     }
-    blobs.push({ id, n, x0, x1, y0, y1, cols });
+    blobs.push({ id, n, x0, x1, y0, y1, cols, colTop });
   }
   return { ids, blobs };
 }
 
-/** Where a blob meets the floor, in model metres, plus how wide and tall it is. */
-function standOn(blob, M, cam, floorZ) {
-  const hits = [];
-  for (const [x, lowY] of blob.cols) {
+/**
+ * Split one blob into the separate pieces it actually contains.
+ *
+ * Two things standing side by side touch in the photo and come out as one blob — a sofa with a side
+ * table against it measured 4.08 m across, which is not a piece of furniture, it is two. But they do
+ * not touch on the *floor*: walk along the blob's columns and the floor contact jumps when you cross
+ * from one piece to the next, because the second piece stands further away. Cut there.
+ *
+ * Column order follows the photo, so a jump is also a jump in the room. A gap under the threshold is
+ * just the curve of a single piece's front edge.
+ */
+function splitByFloor(cols, M, cam, floorZ, jump = 0.55) {
+  const runs = [];
+  let run = null, prev = null;
+  for (const x of [...cols.keys()].sort((p, q) => p - q)) {
+    const d = dirAt(x, cols.get(x), M);
+    if (d.z > -0.05) { prev = null; continue; }
+    const t = (floorZ - cam.z) / d.z;
+    if (t <= 0 || t > MAX_REACH) { prev = null; continue; }
+    const p = new THREE.Vector3(cam.x + d.x * t, cam.y + d.y * t, floorZ);
+    if (!run || !prev || p.distanceTo(prev) > jump) { run = { cols: [], hits: [] }; runs.push(run); }
+    run.cols.push(x); run.hits.push(p);
+    prev = p;
+  }
+  return runs.filter((r) => r.hits.length >= 6);
+}
+
+/** Where a set of floor hits puts a piece, in model metres, plus how wide and tall it is. */
+function standOn(blob, M, cam, floorZ, given) {
+  const hits = given || [];
+  if (!given) for (const [x, lowY] of blob.cols) {
     const d = dirAt(x, lowY, M);
     if (d.z > -0.05) continue;                              // too shallow to be the floor
     const t = (floorZ - cam.z) / d.z;
@@ -97,8 +127,12 @@ function standOn(blob, M, cam, floorZ) {
   const span = Math.hypot(maxX - minX, maxY - minY);
   const dist = Math.hypot(c.x - cam.x, c.y - cam.y);
   if (dist < 0.35 || span < 0.25) return null;              // under the tripod, or a sliver
-  // Height: the top of the blob, read at the distance the piece actually stands at.
-  const top = dirAt((blob.x0 + blob.x1) >> 1, blob.y0, M);
+  // Height: the top of this piece's own columns, read at the distance it actually stands at. Using the
+  // whole blob's top instead gives a side table the height of the sofa it was joined to.
+  const mine = (given && given.cols) || [...blob.cols.keys()];
+  let topY = blob.y1, mid = mine[mine.length >> 1];
+  for (const x of mine) { const t = blob.colTop.get(x); if (t !== undefined && t < topY) { topY = t; mid = x; } }
+  const top = dirAt(mid, topY, M);
   const horiz = Math.hypot(top.x, top.y) || 1e-6;
   const height = cam.z + top.z * (dist / horiz) - floorZ;
   if (!(height > 0.15 && height < 2.6)) return null;
@@ -151,17 +185,19 @@ function fillHoles(blob, ids) {
  * halo with it, which reads far better than the speckled edge it replaces. The alpha is then a ramp
  * rather than a step, so the edge doesn't crawl when you move.
  */
-function cutOut(blob, ids, src) {
-  const bw = blob.x1 - blob.x0 + 1, bh = blob.y1 - blob.y0 + 1;
-  const mine = (x, y) => (x < 0 || y < 0 || x >= bw || y >= bh)
-    ? false : ids[(blob.y0 + y) * W + (blob.x0 + x)] === blob.id;
+function cutOut(blob, ids, src, onlyCols) {
+  const keep = onlyCols && onlyCols.length ? new Set(onlyCols) : null;
+  const x0 = keep ? Math.min(...onlyCols) : blob.x0, x1 = keep ? Math.max(...onlyCols) : blob.x1;
+  const bw = x1 - x0 + 1, bh = blob.y1 - blob.y0 + 1;
+  const mine = (x, y) => (x < 0 || y < 0 || x >= bw || y >= bh) ? false
+    : (!keep || keep.has(x0 + x)) && ids[(blob.y0 + y) * W + (x0 + x)] === blob.id;
   const cv = document.createElement('canvas');
   cv.width = bw; cv.height = bh;
   const ctx = cv.getContext('2d');
   const out = ctx.createImageData(bw, bh);
   for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
-    const sp = (blob.y0 + y) * W + (blob.x0 + x), dp = (y * bw + x) * 4;
-    if (ids[sp] !== blob.id) { out.data[dp + 3] = 0; continue; }
+    const sp = (blob.y0 + y) * W + (x0 + x), dp = (y * bw + x) * 4;
+    if (ids[sp] !== blob.id || (keep && !keep.has(x0 + x))) { out.data[dp + 3] = 0; continue; }
     out.data[dp] = src[sp * 4]; out.data[dp + 1] = src[sp * 4 + 1];
     out.data[dp + 2] = src[sp * 4 + 2];
     // how many of the 4 neighbours are also mine: 4 inside, fewer at the edge
@@ -210,11 +246,15 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     if (found.length >= max) break;
     if (blob.n < minPx) continue;
     fillHoles(blob, ids);                                  // before measuring: a holed blob reads thin
-    const st = standOn(blob, M, cam, floorZ);
-    if (!st) continue;
-    const room = w.roomAt(st.pos.x, st.pos.y);
-    if (!room) continue;                                   // outside the plan: a reflection or the sky
-    found.push({ blob, ...st, room: room.label });
+    for (const run of splitByFloor(blob.cols, M, cam, floorZ)) {
+      if (found.length >= max) break;
+      run.hits.midCol = run.cols[run.cols.length >> 1];
+      const st = standOn(blob, M, cam, floorZ, Object.assign(run.hits, { cols: run.cols }));
+      if (!st) continue;
+      const room = w.roomAt(st.pos.x, st.pos.y);
+      if (!room) continue;                                 // outside the plan: a reflection or the sky
+      found.push({ blob, cols: run.cols, ...st, room: room.label });
+    }
   }
 
   for (const f of found) {
@@ -225,7 +265,7 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     FURNITURE[kind] = { name: 'piece the home already had', real: true,
                         w: +f.span.toFixed(2), d: +Math.min(f.span, 0.9).toFixed(2), h: +f.height.toFixed(2),
                         against: 'free' };
-    const tex = new THREE.CanvasTexture(cutOut(f.blob, ids, A));
+    const tex = new THREE.CanvasTexture(cutOut(f.blob, ids, A, f.cols));
     tex.colorSpace = THREE.SRGBColorSpace;
     const g = new THREE.Group();
     const card = new THREE.Mesh(

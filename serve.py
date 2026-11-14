@@ -16,7 +16,7 @@ Quota (R10, so a rate limit can't kill the demo):
     from disk and cost nothing. RELAY_CACHE=0 turns it off. Run the demo once before judging to pre-warm it.
   - GEMINI_MOCK=1: canned Gemini replies (tool calls, text, a brick tile image) and a silent TTS clip, so the
     agent flow can be tested without keys or quota.
-Static files: no-store for code (so edits show up), one day of caching for data/ and models/ (big, rarely change).
+Static files: no-store for code (so edits show up), one day of private (browser-only) caching for data/ and models/.
 """
 import base64, collections, datetime, hashlib, http.server, json, os, re, socketserver, struct, sys, threading, time
 import urllib.error, urllib.parse, urllib.request, zlib
@@ -228,10 +228,10 @@ def houses():
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
-        if not getattr(self, "_cache_header_sent", False):
-            path = urllib.parse.urlsplit(self.path).path
-            cached = self.command in ("GET", "HEAD") and path.startswith(STATIC_CACHED)
-            self.send_header("Cache-Control", "public, max-age=86400" if cached else "no-store, max-age=0")
+        path = urllib.parse.urlsplit(self.path).path
+        cached = self.command in ("GET", "HEAD") and path.startswith(STATIC_CACHED)
+        # private: the phone keeps panos and models, but the tunnel's edge never stores the licensed data
+        self.send_header("Cache-Control", "private, max-age=86400" if cached else "no-store, max-age=0")
         super().end_headers()
 
     # ---- static files: never serve dotfiles (.env, .git) — the tunnel makes this server public

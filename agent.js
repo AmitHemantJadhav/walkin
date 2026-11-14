@@ -328,7 +328,9 @@ const RUN = {
   },
 
   async set_wall_material({ description, tile_metres }) {
-    const w = W(), ww = w.wakeWall, pointed = (ww && performance.now() - ww.at < 20000 && ww.wall) || (w.pointer && w.pointer.wall);
+    const w = W(), ww = w.wakeWall, live = w.pointer && w.pointer.type === 'wall' && w.pointer.wall;
+    // the wall faced at "Hey John" only when nothing is pointed now, so the two can't disagree
+    const pointed = live || (ww && performance.now() - ww.at < 20000 && ww.wall);
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
     // the wall pointed at; else the one straight ahead (cursor or gaze on the floor or a sofa is the usual miss)
     const wall = pointed || (w.wallAhead && w.wallAhead());
@@ -703,7 +705,8 @@ async function ask(text) {
       const img = await captureView();
       if (img) parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
     }
-    history.push({ role: 'user', parts });
+    const userTurn = { role: 'user', parts };
+    history.push(userTurn);
     for (let i = 0; i < MAX_ROUNDS; i++) {
       const content = await gemini(history);
       history.push(content); // unchanged, so thought signatures survive the round trip
@@ -723,11 +726,12 @@ async function ask(text) {
       history.push({ role: 'user', parts: out });
       armSlow();
     }
+    // out of rounds, but the last tool usually did the job: say its own sentence instead of an error.
+    // Only this turn's tools: an older turn's "Plant on the floor" would claim something that didn't happen now.
+    const lastSay = history.slice(history.indexOf(userTurn)).reverse().flatMap((c) => c.parts).map((p) => p.functionResponse && p.functionResponse.response)
+      .find((r) => r && r.say);
     trimHistory();
     await filler;
-    // out of rounds, but the last tool usually did the job: say its own sentence instead of an error
-    const lastSay = [...history].reverse().flatMap((c) => c.parts).map((p) => p.functionResponse && p.functionResponse.response)
-      .find((r) => r && r.say);
     return say(lastSay ? spoken(lastSay.say) : 'Done.');
   } catch (e) {
     console.error('[agent]', e);

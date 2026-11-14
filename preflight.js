@@ -128,8 +128,14 @@ export async function preflight({ quiet = false } = {}) {
   if (w.physics && typeof w.physics.probe === 'function') {
     // Probe first, then read the count: the wall graph is built the first time anything asks about it,
     // so reading segments() on a house nobody has moved a piece in yet always answers 0.
+    // The home's own furniture is left out of this. Those pieces stand where they really stand, and
+    // their footprints are rectangles around irregular things — a chair tucked under a table overlaps
+    // it, a sofa overlaps the rug it sits on. That is the house being the house, not the solver
+    // failing, and counting it turns a green board red for something nobody can fix.
     const solid = w.furniture.children.filter((o) => o.userData.kind
-      && !(FURNITURE[o.userData.kind] || {}).flat && !(o.userData || {}).on);
+      && !(FURNITURE[o.userData.kind] || {}).flat && !(FURNITURE[o.userData.kind] || {}).real
+      && !(o.userData || {}).on);
+    const theirs = w.furniture.children.filter((o) => (FURNITURE[o.userData.kind] || {}).real).length;
     const stuck = solid.filter((o) => w.physics.probe(o, o.position.x, o.position.y, o.rotation.z).hit);
     const segs = w.physics.segments();
     if (!solid.length) {
@@ -141,7 +147,9 @@ export async function preflight({ quiet = false } = {}) {
     }
     else if (!segs) rows.push(no('physics', 'no wall segments: furniture will walk through walls'));
     else if (stuck.length) rows.push(no('physics', `${stuck.length} of ${solid.length} pieces are stuck in something`));
-    else rows.push(ok('physics', `${segs} wall segments, none of ${solid.length} pieces stuck, enabled: ${w.physics.enabled}`));
+    else rows.push(ok('physics', `${segs} wall segments, none of ${solid.length} pieces stuck, `
+      + `enabled: ${w.physics.enabled}`
+      + (theirs ? ` (plus ${theirs} of the home's own, not counted: they stand where they really stand)` : '')));
   } else rows.push(no('physics', 'physics.js never loaded'));
 
   // ---------------------------------------------------------------- wallpaper

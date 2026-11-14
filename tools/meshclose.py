@@ -101,11 +101,20 @@ def cap_loop(loop, pos, centroid):
     return out
 
 
-def close(V, F):
-    """Cap every hole in (V, F).
+def close(V, F, facing=-0.5):
+    """Cap the holes in (V, F).
 
     Returns (cap_positions, cap_faces, open_before, open_after). cap_faces index into cap_positions,
     which are new vertices - existing vertices and their UVs are never touched.
+
+    `facing` is why this is not simply "cap everything". A cap has no texture of its own: it gets a
+    flat colour sampled from the piece, which is invisible on an underside and an obvious pasted-on
+    slab anywhere you can see it. Compared side by side, the living room piano looks clearly *worse*
+    capped, and the sofa looks fine - because 97% of the sofa's cap area faces the floor and the
+    piano's faces sideways. So by default only holes pointing downwards (normal z below `facing`)
+    are filled: the undersides nobody sees, which are also what makes a piece look hollow from below.
+    Pass facing=1.0 to cap everything, which is what you want if a piece is going to be turned round
+    and you would rather see a flat back than the inside of its own front.
     """
     vid, nw = weld(V)
     pos = np.zeros((nw, 3))
@@ -116,7 +125,22 @@ def close(V, F):
 
     tris = []
     for L in loops:
-        tris.extend(cap_loop(L, pos, centroid))
+        got = cap_loop(L, pos, centroid)
+        if not got:
+            continue
+        if facing < 1.0:
+            a, b, c = pos[[t[0] for t in got]], pos[[t[1] for t in got]], pos[[t[2] for t in got]]
+            n = np.cross(b - a, c - a)
+            ln = np.linalg.norm(n, axis=1)
+            ok = ln > 1e-12
+            if not ok.any():
+                continue
+            area = ln[ok] / 2
+            nz = n[ok, 2] / ln[ok]
+            # weight by area: one stray triangle should not decide a whole loop
+            if (area * (nz < facing)).sum() <= 0.5 * area.sum():
+                continue
+        tris.extend(got)
     if not tris:
         return np.zeros((0, 3), np.float32), np.zeros((0, 3), np.uint32), open_before, open_before
 
@@ -141,8 +165,18 @@ def representative_uv(image, sample=64):
     w, h = im.size
     small = im.resize((min(sample, w), min(sample, h)))
     a = np.asarray(small, float).reshape(-1, 3)
-    target = np.median(a, axis=0)
-    k = int(np.argmin(((a - target) ** 2).sum(axis=1)))
+    # The packer fills unused atlas space with (150,145,140). About a quarter of a sheet is that
+    # filler, so a plain median can land on it and cap a piece with grey instead of its own material.
+    real = a[(np.abs(a - np.array([150., 145., 140.])).max(axis=1) > 6)]
+    if len(real) < 16:
+        real = a
+    target = np.median(real, axis=0)
+    a = real
+    full = np.asarray(small, float).reshape(-1, 3)
+    bg = np.abs(full - np.array([150., 145., 140.])).max(axis=1) <= 6
+    cost = ((full - target) ** 2).sum(axis=1)
+    cost[bg] = np.inf                                # never point a cap at the filler
+    k = int(np.argmin(cost))
     sw = small.size[0]
     u = ((k % sw) + 0.5) / sw
     v = ((k // sw) + 0.5) / small.size[1]

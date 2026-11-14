@@ -184,6 +184,7 @@ def bake_colours(V, F, T, Ftf, Fmat, mats, pak, verts_wanted):
 # a 1024 px sheet and a 10 cm ornament gets 64 — the first version sized the sheet from the source texels
 # instead, and gave that ornament 1413 x 1546 and 357 KB, which is most of where 8.2 MB of atlases went.
 PX_PER_M = 512
+SLIVER = 8          # longest edge over thickness: above this a triangle is a bridge, not a surface
 ATLAS_MIN, ATLAS_MAX = 64, 1024
 
 
@@ -298,7 +299,7 @@ def atlas_uv(uv, crops_by_face, fi, sheet):
     return (px / sw, 1 - py / sh)
 
 
-def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
+def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12):
     full, empty = paths(model)
     t0 = time.time()
     Vf, Ff, Tf, Ftf, Fmat, mats = load_obj(full, want_uv=True)
@@ -318,6 +319,28 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
     keep = d > cut
     print(f'{keep.sum():,} triangles are more than {cut*100:.0f} cm off the empty house '
           f'({100*keep.mean():.1f}%)')
+
+    # Photogrammetry bridges gaps it could not see into, and those bridges come out as single long
+    # triangles that stick off a piece as spikes - the piano's silhouette was torn by them. On this
+    # house the median kept triangle has a 6.5 cm longest edge and the 99th percentile is 35 cm, so
+    # the tail is a different population, not the top of a smooth distribution.
+    # Photogrammetry bridges gaps it could not see into, and those bridges come out as long thin
+    # triangles that stick off a piece as spikes - they tore the piano's silhouette. Cutting on edge
+    # length alone is wrong: a flat panel is legitimately a few big triangles, and a 20 cm limit
+    # punched the whole front out of that same piano. A spike is long *and* thin, so measure the
+    # triangle's thickness (twice its area over its longest edge) and drop only the slivers.
+    if max_edge:
+        T = Vf[Ff]
+        elong = np.stack([np.linalg.norm(T[:, 1] - T[:, 0], axis=1),
+                          np.linalg.norm(T[:, 2] - T[:, 1], axis=1),
+                          np.linalg.norm(T[:, 0] - T[:, 2], axis=1)], axis=1).max(axis=1)
+        area = np.linalg.norm(np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]), axis=1) / 2
+        thick = 2 * area / np.maximum(elong, 1e-9)
+        before = int(keep.sum())
+        keep &= ~((elong > max_edge) & (elong / np.maximum(thick, 1e-9) > SLIVER))
+        print(f'dropped {before - int(keep.sum()):,} spikes longer than {max_edge*100:.0f} cm and '
+              f'{SLIVER}x thinner than they are long '
+              f'({100*(before-int(keep.sum()))/max(before,1):.1f}%)')
 
     idx, lab, n = components(Ff, keep)
     print(f'{n} connected components')

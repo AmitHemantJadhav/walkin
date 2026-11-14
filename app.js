@@ -6,6 +6,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
 import { createRealHands } from './realhands.js';
+import { createRadial } from './radial.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -641,6 +642,36 @@ function nearestFurniture(f) { // the piece whose footprint is closest to floor 
 }
 function puckAt(f) { return f ? pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < PUCK_RADIUS) || null : null; }
 
+// A5: pinch and hold still (HOLD_SLOP of the screen) for HOLD_MS where there is nothing to grab and no puck ->
+// radial menu (radial.js). Move toward an option and let go to pick it; let go in the middle to cancel.
+const HOLD_MS = 600, HOLD_SLOP = 0.04;
+const holds = {};
+const placeHere = (kind) => (f) => { // where you pinched, fit-checked by staging.js; else 2 m ahead like the buttons
+  const r = f && window.walkin?.placeObject?.(kind, f.x, f.y);
+  if (!r || !r.fits) addFurniture(kind);
+};
+const radial = createRadial({ scene, camera, toWorld: screenToWorld,
+  aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight,
+  items: [
+    { icon: '🛋️', label: 'Sofa', run: placeHere('sofa') },
+    { icon: '🛏️', label: 'Bed', run: placeHere('queen') },
+    { icon: '🍽️', label: 'Table', run: placeHere('table') },
+    { icon: '🪴', label: 'Plant', run: placeHere('plant') },
+    { icon: '🏠', label: () => (showEmpty ? 'Scanned' : 'Empty'), run: () => $('bEmpty').click() },
+    { icon: '🎙️', label: 'Talk', run: () => window.walkin?.onTalk?.() },
+  ] });
+function holdMenu(h, now) {
+  const hd = holds[h.side];
+  if (!hd) return;
+  if (radial.side === h.side) { radial.point(h.x, h.y); return; }
+  if (radial.side) { hd.t0 = now; hd.x = h.x; hd.y = h.y; return; } // the other hand has it: this hold starts later
+  if (Math.hypot(h.x - hd.x, h.y - hd.y) > HOLD_SLOP) delete holds[h.side]; // it moved: not a hold
+  else if (now - hd.t0 >= HOLD_MS) {
+    for (const s of Object.keys(holds)) if (s !== h.side) delete holds[s]; // so it doesn't pop open again for the other hand
+    radial.open(h.side, hd.x, hd.y, hd.floor);
+  }
+}
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -651,6 +682,8 @@ function onHands(list, cam) {
   for (const side of Object.keys(grabs)) if (!present.has(side)) letGo(side, false); // lost hand: no fling
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
   for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
+  for (const side of Object.keys(holds)) if (!present.has(side)) delete holds[side];
+  if (radial.side && !present.has(radial.side)) radial.cancel(); // lost the hand: never pick by accident
 
   const act = list.find((h) => h.pinch) || list[0];
   if (act) {
@@ -688,10 +721,13 @@ function onHands(list, cam) {
       } else if (puckReady) {
         aims[h.side] = null;
         goTo(near.userData.pano);
-      }
+      } else holds[h.side] = { t0: now, x: h.x, y: h.y, floor: f }; // empty space: maybe a pinch-hold (A5)
     } else if (!h.pinch) {
       letGo(h.side, true);
+      delete holds[h.side];
+      if (radial.side === h.side) radial.release();
     }
+    if (h.pinch) holdMenu(h, now);
     prevPinch[h.side] = h.pinch;
   }
 
@@ -749,6 +785,8 @@ async function toggleHands() {
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
     for (const side of Object.keys(grabs)) letGo(side, false); // else physics keeps the piece held by a ghost hand
+    radial.cancel();
+    for (const side of Object.keys(holds)) delete holds[side];
     realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
@@ -916,6 +954,7 @@ function frame() {
   sphere.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
+  radial.layout(); // A5: keep an open menu where you pinched while the head turns
   for (const fn of beforeRender) {
     try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
   }
@@ -942,6 +981,7 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },
+  get radial() { return radial.state; }, // A5: {side, hot, label} while the pinch-hold menu is open, else null
   // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
   // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
   // Add depth (metres from the camera) to try push / pull: with the front camera a smaller depth pushes the piece away.

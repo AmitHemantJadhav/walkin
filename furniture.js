@@ -9,22 +9,22 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 //   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
   sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', against: 'wall' },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', against: 'free' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', against: 'free', tone: 'fabricLt' },
   queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', against: 'wall' },
   king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', against: 'wall' },
   table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', against: 'free' },
   desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', against: 'wall' },
   // pieces a staged room needs
   chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', against: 'small' },
-  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small' },
-  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small' },
+  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small', tone: 'woodLt' },
+  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small', tone: 'woodLt' },
   coffeetable: { name: 'Coffee table', w: 1.1, d: 0.6, h: 0.42, model: 'tableCoffee.glb', against: 'free' },
-  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall' },
+  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall', tone: 'woodLt' },
   tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
-  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall' },
+  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall', tone: 'woodLt' },
   floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', against: 'small' },
-  rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true },
-  ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true },
+  rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true, tone: 'fabricLt' },
+  ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true, tone: 'fabricLt' },
   plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', against: 'small' },
   plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', against: 'small' },
   plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
@@ -42,11 +42,83 @@ const MODEL_DIR = new URL('models/', import.meta.url).href;
 // so they get a half turn to put the front on -y.
 const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
 
+
+// ------------------------------------------------------------------ materials (S7)
+// The Kenney kits ship a pastel palette (salmon sofas, pale tan wood) that reads as toys next to a
+// photo of a real room. Every material in those files is named by what it is - wood, metal, carpet,
+// plant, lamp - so we can swap in a neutral palette part by part instead of guessing from colours.
+export const STYLES = {
+  modern: { fabric: 0x8e8a84, fabricLt: 0xcfc8bb, fabricDk: 0x46464a, wood: 0x6b4a32, woodLt: 0xa9825a,
+            metal: 0x2a2a2d, leaf: 0x4f6b4a, shade: 0xeee5d2, name: 'modern' },
+  cozy:   { fabric: 0xa07a63, fabricLt: 0xe0d3bd, fabricDk: 0x55402f, wood: 0x5c3b25, woodLt: 0x946a42,
+            metal: 0x3a3430, leaf: 0x55693f, shade: 0xf2e3c4, name: 'cozy' },
+  scandi: { fabric: 0xb6b2aa, fabricLt: 0xe6e2d9, fabricDk: 0x5d6168, wood: 0xb08a5e, woodLt: 0xd2b58a,
+            metal: 0x3c3f44, leaf: 0x5d7a55, shade: 0xf6f1e6, name: 'scandi' },
+};
+const DEFAULT_STYLE = 'modern';
+let currentStyle = DEFAULT_STYLE;
+
+const ROUGH = { fabric: 0.94, wood: 0.55, metal: 0.35, leaf: 0.72, shade: 0.6 };
+
+/** Which part of the palette one of the kit's materials belongs to. */
+function partOf(name, lightness) {
+  const n = (name || '').toLowerCase();
+  if (n.includes('wood')) return n.includes('dark') ? 'wood' : 'woodLt';
+  if (n.includes('metal')) return 'metal';
+  if (n.includes('plant') || n.includes('leaf') || n.includes('green')) return 'leaf';
+  if (n.includes('lamp') || n.includes('light')) return 'shade';
+  if (lightness > 0.85) return 'fabricLt';
+  if (lightness < 0.4) return 'fabricDk';
+  return 'fabric';
+}
+
+const styled = new Map();   // `${style}|${source material uuid}` -> the restyled material
+
+function styleMaterial(src, style, tone) {
+  const pal = STYLES[style] || STYLES[DEFAULT_STYLE];
+  const key = `${pal.name}|${tone || '-'}|${src.uuid}`;
+  if (styled.has(key)) return styled.get(key);
+
+  const hsl = { h: 0, s: 0, l: 0.5 };
+  if (src.color) src.color.getHSL(hsl);
+  const part = tone && pal[tone] !== undefined ? tone : partOf(src.name, hsl.l);
+  const m = src.clone();
+  m.color = new THREE.Color(pal[part]);
+  // keep a little of the original light/dark variation, so pillows stay lighter than the duvet
+  m.color.multiplyScalar(THREE.MathUtils.clamp(0.88 + 0.24 * hsl.l, 0.78, 1.18));
+  m.roughness = ROUGH[part] !== undefined ? ROUGH[part] : (ROUGH[part.replace(/Lt|Dk/, '')] || 0.85);
+  m.metalness = part === 'metal' ? 0.65 : 0;
+  m.name = `${part}:${pal.name}`;
+  styled.set(key, m);
+  return m;
+}
+
+/** Re-material one piece (or everything under a group) in the given style. */
+export function applyStyle(root, style = currentStyle) {
+  const tone = (FURNITURE[root.userData.kind] || {}).tone;
+  root.traverse((o) => {
+    if (!o.isMesh || !o.userData.styleSrc) return;
+    o.material = styleMaterial(o.userData.styleSrc, style, tone);
+  });
+  root.userData.style = style;
+  return root;
+}
+
+/** The style new pieces get; with a group it also restyles everything already in it. */
+export function setStyle(style, group) {
+  if (!STYLES[style]) return currentStyle;
+  currentStyle = style;
+  if (group) for (const child of group.children) applyStyle(child, style);
+  return currentStyle;
+}
+
+export const getStyle = () => currentStyle;
+
 // ------------------------------------------------------------------ box fallback (also used by preview.html)
 const mat = (color, roughness = 0.85) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
 const M = {
-  fabric: mat(0xb8b2a7), cushion: mat(0xcfc9be), dark: mat(0x2b2b2e, 0.6), wood: mat(0x8a5a3b, 0.6),
-  sheet: mat(0xf3f0ea), pillow: mat(0xe7e2d8), top: mat(0x6e4a33, 0.5),
+  fabric: mat(0x8e8a84, 0.94), cushion: mat(0xcfc8bb, 0.94), dark: mat(0x2a2a2d, 0.35), wood: mat(0x6b4a32, 0.55),
+  sheet: mat(0xe6e2d9, 0.94), pillow: mat(0xcfc8bb, 0.94), top: mat(0xa9825a, 0.55),
 };
 
 // ------------------------------------------------------------------ contact shadow
@@ -61,9 +133,10 @@ function shadowTexture() {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
-    const grad = g.createRadialGradient(64, 64, 8, 64, 64, 64);
+    const grad = g.createRadialGradient(64, 64, 6, 64, 64, 64);
     grad.addColorStop(0, 'rgba(0,0,0,1)');
-    grad.addColorStop(0.45, 'rgba(0,0,0,0.62)');   // dark right under the piece, then falls off fast
+    grad.addColorStop(0.38, 'rgba(0,0,0,0.88)');   // solid right under the piece...
+    grad.addColorStop(0.62, 'rgba(0,0,0,0.42)');   // ...then a soft edge, like real contact shading
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 128);
@@ -73,7 +146,7 @@ function shadowTexture() {
 }
 
 function shadow(w, d) {
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.22, d * 1.22),
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.3, d * 1.3),
     new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: shadowOpacity }));
   m.position.z = 0.002;
   m.renderOrder = 1;
@@ -171,7 +244,7 @@ export function preloadModels() {
  * Turn a glTF model (Y-up, arbitrary origin and scale) into our frame: x = width, y = depth with the front
  * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
  */
-function fitToSpec(src, spec, flipped) {
+function fitToSpec(src, spec, flipped, style) {
   const b = new THREE.Box3().setFromObject(src);
   const size = b.getSize(new THREE.Vector3());
   const c = b.getCenter(new THREE.Vector3());
@@ -183,6 +256,8 @@ function fitToSpec(src, spec, flipped) {
     if (!o.isMesh) return;
     o.renderOrder = 2;          // after the depth-only occluders
     o.castShadow = o.receiveShadow = false;
+    o.userData.styleSrc = o.material;          // the kit's own material, kept so the style can change
+    o.material = styleMaterial(o.material, style, spec.tone);
   });
 
   const zUp = new THREE.Group();
@@ -199,10 +274,11 @@ function fitToSpec(src, spec, flipped) {
  * A piece of furniture, ready to add to the scene. Returns synchronously: the group starts with the box
  * fallback and swaps in the real model when it arrives (the boxes stay if the model can't be loaded).
  */
-export function buildFurniture(kind) {
+export function buildFurniture(kind, style = currentStyle) {
   const spec = FURNITURE[kind];
   const g = new THREE.Group();
   g.userData.kind = kind;
+  g.userData.style = style;
   const boxes = buildBoxes(kind);
   g.add(boxes);
   g.add(shadow(spec.w, spec.d));
@@ -211,7 +287,7 @@ export function buildFurniture(kind) {
     load(spec.model).then((src) => {
       if (!src) return;          // load failed: keep the boxes
       g.remove(boxes);
-      g.add(fitToSpec(src.clone(true), spec, FLIPPED.has(spec.model)));
+      g.add(fitToSpec(src.clone(true), spec, FLIPPED.has(spec.model), g.userData.style || currentStyle));
       g.userData.model = spec.model;
     });
   }

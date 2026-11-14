@@ -1,7 +1,7 @@
 // S3 — walkin.stageRoom(room, style): furnish a whole room in one go.
 // Puts the big piece against the best wall, arranges the rest around it, and checks every placement
 // with fit.js, so what comes back is a set that actually fits with the doors still usable.
-import { FURNITURE, PLANTS } from './furniture.js';
+import { FURNITURE, PLANTS, applyStyle, setStyle, STYLES, getStyle } from './furniture.js';
 import { fitReport, fitLine, openings, overlaps, pointInPoly } from './fit.js';
 
 const WALL_GAP = 0.06;          // a piece stands this far off the wall
@@ -44,7 +44,7 @@ function wallsFor(edges, width, { avoidWindows = false } = {}) {
 }
 
 // ------------------------------------------------------------------ putting pieces down
-function makePlacer(room, floorZ, floor) {
+function makePlacer(room, floorZ, floor, style) {
   const w = window.walkin;
   const placed = [];
   const skipped = [];
@@ -61,6 +61,7 @@ function makePlacer(room, floorZ, floor) {
       it.position.set(c.x, c.y, floorZ + (FURNITURE[kind].flat ? 0.002 : 0.004));
       it.rotation.z = c.rot;
       it.userData.floor = floor;
+      if (style) applyStyle(it, style);
       placed.push({ kind, name: FURNITURE[kind].name, x: +c.x.toFixed(2), y: +c.y.toFixed(2), item });
       return it;
     }
@@ -147,9 +148,12 @@ const PLANS = {
     if (!placedSofa) { P.skipped.push({ kind: 'sofa', name: sofa.name, why: 'no wall long enough without a door' }); return; }
     P.tryPlace('rug', [inFrontOf(placedSofa, 1.25)], { optional: true });
     P.tryPlace('coffeetable', [inFrontOf(placedSofa, 1.0), inFrontOf(placedSofa, 0.85)], { optional: true });
+    const side = FURNITURE.sofa.w / 2 + FURNITURE.armchair.w / 2 + 0.35;
     P.tryPlace('armchair', [
-      { ...inFrontOf(placedSofa, 1.1, 1.5), rot: placedSofa.rotation.z - Math.PI / 2 },
-      { ...inFrontOf(placedSofa, 1.1, -1.5), rot: placedSofa.rotation.z + Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 0.9, side), rot: placedSofa.rotation.z - Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 0.9, -side), rot: placedSofa.rotation.z + Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 1.4, side * 0.8), rot: placedSofa.rotation.z - Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 1.4, -side * 0.8), rot: placedSofa.rotation.z + Math.PI / 2 },
     ], { optional: true });
     // the television goes on the wall the sofa looks at
     const opposite = edges.filter((e) => Math.cos(e.facing - placedSofa.rotation.z) < -0.5)
@@ -265,7 +269,8 @@ export function stageRoom(room, style = 'modern') {
   const floor = r.floor || (w.current && w.current.floor);
   const floorZ = (w.current && w.current.floorZ) || 0;
   const edges = edgesOf(r, w.house);
-  const P = makePlacer(r, floorZ, floor);
+  const styleName = STYLES[style] ? style : getStyle();
+  const P = makePlacer(r, floorZ, floor, styleName);
   plan(r, edges, P, floorZ, style);
 
   if (w.select) w.select(null);
@@ -276,7 +281,7 @@ export function stageRoom(room, style = 'modern') {
       + (P.skipped.length ? `. No room for the ${list(P.skipped.map((s) => lower(s.name)))} — ${P.skipped[0].why}.` : '. Everything fits, doors clear.')
     : `I couldn't fit a ${lower(r.label)} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
 
-  return { room: r, style, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
+  return { room: r, style: styleName, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
 }
 
 /** "a sofa, a rug and 4 chairs" */
@@ -414,6 +419,8 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
     return;
   }
   window.walkin.stageRoom = stageRoom;
+  window.walkin.setStyle = (style) => setStyle(style, window.walkin.furniture);
+  window.walkin.styles = () => Object.keys(STYLES);
   window.walkin.describeRoom = describeRoom;
   window.walkin.placeObject = placeObject;
   window.walkin.plants = plants;

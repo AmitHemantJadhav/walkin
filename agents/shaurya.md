@@ -173,6 +173,33 @@ So, for anything physics:
 The lateral figure that survived all this is **about 10 cm**, not symmetric, which is what
 `physics.js:342` already documented. The docs now say that and decline to name an angle.
 
+### Delete the thing you are blaming before you blame it
+
+On #89 I reported a "thin white wedge" in the wallpaper on La Mirada wall #1 and guessed it was the
+paper quad overhanging a corner. @AmitHemantJadhav filed **#91** on that report and built returns at
+every opening edge to fix it.
+
+**There was nothing to fix.** The control took one call: `clearWallMaterial` on that wall and look at
+the same spot from the same viewpoint. The white shapes are **still there** with no wallpaper in the
+scene at all — they are the photographed door jamb and its trim, seen through the hole the paper is
+correctly cut around.
+
+| | the bright shapes |
+|---|---|
+| paper + returns | present |
+| paper, `&wallreturn=off` | present, identical |
+| **no paper at all** | **present, identical** |
+
+Anything that survives deleting the thing you draw is not a bug in the thing you draw. When something
+looks wrong *on* a surface we render, remove the surface first; it is cheaper than any amount of
+reasoning about quads and z-fighting, and it is the test I skipped.
+
+This is the same shape of mistake as [[#84]]: both times the missing step was a control, and both
+times I had a plausible mechanism in hand that made me feel finished before I had checked anything.
+A plausible mechanism is the *reason* to run the control, not a substitute for it. Also: pixel → ray
+arithmetic across a scaled screenshot is not good enough to identify geometry — I tried that first on
+#93 and it put a pixel I could plainly see as brick inside a doorway.
+
 ### Still untested by anyone, as of this writing
 
 - **Hands with a real camera** (#41, #50) — no webcam on this machine.

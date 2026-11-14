@@ -22,3 +22,24 @@ values were set from each model's natural proportions, so the vertical stretch s
 
 `preview.html` renders every catalog item inside its real-size wire box — open
 `http://localhost:8000/models/preview.html` with `serve.py` running to check sizes and facing.
+
+## Photoreal pieces (`hero/`)
+
+The sofa and armchair are **CC0** models from **Poly Haven** (<https://polyhaven.com>), downloaded at
+1k texture resolution (glTF + .bin + diffuse/normal/ARM jpg). Public domain; credit appreciated,
+not required.
+
+| Folder | Used for | Size | Source |
+|---|---|---|---|
+| `hero/Sofa_01/` | `sofa` | 0.51 MB | <https://polyhaven.com/a/Sofa_01> |
+| `hero/ArmChair_01/` | `armchair` | 0.75 MB | <https://polyhaven.com/a/ArmChair_01> |
+
+These load *after* the Kenney model for the same kind, so a piece appears instantly and sharpens a
+moment later; if they fail to load, the Kenney model stays. They keep their own PBR materials — a
+`stageRoom` style tints them rather than recolouring them, so the texture detail survives.
+
+Two things worth knowing if you add more of these:
+- Poly Haven models can carry a baked `COLOR_0` vertex-colour attribute that multiplies the texture
+  (it rendered `CoffeeTable_01` solid black until `vertexColors` was turned off).
+- Their packed ARM maps can drive metalness to 1, and a metal surface with no environment map renders
+  black, so metalness is clamped to 0.12 until the scene has an environment map.

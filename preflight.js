@@ -11,6 +11,32 @@ import { FURNITURE } from './furniture.js';
 const ok = (name, note) => ({ name, ok: true, note });
 const no = (name, note) => ({ name, ok: false, note });
 
+/**
+ * One real question through the relay, so a dead key fails the check instead of passing it.
+ * Eight tokens, no tools, no system prompt; `serve.py` caches it, so running preflight twice costs one.
+ */
+async function asksAndAnswers(timeoutMs = 8000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch('/api/gemini', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal,
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Say ok.' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 8 } }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = data.error || {};
+      return { ok: false, why: String(err.message || err || `the relay returned ${res.status}`).slice(0, 120) };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, why: e.name === 'AbortError' ? `no answer in ${timeoutMs / 1000} s` : String(e.message || e).slice(0, 120) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Frames rendered in `ms`, as a rate. */
 function fps(ms = 1000) {
   return new Promise((done) => {
@@ -41,13 +67,28 @@ export async function preflight({ quiet = false } = {}) {
     : no('the house', `${panos} scan points, ${rooms.length} rooms with outlines — one of those should not be 0`));
 
   // ---------------------------------------------------------------- John
+  // /api/health only says whether a key is *set*. A key that is set and rejected looks identical from
+  // there, and "John answers ✓" printed over a 401 is the worst kind of green — it is the one check
+  // nobody repeats by hand. So ask him something: one call, eight tokens, cached by the relay after.
   try {
     const h = await (await fetch('/api/health')).json();
     const live = h.gemini || h.openrouter;
-    rows.push(live || h.mock
-      ? ok('John answers', live ? `${h.provider || 'live'} key, voice ${h.tts ? 'on' : 'OFF — he will be read, not heard'}`
-        : 'MOCK replies — every scripted line still works, nothing dies on stage')
-      : no('John answers', 'no key and no mock: restart with GEMINI_MOCK=1 python3 serve.py'));
+    if (!live && !h.mock) {
+      rows.push(no('John answers', 'no key and no mock: restart with GEMINI_MOCK=1 python3 serve.py'));
+    } else {
+      const said = await asksAndAnswers();
+      const voice = h.tts ? '' : ', voice OFF — he will be read, not heard';
+      if (said.ok) {
+        rows.push(ok('John answers', h.mock
+          ? 'MOCK replies, and the relay answered — every scripted line still works, nothing dies on stage'
+          : `${h.provider || 'live'} key, and he answered${voice}`));
+      } else {
+        rows.push(no('John answers', h.mock
+          ? `the mock relay did not answer — ${said.why}. Is serve.py the one you just pulled?`
+          : `a ${h.provider || 'live'} key is set but the call failed — ${said.why}. `
+            + 'He cannot answer; a working key is #15'));
+      }
+    }
   } catch (e) {
     rows.push(no('John answers', '/api/health did not reply — is serve.py the one you just pulled?'));
   }

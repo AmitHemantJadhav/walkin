@@ -346,7 +346,8 @@ function talkClassic() {
   const w = window.walkin;
   if (!w || !w.agent) { if (tries < 600) setTimeout(() => attach(tries + 1), 200); return; }
   w.onTalk = talkNow;                        // replaces agent.js's own one-shot recognizer
-  w.voice = { talk: talkNow, state: () => state.mode, openPanel: () => setPanel(true), _onResult: onResult, _finish: finishCommand };
+  w.voice = { talk: talkNow, state: () => state.mode, openPanel: () => setPanel(true), _onResult: onResult, _finish: finishCommand,
+    _wake: wake };
   if (!SR) document.body.classList.add('vx-no-speech');
   setMode(state.wanted ? state.mode : 'off');
 })();

@@ -26,6 +26,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 MAX_BODY = 20 * 1024 * 1024  # a view screenshot as inline base64 fits easily
 MAX_TTS_CHARS = 1000
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+import openrouter  # noqa: E402  fallback LLM provider (OPENROUTER_API_KEY) when Gemini is missing or failing
 TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128"
 
 
@@ -110,7 +111,10 @@ def health():
             entries = len([f for f in os.listdir(CACHE_DIR) if f.endswith(".bin")])
         except OSError:
             entries = 0
+        provider = ("mock" if MOCK else "gemini" if os.environ.get("GEMINI_API_KEY")
+                    else "openrouter" if openrouter.key() else "none")
         return {"gemini": bool(os.environ.get("GEMINI_API_KEY")), "tts": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                "openrouter": bool(openrouter.key()), "provider": provider,
                 "mock": MOCK, "calls_last_minute": len(recent), "calls_today": STATS["today"],
                 "rate_limited": STATS["limited"], "cache": {"on": CACHE_ON, "entries": entries, "hits": STATS["cache_hits"]},
                 "last_upstream": STATS["last"],
@@ -281,11 +285,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if MOCK:
             return self._json(200, mock_gemini(req if isinstance(req, dict) else {}, model))
         key = os.environ.get("GEMINI_API_KEY")
-        if not key:
-            return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
         kind = "image" if "image" in model.lower() else "gemini"
+        req = req if isinstance(req, dict) else {}
+        if not key:
+            if openrouter.key():
+                return self._openrouter(kind, model, req, body)
+            return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
+        fallback = (lambda: self._openrouter(kind, model, req, body)) if openrouter.key() else None
         self._relay(kind, cache_key("gemini", model, body), GEMINI_URL.format(model=model), body,
-                    {"Content-Type": "application/json", "x-goog-api-key": key})
+                    {"Content-Type": "application/json", "x-goog-api-key": key}, fallback=fallback)
+
+    def _openrouter(self, kind, model, req, body):
+        """Same cache and limits, via OpenRouter; its reply is translated back to Gemini's shape for agent.js."""
+        slug = openrouter.model_for(model)
+        payload = json.dumps(openrouter.to_openai(req, slug)).encode()
+        self._relay(kind, cache_key("openrouter", slug, body), openrouter.URL, payload, openrouter.headers(),
+                    transform=lambda out: json.dumps(openrouter.to_gemini(json.loads(out))).encode())
 
     def _tts(self, body):
         try:
@@ -317,8 +332,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _relay(self, kind, key, target, data, headers):
-        """Cache, then rate limit, then the upstream call (one polite retry on its 429)."""
+    def _relay(self, kind, key, target, data, headers, fallback=None, transform=None):
+        """Cache, then rate limit, then the upstream call (one polite retry on its 429).
+        fallback(): answer some other way when the upstream is rate limited, failing (5xx) or unreachable.
+        transform(bytes) -> bytes: rewrite a 200 reply (e.g. OpenRouter's JSON into Gemini's) before caching it."""
         hit = cache_get(key)
         if hit:
             return self._send(200, hit[0], hit[1])
@@ -332,10 +349,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if status != 429 or attempt == 2 or retry is None or retry > 10:
                 break
             time.sleep(retry)
+        if fallback and (status is None or status == 429 or status >= 500):
+            return fallback()
         if status == 429:
             return self._busy(retry or 30, "upstream rate limit")
         if status is None:
             return self._json(502, {"error": f"upstream unreachable: {out}"})
+        if status == 200 and transform:
+            try:
+                out, ctype = transform(out), "application/json"
+            except (ValueError, KeyError, TypeError, IndexError) as e:
+                return self._json(502, {"error": f"unexpected upstream reply: {type(e).__name__}"})
         if status == 200:
             cache_put(key, ctype or "application/octet-stream", out)
         self._send(status, ctype or "application/octet-stream", out)

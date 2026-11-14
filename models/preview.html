@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Walk-In — furniture check</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #16161a; color: #f4f2ee; overflow: hidden;
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; }
+  canvas { display: block; }
+  #legend { position: fixed; top: 10px; left: 10px; background: rgba(18,18,22,.8); padding: 10px 12px;
+    border-radius: 12px; backdrop-filter: blur(8px); }
+  #legend h1 { margin: 0 0 6px; font-size: 14px; }
+  #legend { max-height: 70vh; overflow: auto; font-size: 12px; }
+  #legend div { color: #a9a5a0; }
+  #legend b { color: #f4f2ee; }
+  #legend .red { color: #ff5a5f; }
+  #bar { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(18,18,22,.8);
+    padding: 8px 10px; border-radius: 12px; display: flex; gap: 6px; }
+  button { background: #2a2a31; color: #f4f2ee; border: 0; border-radius: 9px; padding: 7px 10px; font: inherit; cursor: pointer; }
+  button.on { background: #ff5a5f; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="legend"><h1>Furniture check</h1><div id="list"></div>
+  <div style="margin-top:6px">green box = catalog size · <span class="red">red cone</span> = front (−y) · grid = 1 m</div></div>
+<div id="bar">
+  <button id="bBoxes" title="Show the box fallback instead of the models">Boxes</button>
+  <button data-view="front" class="on">Front</button>
+  <button data-view="three">¾</button>
+  <button data-view="top">Top</button>
+  <button id="bSpin">Spin</button>
+</div>
+<script type="module">
+// Dev page: renders every catalog item inside its real-size wire box, so sizes and facing can be checked
+// without the house data. Not part of the viewer.
+import * as THREE from 'three';
+import { FURNITURE, buildFurniture, buildBoxes, preloadModels } from '../furniture.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x16161a);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 200);
+camera.up.set(0, 0, 1);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7f72, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(2, -3, 6);
+scene.add(sun);
+
+const grid = new THREE.GridHelper(24, 24, 0x444450, 0x2a2a31);
+grid.rotation.x = Math.PI / 2;
+scene.add(grid);
+
+const kinds = Object.keys(FURNITURE);
+const COLS = 5, GAP = 2.8;
+const ROWS = () => Math.ceil(kinds.length / COLS);
+const cell = (i) => [(i % COLS - (COLS - 1) / 2) * GAP, -(Math.floor(i / COLS) - (ROWS() - 1) / 2) * GAP];
+
+const world = new THREE.Group();
+scene.add(world);
+const items = [];
+
+function layout(useBoxes) {
+  world.clear();
+  items.length = 0;
+  kinds.forEach((kind, i) => {
+    const spec = FURNITURE[kind];
+    const [x, y] = cell(i);
+    const slot = new THREE.Group();
+    slot.position.set(x, y, 0);
+    world.add(slot);
+
+    const item = useBoxes ? buildBoxes(kind) : buildFurniture(kind);
+    slot.add(item);
+    items.push(item);
+
+    // the catalog's real box, drawn as a wireframe
+    const b = new THREE.Box3(new THREE.Vector3(-spec.w / 2, -spec.d / 2, 0),
+      new THREE.Vector3(spec.w / 2, spec.d / 2, spec.h));
+    slot.add(new THREE.Box3Helper(b, 0x3ccf8e));
+
+    // front marker: a cone on -y pointing away from the piece
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.26, 12),
+      new THREE.MeshBasicMaterial({ color: 0xff5a5f }));
+    cone.rotation.x = Math.PI;          // tip towards -y
+    cone.position.set(0, -spec.d / 2 - 0.3, 0.13);
+    slot.add(cone);
+  });
+}
+
+$list();
+function $list() {
+  document.getElementById('list').innerHTML = kinds
+    .map((k, i) => `<div><span style="opacity:.5">${i + 1}.</span> <b>${FURNITURE[k].name}</b>`
+      + ` ${FURNITURE[k].w} × ${FURNITURE[k].d} × ${FURNITURE[k].h} m`
+      + ` <span style="opacity:.6">${FURNITURE[k].model || 'boxes'}</span></div>`).join('');
+}
+
+let spin = false, boxes = false, mode = 'front';
+document.getElementById('bSpin').onclick = (e) => { spin = !spin; e.target.classList.toggle('on', spin); };
+document.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => {
+  mode = b.dataset.view;
+  spin = false;
+  document.getElementById('bSpin').classList.remove('on');
+  document.querySelectorAll('[data-view]').forEach((o) => o.classList.toggle('on', o === b));
+});
+document.getElementById('bBoxes').onclick = (e) => { boxes = !boxes; e.target.classList.toggle('on', boxes); layout(boxes); };
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+await preloadModels();
+layout(false);
+
+const target = new THREE.Vector3(0, 0, 0.5);
+let t = 0;
+function frame() {
+  requestAnimationFrame(frame);
+  if (spin) { t += 0.0035; mode = 'spin'; }
+  if (mode === 'top') camera.position.set(0, -0.001, 17);
+  else if (mode === 'three') camera.position.set(9, -11, 8);
+  else if (mode === 'front') camera.position.set(0, -13, 3.2);
+  else camera.position.set(Math.sin(t) * 9.5, -Math.cos(t) * 9.5, 5.2);
+  camera.lookAt(mode === 'top' ? new THREE.Vector3(0, 0, 0) : target);
+  renderer.render(scene, camera);
+}
+frame();
+</script>
+</body>
+</html>

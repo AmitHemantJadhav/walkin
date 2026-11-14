@@ -499,6 +499,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
     grp.userData.kind = kind;
     grp.userData.real = true;
     grp.userData.meshPiece = true;
+    grp.userData.i = p.i;
     grp.userData.z0 = grp.position.z;
     // physics finds a piece's walls and its neighbours by floor, so a piece upstairs must not collide
     // with a wall downstairs. meshdiff works this out from the piece's own height.

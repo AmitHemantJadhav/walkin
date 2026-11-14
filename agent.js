@@ -170,6 +170,20 @@ async function loadListing(model) {
     listingFacts = { address: v.address, city: v.city, homes_listing_id: v.homes_listing_id,
       lat: Number(v.lat), lon: Number(v.lon), rooms_in_listing: Number(v.room_count) || undefined };
   } catch (e) { /* listing facts are optional */ }
+  // The CoStar listing (price, beds, baths, Homes.com highlights) and Vexcel's view from above, from
+  // tools/prep_outside.py, so John can answer "does it have a fireplace?" or "how big is the lot?"
+  try {
+    const res = await fetch(`data/${model}/outside.json`);
+    if (!res.ok) return;
+    const { listing: L = {}, structures = [], site } = await res.json();
+    const keep = ['address', 'city', 'state', 'zip', 'homes_listing_id', 'status', 'list_date', 'price', 'beds', 'baths',
+      'sqft', 'year_built', 'stories', 'style', 'lot_acres', 'parking_spaces', 'fireplaces', 'hoa', 'highlights', 'details', 'summary'];
+    const house = structures.find((s) => s.primary);
+    listingFacts = { ...listingFacts, ...Object.fromEntries(keep.filter((k) => L[k] != null).map((k) => [k, L[k]])),
+      from_above: site && { source: 'Vexcel aerial survey', house_footprint_m2: house?.area_m2,
+        roof: house && [house.roof_shape, house.roof_material].filter(Boolean).join(' '), pool: site.pool,
+        solar: site.solar, tree_cover_pct: site.tree_cover_pct, buildings_on_lot: site.structures } };
+  } catch (e) { /* optional too */ }
 }
 
 // ------------------------------------------------------------------ daylight at a point (R5)

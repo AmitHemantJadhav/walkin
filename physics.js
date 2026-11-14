@@ -283,13 +283,21 @@ function step(item, st, tx, ty, trot, walls) {
  * it* - its footprint measured across the doorway - not its narrowest side, which is what it would be if
  * you turned it. That difference is the whole beat: "turn it and it goes through".
  */
-function doorReason(item, st, walls) {
+function doorReason(item, st, walls, dx = 0, dy = 0) {
   const spec = FURNITURE[item.userData.kind];
-  let best = null;
+  // The door being pushed at, not merely the nearest one. Standing at La Mirada's 1.15 m doorway there
+  // is a 0.77 m one within a metre and a half, and quoting that one produced "the sofa is 0.95 m across
+  // and that door is 0.77 m - it won't fit through at all" a second before the sofa went through the
+  // other door. doorAhead has always done this properly; this had not.
+  let best = null, ahead = null;
   for (const d of walls.doors) {
-    const dist = Math.hypot(d.x - st.x, d.y - st.y);
-    if (dist < 1.4 && (!best || dist < best.dist)) best = { d, dist };
+    const vx = d.x - st.x, vy = d.y - st.y;
+    const dist = Math.hypot(vx, vy);
+    if (dist >= 1.4) continue;
+    if (!best || dist < best.dist) best = { d, dist };
+    if (dx * vx + dy * vy > 0 && (!ahead || dist < ahead.dist)) ahead = { d, dist };
   }
+  best = ahead || best;
   if (!best) return null;
   const { d } = best;
   // the footprint's extent along the wall the door is in
@@ -577,7 +585,7 @@ function frame() {
         // turning it - gets slid onto the doorway's centre line; only a real misfit gets the sentence.
         if (assistThroughDoor(item, st, walls, dt, tx - st.x, ty - st.y, trot)) stats.assisted++;
         else {
-          const door = doorReason(item, st, walls);
+          const door = doorReason(item, st, walls, tx - st.x, ty - st.y);
           if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
           else if (hit.kind === 'rotate') {
             sayBlocked(item, { reason: cantTurn(item, hit.by) });

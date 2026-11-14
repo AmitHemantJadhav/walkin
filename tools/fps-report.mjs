@@ -12,11 +12,13 @@ if (!file) { console.error('usage: node tools/fps-report.mjs <server log>'); pro
 
 const sessions = new Map();
 for (const line of readFileSync(file, 'utf8').split('\n')) {
-  // ?a1=1 sends one a1start line when the tester taps: did headset, motion and hands start (and why not).
+  // ?a1=1 sends a1start lines: step=tap when the tester taps, step=done when headset, motion and hands have started
+  // (or 15 s passed, and why not), step=late if hands came up after that. A tap with no done = a prompt still open.
   const a = line.match(/\[([^\]]+)\] "HEAD \/index\.html\?(a1start=[^ "]+) HTTP/);
   if (a) {
     const q = Object.fromEntries(new URLSearchParams(a[2]));
-    console.log(`a1 start ${q.sid} ${a[1]}  headset ${q.vr} gyro ${q.gyro} hands ${q.hands}${q.err ? `  error: ${q.err}` : ''}`);
+    console.log(`a1 ${(q.step || 'start').padEnd(5)} ${q.sid} ${a[1]}  headset ${q.vr} gyro ${q.gyro} hands ${q.hands}`
+      + `${q.err ? `  error: ${q.err}` : ''}`);
     continue;
   }
   const m = line.match(/\[([^\]]+)\] "HEAD \/index\.html\?(fpsreport=[^ "]+) HTTP/);

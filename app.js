@@ -611,11 +611,31 @@ function onOrient(ev) {
   gyro.q.premultiply(yUpToZUp);
   gyro.have = true;
 }
+// alert() is a modal nobody can dismiss with the phone in the headset (#2). There the message is shown once per
+// eye for 10 s (tap to close); otherwise it's a plain alert. Every message is also kept for the ?a1=1 report.
+const warnings = [];
+function warn(msg) {
+  warnings.push(msg);
+  console.warn(msg);
+  if (!vr) { alert(msg); return; }
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;background:#000c;color:#fff;'
+    + 'font:600 18px system-ui;text-align:center;white-space:pre-line';
+  for (let i = 0; i < 2; i++) {
+    const eye = document.createElement('div');
+    eye.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:10%';
+    eye.textContent = msg;
+    box.appendChild(eye);
+  }
+  box.onclick = () => box.remove();
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 10000);
+}
 async function toggleGyro() {
   if (!gyro.on) {
     if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
       const r = await DeviceOrientationEvent.requestPermission().catch(() => 'denied');
-      if (r !== 'granted') { alert('Motion access was denied. On iPhone this needs HTTPS and a tap to allow.'); return; }
+      if (r !== 'granted') { warn('Motion access was denied. On iPhone this needs HTTPS and a tap to allow.'); return; }
     }
     addEventListener('deviceorientation', onOrient);
     gyro.on = true;
@@ -954,7 +974,7 @@ async function toggleHands() {
     await restartHands(vr ? 'environment' : handCam);
     btn.classList.add('on');
   } catch (e) {
-    alert('Hand tracking failed to start: ' + e.message + '\n(Camera needs HTTPS or localhost.)');
+    warn('Hand tracking failed to start: ' + e.message + '\n(Camera needs HTTPS or localhost.)');
   }
   btn.textContent = '✋ Hands';
 }
@@ -1103,24 +1123,38 @@ $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on',
 // A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
 // so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
 // numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.
-// Each step is caught on its own, so a refused motion prompt still starts hands, and the result (with any error) goes
-// to the console and to the server log as `HEAD /index.html?a1start=...` (fps-report skips it). ?a1=off = no overlay.
+// Each step is caught on its own, so a refused motion prompt still starts hands. The server log gets a
+// `HEAD /index.html?a1start=...` line the moment of the tap (step=tap), one when both steps are done (step=done,
+// with any error), and one if hands come up only after that (step=late); fps-report prints them. A prompt nobody
+// answers leaves its promise pending forever, so each step gets 15 s before the report goes out without it (#2).
+// ?a1=off = no overlay.
 if (params.has('a1') && params.get('a1') !== 'off') {
   const tip = document.createElement('div');
-  tip.textContent = 'A1 test: tap anywhere, then put the phone in the headset for 30 s';
+  tip.textContent = 'A1 test: tap anywhere and allow Motion and Camera, then put the phone in the headset for 30 s';
   tip.style.cssText = 'position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;'
     + 'padding:24px;text-align:center;font:600 22px system-ui;color:#fff;background:#000b';
   document.body.appendChild(tip);
+  const a1send = (step, err = []) => {
+    const q = new URLSearchParams({ a1start: 1, step, sid: fpsReport.sid, vr: +vr, gyro: +gyro.on, hands: +!!handsApi,
+      err: err.join('; ').slice(0, 200) });
+    fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
+  };
+  const within = (p, what) => Promise.race([p, new Promise((_, no) => setTimeout(
+    () => no(new Error(`${what} prompt not answered after 15 s`)), 15000))]);
   tip.onclick = async () => {
     tip.remove();
-    const err = [];
-    try { await toggleVR(true); } catch (e) { err.push(`headset: ${e?.message || e}`); }
-    try { if (!handsApi) await toggleHands(); } catch (e) { err.push(`hands: ${e?.message || e}`); }
+    a1send('tap');
+    const err = [], seen = warnings.length;
+    try { await within(toggleVR(true), 'motion'); } catch (e) { err.push(`headset: ${e?.message || e}`); }
+    let handsP = null;
+    if (!handsApi) handsP = toggleHands();
+    try { if (handsP) await within(handsP, 'camera'); } catch (e) { err.push(`hands: ${e?.message || e}`); }
+    if (!handsApi && handsP) handsP.then(() => { if (handsApi) a1send('late'); });
+    const all = [...err, ...warnings.slice(seen)]; // toggleGyro / toggleHands report through warn(), already on screen
     console.log(`[a1] headset ${vr}, gyro ${gyro.on}, hands ${!!handsApi}, fps report ${fpsReport.on ? `on (sid ${fpsReport.sid})` : 'off'}`
-      + (err.length ? `, errors: ${err.join('; ')}` : ''));
-    const q = new URLSearchParams({ a1start: 1, sid: fpsReport.sid, vr: +vr, gyro: +gyro.on, hands: +!!handsApi, err: err.join('; ').slice(0, 200) });
-    fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
-    if (err.length) alert(`A1 test could not start everything: ${err.join('; ')}`);
+      + (all.length ? `, errors: ${all.join('; ')}` : ''));
+    a1send('done', all);
+    if (err.length) warn(`A1 test could not start everything: ${err.join('; ')}`);
   };
 }
 $('bEmpty').onclick = async () => {

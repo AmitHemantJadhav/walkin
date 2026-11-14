@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { FURNITURE, PLANTS } from './furniture.js';
 import { fitReport, fitLine, footprint, overlaps, pointInPoly, openings } from './fit.js';
+import { rules as placeRules, search as placeSearch, SPOT_RELAXED } from './placement.js';
 
 const W = () => window.walkin;
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -297,13 +298,38 @@ function fitsAt(item, x, y, rot) {
   const r = fitReport({ kind: item.userData.kind, x, y, rot, floor: item.userData.floor, ignore: [item, ...riders(item)], quick: true });
   return r.ok;
 }
+/** placement.js's shared rules: clear of scan points and doorway zones, open floor in front of sofas and beds. */
+function rulesOk(item, x, y, rot, spot) {
+  return !placeRules(item.userData.kind, x, y, rot, { floor: item.userData.floor, ignore: [item, ...riders(item)], spot }).length;
+}
+
+/**
+ * The best spot in a whole room by placement.js's rules, nearest `near` first: against a wall for a piece that
+ * belongs against one. The strict scan-point clearance first, then the relaxed steps, so a piece the user asked
+ * for still arrives in a scan-dense room - next to a scan point at worst, never on one.
+ */
+function bestInRoom(item, rooms, near) {
+  const list = [...new Set([].concat(rooms))].filter(Boolean);
+  const opts = { floor: item.userData.floor, near, rot: item.rotation.z, ignore: [item, ...riders(item)] };
+  for (const spot of [undefined, ...SPOT_RELAXED]) {
+    for (const room of list) {
+      const c = placeSearch(item.userData.kind, room, { ...opts, spot });
+      if (c && spotClear(item, c.x, c.y, c.rot, room)) return c;
+    }
+  }
+  return null;
+}
+/** The full fit check (walkways included), which the quick one used while searching leaves out. */
+function fitsFully(item, x, y, rot) {
+  return fitReport({ kind: item.userData.kind, x, y, rot, floor: item.userData.floor, ignore: [item, ...riders(item)] }).ok;
+}
 
 /**
  * The first good spot: the candidates in order, then rings around the first few. A spot that fits (no door
  * blocked, nothing overlapped) beats one that is merely free. `exact` takes the first candidate if it is free,
  * even if it blocks a door: the user asked for that spot.
  */
-function findSpot(item, cands, room, { exact = false, keepRot = true } = {}) {
+function findSpot(item, cands, room, { exact = false, keepRot = true, strict = false } = {}) {
   if (!cands.length) return null;
   if (exact && spotClear(item, cands[0].x, cands[0].y, cands[0].rot, room)) return cands[0];
   const rings = [];
@@ -317,6 +343,18 @@ function findSpot(item, cands, room, { exact = false, keepRot = true } = {}) {
     }
   }
   const all = [...cands, ...rings];
+  let full = 0;
+  for (const c of all) {
+    if (!rulesOk(item, c.x, c.y, c.rot) || !spotClear(item, c.x, c.y, c.rot, room) || !fitsAt(item, c.x, c.y, c.rot)) continue;
+    if (!strict || fitsFully(item, c.x, c.y, c.rot)) return c;
+    if (++full > 40) break;
+  }
+  // A new piece never settles for a spot that blocks a door or a scan point: the best good one in the room,
+  // or nothing (the caller says so rather than put it in the way).
+  if (strict) {
+    const r = room || W().roomAt(cands[0].x, cands[0].y, item.userData.floor);
+    return bestInRoom(item, r, [cands[0].x, cands[0].y]);
+  }
   for (const c of all) if (spotClear(item, c.x, c.y, c.rot, room) && fitsAt(item, c.x, c.y, c.rot)) return c;
   for (const c of all) if (spotClear(item, c.x, c.y, c.rot, room)) return c;
   if (!keepRot) return null;
@@ -901,6 +939,15 @@ function listFurniture() {
     it_means: sel || (alive(last) ? idOf(last) : null) };
 }
 
+/** Take a just-added piece back out: better no sofa than a sofa across the doorway. */
+function refuse(item, kind, reason) {
+  const w = W();
+  w.furniture.remove(item);
+  if (w.selected === item && w.select) w.select(null);
+  if (last === item) last = null;
+  return { ok: false, placed: null, kind, reason: `${reason} Try another room, or remove something first.` };
+}
+
 /** add_furniture as before (2 m in front of the user), plus room / against / color, and never inside a wall. */
 async function addFurniture(args) {
   const w = W(), kind = lower(args.kind).replace(/\s+/g, '');
@@ -914,19 +961,33 @@ async function addFurniture(args) {
   if (args.room || args.against) {
     const to = [args.against ? `against the ${args.against}` : '', args.room ? `in the ${args.room}` : ''].join(' ');
     const p = plan(item, { to, room: args.room });
-    const spot = !p.error && findSpot(item, p.cands, p.room);
+    const spot = !p.error && findSpot(item, p.cands, p.room, { strict: true });
     if (spot) { await put(item, spot.x, spot.y, spot.rot); extra.where = p.desc; }
-    else extra.where_problem = p.error || `no free spot ${p.desc}`;
-  } else if (!spotClear(item, item.position.x, item.position.y, item.rotation.z, null)) {
-    // 2 m ahead was inside a wall or another piece: the nearest free spot, in the room the user looks into first
+    else return refuse(item, k, p.error || `There is no spot ${p.desc} that keeps the doorways, the walkway and the scan points clear.`);
+  } else {
+    // 2 m ahead of the user. A sofa, a bed, a desk or a TV stand goes against the nearest wall of the room the
+    // user looks into; anything else stays where it landed if that spot is good. Either way, never in a doorway,
+    // on a scan point or in front of a sofa or bed - the nearest good spot instead.
     // (2 m ahead can also be past a window, outside the house: then walk the line back towards the user)
-    const r = w.roomAt(item.position.x, item.position.y, item.userData.floor) || userRoom();
     const u = userPos(), x1 = item.position.x, y1 = item.position.y, rot = item.rotation.z;
-    const line = u ? [1, 0.85, 0.7, 0.55, 0.4].map((f) => ({ x: u.x + (x1 - u.x) * f, y: u.y + (y1 - u.y) * f, rot })) : [];
-    const ur = userRoom(), mid = ur && centroid(ur.poly);
-    const spot = findSpot(item, [{ x: x1, y: y1, rot }, ...line], r)
-      || (ur && findSpot(item, [...line, { x: mid[0], y: mid[1], rot }], ur));
-    if (spot) { await put(item, spot.x, spot.y, spot.rot); extra.note = 'moved off the wall to the nearest free spot'; }
+    const r = w.roomAt(x1, y1, item.userData.floor) || userRoom();
+    const ur = userRoom();
+    const wallPiece = FURNITURE[k].against === 'wall';
+    const good = !wallPiece && rulesOk(item, x1, y1, rot) && spotClear(item, x1, y1, rot, null) && fitsAt(item, x1, y1, rot);
+    if (!good) {
+      const line = u ? [1, 0.85, 0.7, 0.55, 0.4].map((f) => ({ x: u.x + (x1 - u.x) * f, y: u.y + (y1 - u.y) * f, rot })) : [];
+      const mid = ur && centroid(ur.poly);
+      const spot = (wallPiece && bestInRoom(item, [r, ur], [x1, y1]))
+        || findSpot(item, [{ x: x1, y: y1, rot }, ...line], r, { strict: true })
+        || (ur && findSpot(item, [...line, { x: mid[0], y: mid[1], rot }], ur, { strict: true }));
+      if (!spot) {
+        const where = r || ur;
+        return refuse(item, k, `There is no spot left in the ${lower(where ? where.label : 'room')} where a `
+          + `${lower(FURNITURE[k].name)} keeps the doorways, the walkway and the scan points clear.`);
+      }
+      await put(item, spot.x, spot.y, spot.rot);
+      extra.note = wallPiece ? 'put against the nearest free wall' : 'moved to the nearest spot that keeps doors and walkways clear';
+    }
   }
   if (args.color) {
     const c = setFurnitureColor({ target: idOf(item), color: args.color, hex: args.hex });

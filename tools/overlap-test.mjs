@@ -150,10 +150,12 @@ console.log(`${model} ${room.label}: 12 pieces, ${seconds} s of drag + fling + �
 let total = { false: 0, true: 0 };
 for (const fixOn of [false, true]) {
   for (const seed of seeds) {
+    physics.stats.pushed = 0;
     const e = soak(seed, fixOn);
     total[fixOn] += e.rotateFrame + e.other;
     console.log(`  neighbourState ${fixOn ? 'on ' : 'off'} seed ${seed}: new overlaps ${e.rotateFrame + e.other}`
-      + ` (${e.rotateFrame} on a ⟳ frame, ${e.other} otherwise), overlapping at the end ${e.end}`);
+      + ` (${e.rotateFrame} on a ⟳ frame, ${e.other} otherwise), overlapping at the end ${e.end},`
+      + ` ${physics.stats.pushed} push frames`);
   }
 }
 console.log(`total new overlaps: off ${total.false}, on ${total.true}`);

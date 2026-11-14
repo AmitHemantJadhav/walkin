@@ -186,17 +186,44 @@ PX_PER_M = 512
 ATLAS_MIN, ATLAS_MAX = 64, 1024
 
 
+def _uv_islands(fis, Ftf):
+    """Faces that share a UV vertex belong to the same island.
+
+    Matterport's UV layout is fragmented - a piece's triangles are scattered across the whole sheet,
+    so the bounding box of its UVs is the entire texture and cropping it crops nothing. Islands are
+    the unit that is actually compact: on this house a piece has 281-1652 of them, median 24 px.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    rows, cols = [], []
+    vt2f = {}
+    for k, f in enumerate(fis):
+        for c in Ftf[f]:
+            vt2f.setdefault(int(c), []).append(k)
+    for lst in vt2f.values():
+        first = lst[0]
+        for a in lst[1:]:
+            rows.append(first)
+            cols.append(a)
+    if not rows:
+        return np.arange(len(fis), dtype=np.int64), len(fis)   # no shared UV vertex: each face alone
+    m = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(fis), len(fis)))
+    ncomp, lab = connected_components(m, directed=False)
+    return lab, ncomp
+
+
 def build_atlas(piece_tris, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=ATLAS_MAX, pad=2):
-    """One small texture per piece, holding only the parts of the MatterPak's textures it actually uses.
+    """One small texture per piece, holding only the parts of the MatterPak's textures it really uses.
 
-    Baking a colour per vertex was the first attempt and it is only as sharp as the mesh is dense — which
-    varies from 33 to 399 vertices per square metre across this house, so a sofa the scanner saw well looks
-    right and one in a bedroom corner turns to mush. The texels exist; the mesh just has nowhere to put them.
+    Baking a colour per vertex was the first attempt and it is only as sharp as the mesh is dense -
+    33 to 399 vertices per square metre across this house - so the texels existed but the mesh had
+    nowhere to put them.
 
-    So instead: for each texture a piece touches, take the bounding box of the UVs that use it, crop that
-    region at source resolution, and shelf-pack the crops into one image. UVs are rewritten into atlas
-    space, so the piece still draws in a single call. A sofa typically touches 3 textures and uses a small
-    part of each, so its atlas is a few hundred pixels across rather than 3 × 2048².
+    The second attempt cropped the UV *bounding box* per material, which was worse than it looked:
+    Matterport scatters a piece's triangles over the whole sheet, so that box was the entire 2048x2048
+    texture, four of them got rescaled by 0.13 to fit one sheet, and the furniture was drawn at 44-82
+    px per metre when the data holds about 316. This packs per UV island instead, which is the unit
+    that is genuinely small, and gets the full resolution the MatterPak has.
     """
     from PIL import Image
     groups = {}
@@ -214,26 +241,31 @@ def build_atlas(piece_tris, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=ATLAS_
         im = cache[name]
         if im is None:
             continue
-        uv = Tf[np.asarray([Ftf[f] for f in fis], np.int32).reshape(-1)]
-        u0, v0 = np.clip(uv.min(axis=0), 0, 1)
-        u1, v1 = np.clip(uv.max(axis=0), 0, 1)
         W, H = im.width, im.height
-        # v is bottom-up in OBJ and top-down in an image
-        x0 = max(0, int(u0 * W) - pad); x1 = min(W, int(np.ceil(u1 * W)) + pad)
-        y0 = max(0, int((1 - v1) * H) - pad); y1 = min(H, int(np.ceil((1 - v0) * H)) + pad)
-        if x1 - x0 < 2 or y1 - y0 < 2:
-            continue
-        crops.append(dict(mi=mi, fis=fis, box=(x0, y0, x1, y1),
-                          w=x1 - x0, h=y1 - y0, img=im.crop((x0, y0, x1, y1)),
-                          uv0=(x0 / W, 1 - y1 / H), uv1=(x1 / W, 1 - y0 / H)))
+        fis = np.asarray(fis)
+        lab, ncomp = _uv_islands(fis, Ftf)
+        for c in range(ncomp):
+            sel = fis[lab == c]
+            if not len(sel):
+                continue
+            uv = Tf[np.asarray([Ftf[f] for f in sel], np.int32).reshape(-1)]
+            u0, v0 = np.clip(uv.min(axis=0), 0, 1)
+            u1, v1 = np.clip(uv.max(axis=0), 0, 1)
+            # v is bottom-up in OBJ and top-down in an image
+            x0 = max(0, int(u0 * W) - pad); x1 = min(W, int(np.ceil(u1 * W)) + pad)
+            y0 = max(0, int((1 - v1) * H) - pad); y1 = min(H, int(np.ceil((1 - v0) * H)) + pad)
+            if x1 - x0 < 2 or y1 - y0 < 2:
+                continue
+            crops.append(dict(mi=mi, fis=list(sel), box=(x0, y0, x1, y1),
+                              w=x1 - x0, h=y1 - y0, img=im.crop((x0, y0, x1, y1)),
+                              uv0=(x0 / W, 1 - y1 / H), uv1=(x1 / W, 1 - y0 / H)))
     if not crops:
         return None
 
     # shelf pack, tallest first, into a square-ish sheet
     crops.sort(key=lambda c: -c['h'])
     total = sum(c['w'] * c['h'] for c in crops)
-    sheet_w = max(c['w'] for c in crops)
-    sheet_w = min(max(sheet_w, int(np.sqrt(total) * 1.15)), max_side)
+    sheet_w = max(max(c['w'] for c in crops), int(np.sqrt(total) * 1.15))
     x = y = shelf = 0
     for c in crops:
         if x + c['w'] > sheet_w and x > 0:

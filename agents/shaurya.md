@@ -29,7 +29,7 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ---
 
-## State of this lane (updated Sat 05:40 ET by the overnight agent)
+## State of this lane (updated Sat 06:45 ET by the overnight agent)
 
 **All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
 
@@ -38,11 +38,11 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 | `furniture.js` | 22-kind catalog at real metres, CC0 glTF models, three style palettes applied part by part, contact shadows | `FURNITURE`, `PLANTS`, `buildFurniture`, `setStyle`, `applyStyle`, `STYLES` |
 | `models/` | Kenney Furniture Kit (CC0) + two photoreal Poly Haven pieces in `hero/`, loaded after the kit model so nothing waits. `models/CREDITS.md` has provenance and two traps. `models/preview.html` renders every item in its real-size box | |
 | `lighting.js` | ambient tint, key-light direction and contact-shadow strength read off the current pano | `walkin.relight()` |
-| `fit.js` | room outline, piece overlaps, doorway zones from the API's `openings`, 0.6 m walkways by raster + flood fill. `{quick: true}` skips the raster (162× cheaper) for use while dragging | `fitReport`, `fitLine`, `checkRoom` |
+| `fit.js` | room outline, piece overlaps, doorway zones from the API's `openings`, 0.6 m walkways by raster + flood fill. `{quick: true}` skips the raster (162× cheaper) for use while dragging | `fitReport`, `fitLine`, `checkRoom`, `doorsFor` |
 | `staging.js` | `stageRoom` / `stageHouse` / `placeObject`, every placement validated, clear of wall faces | `stageRoom`, `stageHouse`, `placeObject`, `describeRoom`, `plants`, `styles`, `setStyle` |
 | `walls.js` + `shade.js` | A4: a material on one real wall, split around doorways and windows, at real scale, multiplied by a light map sampled from the photo | `setWallMaterial`, `clearWallMaterial`, `wallMaterials` |
 | `physics.js` | a constraint layer, not an engine: walls with doorways open, swept sub-steps, mass lag, friction slide | `walkin.physics.{grab,moveTarget,release,shove,probe,enabled}`, `walkin:blocked` event |
-| `layout.js` | save / load / clear, localStorage autosave per house, `?layout=none` | `saveLayout`, `loadLayout`, `clearLayout` |
+| `layout.js` | save / load / clear, localStorage autosave per house, `?layout=none`, and what each piece stands on | `saveLayout`, `loadLayout`, `clearLayout` |
 | `tools/fake_house.py` | a synthetic house into the git-ignored `data/fixture` so the viewer runs with **no Matterport keys** | `?m=fixture` |
 | `tools/make_tiles.py` | four seamless 1 m wall tiles so the wallpaper beat survives a missing Gemini key | |
 | `docs/demo-runbook.md` | the 3-minute run, rehearsed against `main` | |
@@ -60,10 +60,39 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
   the distance grows. `physics.js` uses time, contact and whether a hand holds it.
 - The empty-house mesh sits a few centimetres into the room from the idealised wall graph, so `walls.js` offsets
   **8 cm**, not the 1 cm the issue suggested. Less and the wallpaper is buried.
+- **An opening is `{type, width, height, bottom, at}`** after `prep_house.py` normalises it — *not* the API's
+  `lowerElevation` / `relativeCenter`. Use `at` (0–1 along the wall). I spent twenty minutes this morning chasing a
+  critical bug that was my own test reading `relativeCenter`, getting `undefined`, and falling back to the wall
+  midpoint, which is nowhere near the door.
+- **`tryPlace` puts everything on the floor.** Anything that goes on top of something else has to go through
+  `placeObject`, which knows about surfaces. A floor-level television inside a floor-level stand fails its own
+  overlap check, which is why no staged room had a television until this morning.
+- **A piece standing on another records `userData.on = <uuid>`, and uuids are new every reload.** `layout.js`
+  stores the link as an index into the saved list and puts it back; `walkin.supportUnder(item)` works it out from
+  the geometry for anything saved before that. Without it a restored television and its stand each read the other
+  as a collision and neither can be picked up.
+- **Big and unlabelled is not the same as living space.** `PLANS.living` refuses garages, basements, laundries and
+  the rest unless the style string asks for a living room by name. A sofa in the garage is worse than an empty
+  garage, because John says it out loud.
+
+### Beat 5 only works at one door, and this is the thing most likely to flatten the demo
+
+For a 2.10 × 0.95 m sofa, La Mirada's 22 doorways are: **19 too narrow at any angle** ("it won't fit through at
+all"), one 2.50 m opening it just walks through, and **exactly one** — 1.15 m, off the living room, model
+`(2.81, 0.02)`, 0.47 m from **scan point 37** — where the answer is "turn it and it goes through". Both halves
+verified at that door against `main`, king bed included. `walkin.doorsFor('sofa')` answers this for any house;
+314 Gale St has one usable door, the 1.50 m living/dining one at scan point 5. Run it before rehearsing anywhere
+new.
+
+### Measured, so nobody has to guess
+
+61 fps with 28 pieces, the same in headset (side-by-side) mode, **on a laptop**. Twenty full-house stagings in
+three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
+nothing leaks. La Mirada stages 28 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
 
 ### Still untested by anyone, as of this writing
 
 - **Hands with a real camera** (#41, #50) — no webcam on this machine.
-- **Anything on a phone or in the headset**, including fps with hands on.
+- **Anything on a phone or in the headset**, including fps with hands on. Everything above is a laptop at 60 Hz.
 - **The agent against a real Gemini key** — there is none in `.env` here; everything was verified with
   `GEMINI_MOCK=1`, which works well enough to demo on.

@@ -90,9 +90,16 @@ for (const [index, w] of f.walls.entries()) {
     if (o.fit.offset !== 0.08 || o.fit.how !== 'fixed') bad(`#${index}: ?wallfit=off gave ${JSON.stringify(o.fit)}`);
   }
 }
-// no mesh (the wall-box occluders): stand just in front of the box face
-window.walkin.occluderMesh = null;
+// the thickest wall, with the mesh and then without it (the wall-box occluders: stand just in front of the box face)
 const thick = f.walls.findIndex((w) => (w.thickness || 0) > 0.2 && (!w.type || w.type === 'wall'));
+if (thick >= 0) {
+  for (const s of [1, -1]) {
+    const w = f.walls[thick], len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+    const r = await walls.setWallMaterial({ floor: f.id, index: thick, normal: [-(w.b[1] - w.a[1]) / len * s, (w.b[0] - w.a[0]) / len * s] }, 'tile.png', 1);
+    if (r.ok) console.log(`     wall #${thick} side ${s > 0 ? '+' : '-'} with the mesh: ${JSON.stringify(r.fit)}`);
+  }
+}
+window.walkin.occluderMesh = null;
 if (thick >= 0) {
   const r = await walls.setWallMaterial({ floor: f.id, index: thick }, 'tile.png', 1);
   const want = +Math.max(0.08, f.walls[thick].thickness / 2 + 0.015).toFixed(3);

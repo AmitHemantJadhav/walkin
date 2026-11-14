@@ -33,6 +33,7 @@
   #handcam { position: fixed; right: 12px; top: 12px; width: 150px; max-width: 30vw; border-radius: 10px; display: none; opacity: .85; z-index: 3; }
   body.vr #handcam { display: none !important; }
 </style>
+<link rel="stylesheet" href="ui.css">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
@@ -54,23 +55,42 @@
 <video id="handcam" playsinline muted></video>
 <button id="exitvr">Exit headset</button>
 
-<div id="bar" class="panel">
-  <button id="bEmpty" class="on" title="Show the house empty (defurnished) or as scanned">Empty</button>
-  <span class="sep"></span>
-  <button data-add="sofa">+ Sofa</button>
-  <button data-add="armchair">+ Chair</button>
-  <button data-add="queen">+ Queen bed</button>
-  <button data-add="king">+ King bed</button>
-  <button data-add="table">+ Table</button>
-  <button data-add="desk">+ Desk</button>
-  <button id="bRotate" title="Rotate selected (or double-click it)">⟳ Rotate</button>
-  <button id="bDelete">✕ Delete</button>
-  <span class="sep"></span>
-  <button id="bHands" title="Pinch to grab furniture (both hands: twist to rotate)">✋ Hands</button>
-  <button id="bCam" title="Which camera watches your hands (the headset always uses the back camera)">📷 Front</button>
-  <button id="bGyro" title="Look around by moving the phone">Gyro</button>
-  <button id="bVR" title="Side-by-side view for a phone headset">Headset</button>
-  <button id="bDebug" title="Wall overlay + alignment controls">Debug</button>
+<div id="bar" class="panel dock" role="toolbar" aria-label="Walk-In controls">
+  <button id="bAdd" class="dock-btn" aria-haspopup="true" aria-expanded="false" aria-controls="addPop" title="Add furniture">＋ Add</button>
+  <button id="bEmpty" class="dock-btn toggle on" title="Show the house empty (defurnished) or as scanned">Empty</button>
+  <button id="bHands" class="dock-btn toggle" title="Pinch to grab furniture (both hands: twist to rotate)">✋ Hands</button>
+  <button id="bVR" class="dock-btn toggle" title="Side-by-side view for a phone headset">🥽 Headset</button>
+  <button id="bMore" class="dock-btn" aria-haspopup="true" aria-expanded="false" aria-controls="morePop" title="More">⋯</button>
+</div>
+
+<div id="addPop" class="glass pop" role="menu" aria-label="Add furniture" hidden>
+  <div class="pop-title">Add</div>
+  <div class="pop-grid">
+    <button data-add="sofa">Sofa</button>
+    <button data-add="armchair">Armchair</button>
+    <button data-add="coffeetable">Coffee table</button>
+    <button data-add="queen">Queen bed</button>
+    <button data-add="king">King bed</button>
+    <button data-add="nightstand">Nightstand</button>
+    <button data-add="table">Dining table</button>
+    <button data-add="chair">Chair</button>
+    <button data-add="desk">Desk</button>
+    <button data-add="bookcase">Bookcase</button>
+    <button data-add="floorlamp">Floor lamp</button>
+    <button data-add="rug">Rug</button>
+    <button data-add="plant">Plant</button>
+    <button data-add="plantsmall">Small plant</button>
+  </div>
+</div>
+
+<div id="morePop" class="glass pop" role="menu" aria-label="More" hidden>
+  <div class="pop-grid">
+    <button id="bRotate" title="Rotate selected (or double-click it)">⟳ Rotate</button>
+    <button id="bDelete">✕ Delete</button>
+    <button id="bCam" title="Which camera watches your hands (the headset always uses the back camera)">📷 Front</button>
+    <button id="bGyro" title="Look around by moving the phone">Gyro</button>
+    <button id="bDebug" title="Wall overlay + alignment controls">Debug</button>
+  </div>
 </div>
 
 <script type="module" src="app.js"></script>
@@ -81,5 +101,7 @@
 <script type="module" src="walls.js"></script>
 <script type="module" src="agent.js"></script>
 <script type="module" src="picker.js"></script>
+<script type="module" src="pointer.js"></script>
+<script type="module" src="ui.js"></script>
 </body>
 </html>

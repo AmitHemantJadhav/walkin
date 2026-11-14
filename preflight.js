@@ -190,9 +190,19 @@ export async function preflight({ quiet = false } = {}) {
   // ---------------------------------------------------------------- frame rate, as it stands now
   const rate = await fps(1200);
   const n = w.furniture.children.filter((o) => o.userData.kind).length;
-  rows.push(rate >= 45
-    ? ok('frame rate', `${rate} fps with ${n} pieces`)
-    : no('frame rate', `${rate} fps with ${n} pieces — under 45, check it in the headset before you rely on it`));
+  // Under 5 is not a slow device, it is a tab that isn't being drawn - a background tab, or an
+  // automated one, gets no animation frames at all. Reporting "0 fps, under 45" for that is a red row
+  // about something other than the app, which is exactly as unhelpful as a false green. Amit hit it
+  // running this on the live host. A genuinely struggling phone reads 10-30, not 0.
+  if (rate < 5) {
+    rows.push(no('frame rate', `only ${rate} fps, which means this tab wasn't drawing rather than that `
+      + 'the app is slow — bring the page to the front and run it again. The number only means '
+      + 'anything on the device you present from'));
+  } else {
+    rows.push(rate >= 45
+      ? ok('frame rate', `${rate} fps with ${n} pieces`)
+      : no('frame rate', `${rate} fps with ${n} pieces — under 45, check it in the headset before you rely on it`));
+  }
 
   // ---------------------------------------------------------------- put the room back
   if (saved && typeof w.loadLayout === 'function') w.loadLayout(saved);

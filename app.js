@@ -111,6 +111,9 @@ function loadTex(url) {
   return p;
 }
 
+// A6 step 2: wall pieces the move's proxy room can hold. 64 puts 99% of level rays on the floor plan's nearest wall
+// in the 3 prepped houses (24 did 83%); the loop stops at nSeg and only runs during a move.
+const A6_SEGS = 64;
 const panoMat = new THREE.ShaderMaterial({
   uniforms: {
     texA: { value: null }, texB: { value: null }, invA: { value: new THREE.Matrix3() }, invB: { value: new THREE.Matrix3() },
@@ -119,19 +122,23 @@ const panoMat = new THREE.ShaderMaterial({
     // posA / posB where the two photos were taken, proxy = (floor z, ceiling z, wall radius, -), mid = centre of the walls.
     depthAB: { value: 0 }, camP: { value: new THREE.Vector3() }, posA: { value: new THREE.Vector3() },
     posB: { value: new THREE.Vector3() }, proxy: { value: new THREE.Vector4(0, 2.6, 3, 0) }, mid: { value: new THREE.Vector2() },
+    // A6 step 2: the real wall pieces near the path, (ax, ay, bx, by) each, doorways left open; the round wall is the fallback
+    segs: { value: Array.from({ length: A6_SEGS }, () => new THREE.Vector4()) }, nSeg: { value: 0 },
   },
   vertexShader: `varying vec3 vDir;
     void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB, depthAB;
-    uniform vec3 camP, posA, posB; uniform vec4 proxy; uniform vec2 mid; varying vec3 vDir;
+    uniform vec3 camP, posA, posB; uniform vec4 proxy; uniform vec2 mid; uniform vec4 segs[${A6_SEGS}]; uniform int nSeg;
+    varying vec3 vDir;
     vec4 pano(sampler2D t, mat3 inv, vec3 d) {
       vec3 l = normalize(inv * d);
       float lon = atan(l.x, l.z);
       float lat = asin(clamp(l.y, -1.0, 1.0));
       return texture2D(t, vec2(lon / 6.28318530718 + 0.5, 0.5 + lat / 3.14159265359));
     }
-    // Where this pixel's ray from the moving camera meets a simple room: floor and ceiling planes and a round wall
-    // around the path. Each photo is then read from where it was taken, so the floor slides under you like walking.
+    // Where this pixel's ray from the moving camera meets a simple room: floor and ceiling planes, the floor plan's
+    // walls near the path, and a round wall around it for rays that leave through a doorway. Each photo is then read
+    // from where it was taken, so the floor slides under you like walking and the photos agree on the walls too.
     vec3 hitRoom(vec3 d) {
       float t = 1000.0;
       if (d.z < -0.0001) t = (proxy.x - camP.z) / d.z;
@@ -141,6 +148,16 @@ const panoMat = new THREE.ShaderMaterial({
       if (a > 0.000001) {
         float b = dot(h, o), c = dot(o, o) - proxy.z * proxy.z;
         t = min(t, (-b + sqrt(max(b * b - a * c, 0.0))) / a);
+      }
+      for (int i = 0; i < ${A6_SEGS}; i++) { // real walls: nearest crossing of the ray with a wall piece
+        if (i >= nSeg) break;
+        vec2 sa = segs[i].xy;
+        vec2 e = segs[i].zw - sa;
+        vec2 w = sa - camP.xy;
+        float den = h.x * e.y - h.y * e.x;
+        if (abs(den) < 0.000001) continue;
+        float tw = (w.x * e.y - w.y * e.x) / den, s = (w.x * h.y - w.y * h.x) / den;
+        if (tw > 0.0 && s >= 0.0 && s <= 1.0) t = min(t, tw);
       }
       return camP + d * max(t, 0.01);
     }
@@ -298,6 +315,39 @@ const camPos = new THREE.Vector3();
 
 function imgFor(p) { return (showEmpty && p.imgEmpty) || p.img; }
 
+// A6 step 2: the solid wall pieces of a floor (doorways and dividers left open, windows kept: the photo shows them
+// on the wall), the ones nearest the path from -> to first, written into `out` as (ax, ay, bx, by). Returns how many.
+function wallSegsNear(floorId, from, to, out) {
+  const f = house.floors.find((x) => x.id === floorId);
+  if (!f) return 0;
+  const near = (px, py, ax, ay, bx, by) => { // distance from a point to a segment
+    const ex = bx - ax, ey = by - ay, L = ex * ex + ey * ey || 1;
+    const k = Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / L));
+    return Math.hypot(px - ax - k * ex, py - ay - k * ey);
+  };
+  const segs = [];
+  for (const w of f.walls) {
+    if (w.type !== 'wall') continue;
+    const ax = w.a[0], ay = w.a[1], dx = w.b[0] - ax, dy = w.b[1] - ay, len = Math.hypot(dx, dy);
+    if (len < 0.05) continue;
+    const piece = (s, e) => { if (e - s > 0.05) segs.push([ax + (dx * s) / len, ay + (dy * s) / len, ax + (dx * e) / len, ay + (dy * e) / len]); };
+    let cursor = 0;
+    for (const o of [...(w.openings || [])].sort((x, y) => x.at - y.at)) {
+      if (o.type === 'window') continue;
+      const c = o.at * len, half = (o.width || 0.9) / 2;
+      piece(cursor, c - half);
+      cursor = Math.max(cursor, c + half);
+    }
+    piece(cursor, len);
+  }
+  const pathGap = (s) => Math.min( // distance between a wall piece and the path (the camera only ever stands on it)
+    near(from.x, from.y, ...s), near(to.x, to.y, ...s),
+    near(s[0], s[1], from.x, from.y, to.x, to.y), near(s[2], s[3], from.x, from.y, to.x, to.y));
+  const ranked = segs.map((s) => [pathGap(s), s]).filter(([d]) => d < 12).sort((a, b) => a[0] - b[0]).slice(0, out.length);
+  ranked.forEach(([, s], i) => out[i].set(s[0], s[1], s[2], s[3]));
+  return ranked.length;
+}
+
 async function goTo(id, instant = false) {
   const p = panoById.get(id);
   if (!p || transitioning || (current && current.id === id)) return false;
@@ -332,7 +382,9 @@ async function moveTo(p, instant) {
       const room = roomAt(to.x, to.y, p.floor) || roomAt(from.x, from.y, p.floor), d = room?.dims || {};
       const ceil = Math.max(p.floorZ + (d.height > 1.8 && d.height < 6 ? d.height : 2.6), Math.max(from.z, to.z) + 0.3);
       const wallR = THREE.MathUtils.clamp(d.width && d.depth ? Math.hypot(d.width, d.depth) / 2 : 3, 2.5, 8);
-      U.proxy.value.set(p.floorZ, ceil, Math.max(wallR, dist / 2 + 1), 0);
+      U.nSeg.value = params.get('a6') === 'round' ? 0 : wallSegsNear(p.floor, from, to, U.segs.value);
+      // with real walls, the round wall only catches rays that leave through a doorway: put it far out
+      U.proxy.value.set(p.floorZ, ceil, U.nSeg.value ? 12 : Math.max(wallR, dist / 2 + 1), 0);
       U.mid.value.set((from.x + to.x) / 2, (from.y + to.y) / 2);
       U.posA.value.copy(from); U.posB.value.copy(to); U.camP.value.copy(from);
     }

@@ -4,10 +4,22 @@ Run from the walkin folder:  python serve.py   (port 8000; the cloudflared tunne
 Relays (keys are read from .env here and never reach the browser):
   POST /api/gemini[?model=<name>]  body = a Gemini generateContent request (JSON) -> Gemini's JSON reply
   POST /api/tts                    body = {"text": "...", "voice": "<voice id, optional>"} -> audio/mpeg
-  GET  /api/health                 -> {"gemini": bool, "tts": bool}  (which keys are set; never the keys)
+  GET  /api/health                 -> which keys are set (never the keys), mock mode, calls this minute / today,
+                                      the last upstream status, cache size and the rate limits
   GET  /api/houses                 -> [{id, name, panos, rooms}] for every data/<id>/house.json (house picker)
+
+Quota (R10, so a rate limit can't kill the demo):
+  - Rate limits per endpoint (token buckets): GEMINI_RPM (default 8/min), GEMINI_IMAGE_RPM (2/min, any model
+    with "image" in its name), TTS_RPM (20/min). Over the limit -> 429 {"error": {..., "friendly": "..."}}.
+  - An upstream 429 is retried once after its Retry-After (at most 10 s), then answered with the friendly 429.
+  - Disk cache in .cache/relay/ (git-ignored, never served): identical requests (same model + body) are answered
+    from disk and cost nothing. RELAY_CACHE=0 turns it off. Run the demo once before judging to pre-warm it.
+  - GEMINI_MOCK=1: canned Gemini replies (tool calls, text, a brick tile image) and a silent TTS clip, so the
+    agent flow can be tested without keys or quota.
+Static files: no-store for code (so edits show up), one day of caching for data/ and models/ (big, rarely change).
 """
-import http.server, json, os, re, socketserver, sys, urllib.error, urllib.parse, urllib.request
+import base64, collections, datetime, hashlib, http.server, json, os, re, socketserver, struct, sys, threading, time
+import urllib.error, urllib.parse, urllib.request, zlib
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -37,6 +49,168 @@ load_env()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 TTS_VOICE = os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM"
 TTS_MODEL = os.environ.get("ELEVENLABS_MODEL_ID") or "eleven_flash_v2_5"
+MOCK = os.environ.get("GEMINI_MOCK", "") not in ("", "0", "false", "no")
+CACHE_DIR = os.path.join(ROOT, ".cache", "relay")
+CACHE_ON = os.environ.get("RELAY_CACHE", "1") not in ("0", "false", "no")
+FRIENDLY_BUSY = "One moment, I'm a bit busy. Ask me again in a few seconds."
+STATIC_CACHED = ("/data/", "/models/")  # big and rarely change: let phones keep them
+
+
+# ------------------------------------------------------------------ quota: rate limits, stats, disk cache
+def _env_num(name, default):
+    try:
+        return float(os.environ.get(name) or default)
+    except ValueError:
+        return float(default)
+
+
+class Bucket:
+    """Token bucket: `per_min` requests a minute, bursts up to the same number."""
+
+    def __init__(self, per_min):
+        self.rate = max(per_min, 0.01) / 60.0
+        self.cap = max(per_min, 1.0)
+        self.tokens = self.cap
+        self.t = time.monotonic()
+
+    def take(self):
+        now = time.monotonic()
+        self.tokens = min(self.cap, self.tokens + (now - self.t) * self.rate)
+        self.t = now
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True, 0
+        return False, int((1 - self.tokens) / self.rate) + 1
+
+
+LOCK = threading.Lock()
+BUCKETS = {"gemini": Bucket(_env_num("GEMINI_RPM", 8)), "image": Bucket(_env_num("GEMINI_IMAGE_RPM", 2)),
+           "tts": Bucket(_env_num("TTS_RPM", 20))}
+STATS = {"recent": collections.deque(), "day": datetime.date.today().isoformat(), "today": 0,
+         "cache_hits": 0, "limited": 0, "last": None}
+
+
+def count_call(kind, status):
+    with LOCK:
+        now = time.time()
+        today = datetime.date.today().isoformat()
+        if STATS["day"] != today:
+            STATS["day"], STATS["today"] = today, 0
+        STATS["recent"].append(now)
+        STATS["today"] += 1
+        STATS["last"] = {"endpoint": kind, "status": status, "at": time.strftime("%H:%M:%S")}
+
+
+def health():
+    with LOCK:
+        recent = STATS["recent"]
+        while recent and recent[0] < time.time() - 60:
+            recent.popleft()
+        try:
+            entries = len([f for f in os.listdir(CACHE_DIR) if f.endswith(".bin")])
+        except OSError:
+            entries = 0
+        return {"gemini": bool(os.environ.get("GEMINI_API_KEY")), "tts": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                "mock": MOCK, "calls_last_minute": len(recent), "calls_today": STATS["today"],
+                "rate_limited": STATS["limited"], "cache": {"on": CACHE_ON, "entries": entries, "hits": STATS["cache_hits"]},
+                "last_upstream": STATS["last"],
+                "limits_per_min": {k: round(b.cap) for k, b in BUCKETS.items()}, "model": GEMINI_MODEL}
+
+
+def cache_key(*parts):
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(p if isinstance(p, bytes) else str(p).encode())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def cache_get(key):
+    if not CACHE_ON:
+        return None
+    try:
+        with open(os.path.join(CACHE_DIR, key + ".bin"), "rb") as f:
+            data = f.read()
+        with open(os.path.join(CACHE_DIR, key + ".type"), encoding="utf-8") as f:
+            ctype = f.read().strip()
+    except OSError:
+        return None
+    with LOCK:
+        STATS["cache_hits"] += 1
+    return ctype, data
+
+
+def cache_put(key, ctype, data):
+    if not CACHE_ON:
+        return
+    try:
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        tmp = os.path.join(CACHE_DIR, f"{key}.{threading.get_ident()}.tmp")
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, os.path.join(CACHE_DIR, key + ".bin"))
+        with open(os.path.join(CACHE_DIR, key + ".type"), "w", encoding="utf-8") as f:
+            f.write(ctype)
+    except OSError:
+        pass
+
+
+# ------------------------------------------------------------------ GEMINI_MOCK=1: canned replies, no keys, no quota
+def _png(w, h, pixel):
+    raw = b"".join(b"\0" + b"".join(bytes(pixel(x, y)) for x in range(w)) for y in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def _brick(x, y):  # 128 px seamless tile: 4 rows of bricks, running bond, grey mortar
+    row, by = divmod(y, 32)
+    bx = (x + (16 * (row % 2)) * 2) % 64
+    if by < 3 or bx < 3:
+        return (200, 196, 188)
+    shade = ((x * 7 + y * 13 + row * 29) % 23) - 11
+    return (max(0, 150 + shade), max(0, 62 + shade // 2), max(0, 48 + shade // 2))
+
+
+MOCK_TILE = None
+
+
+def mock_gemini(req, model):
+    """Pick a plausible tool call from the user's words, answer tool results with a short sentence."""
+    global MOCK_TILE
+    if "image" in model or "IMAGE" in json.dumps(req.get("generationConfig") or {}):
+        if MOCK_TILE is None:
+            MOCK_TILE = base64.b64encode(_png(128, 128, _brick)).decode()
+        return {"candidates": [{"content": {"role": "model", "parts": [{"inlineData": {"mimeType": "image/png", "data": MOCK_TILE}}]},
+                                "finishReason": "STOP"}], "mock": True}
+    contents = req.get("contents") or []
+    last = contents[-1] if contents else {}
+    parts = last.get("parts") or []
+    answered = [p["functionResponse"] for p in parts if isinstance(p, dict) and "functionResponse" in p]
+    if answered:
+        names = ", ".join(a.get("name", "?") for a in answered)
+        say = next((a.get("response", {}).get("say") for a in answered if isinstance(a.get("response"), dict)
+                    and a["response"].get("say")), None)
+        text = say or f"Mock reply: done ({names})."
+        return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP"}], "mock": True}
+    words = " ".join(p.get("text", "") for p in parts if isinstance(p, dict)).lower()
+    rules = [(r"wallpaper|brick|paint|wall", ("set_wall_material", {"description": "red brick with light grey mortar", "tile_metres": 0.9})),
+             (r"plant", ("light_here", {})),
+             (r"stage|furnish", ("stage_room", {"style": "modern bedroom"})),
+             (r"take me|go to|walk to", ("go_to", {"room": "kitchen"})),
+             (r"sofa|couch", ("add_furniture", {"kind": "sofa"})),
+             (r"bed\b", ("add_furniture", {"kind": "queen"}))]
+    call = next((c for pat, c in rules if re.search(pat, words)), ("describe_house", {}))
+    if not req.get("tools"):
+        return {"candidates": [{"content": {"role": "model", "parts": [{"text": "Mock reply."}]}, "finishReason": "STOP"}], "mock": True}
+    return {"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": call[0], "args": call[1]}}]},
+                            "finishReason": "STOP"}], "mock": True}
+
+
+def mock_wav(seconds=0.3, rate=8000):
+    n = int(seconds * rate)
+    return (b"RIFF" + struct.pack("<I", 36 + n) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
+            + b"data" + struct.pack("<I", n) + b"\x80" * n)
 
 
 def houses():
@@ -54,7 +228,10 @@ def houses():
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store, max-age=0")
+        if not getattr(self, "_cache_header_sent", False):
+            path = urllib.parse.urlsplit(self.path).path
+            cached = self.command in ("GET", "HEAD") and path.startswith(STATIC_CACHED)
+            self.send_header("Cache-Control", "public, max-age=86400" if cached else "no-store, max-age=0")
         super().end_headers()
 
     # ---- static files: never serve dotfiles (.env, .git) — the tunnel makes this server public
@@ -65,8 +242,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
         if path == "/api/health":
-            return self._json(200, {"gemini": bool(os.environ.get("GEMINI_API_KEY")),
-                                    "tts": bool(os.environ.get("ELEVENLABS_API_KEY"))})
+            return self._json(200, health())
         if path == "/api/houses":
             return self._json(200, houses())
         if self._hidden():
@@ -95,23 +271,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._json(404, {"error": "unknown endpoint"})
 
     def _gemini(self, url, body):
-        key = os.environ.get("GEMINI_API_KEY")
-        if not key:
-            return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
         model = (urllib.parse.parse_qs(url.query).get("model") or [GEMINI_MODEL])[0]
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", model):
             return self._json(400, {"error": "bad model name"})
         try:
-            json.loads(body)
+            req = json.loads(body)
         except ValueError:
             return self._json(400, {"error": "body must be JSON"})
-        self._forward(GEMINI_URL.format(model=model), body,
-                      {"Content-Type": "application/json", "x-goog-api-key": key})
+        if MOCK:
+            return self._json(200, mock_gemini(req if isinstance(req, dict) else {}, model))
+        key = os.environ.get("GEMINI_API_KEY")
+        if not key:
+            return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
+        kind = "image" if "image" in model.lower() else "gemini"
+        self._relay(kind, cache_key("gemini", model, body), GEMINI_URL.format(model=model), body,
+                    {"Content-Type": "application/json", "x-goog-api-key": key})
 
     def _tts(self, body):
-        key = os.environ.get("ELEVENLABS_API_KEY")
-        if not key:
-            return self._json(503, {"error": "ELEVENLABS_API_KEY is not set in .env"})
         try:
             req = json.loads(body)
             text = str(req["text"]).strip()
@@ -120,20 +296,64 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         voice = str(req.get("voice") or TTS_VOICE)
         if not text or not re.fullmatch(r"[A-Za-z0-9]{1,64}", voice):
             return self._json(400, {"error": "empty text or bad voice id"})
+        if MOCK:
+            return self._send(200, "audio/wav", mock_wav())
+        key = os.environ.get("ELEVENLABS_API_KEY")
+        if not key:
+            return self._json(503, {"error": "ELEVENLABS_API_KEY is not set in .env"})
         payload = json.dumps({"text": text[:MAX_TTS_CHARS], "model_id": TTS_MODEL}).encode()
-        self._forward(TTS_URL.format(voice=voice), payload,
-                      {"Content-Type": "application/json", "xi-api-key": key, "Accept": "audio/mpeg"})
+        self._relay("tts", cache_key("tts", voice, TTS_MODEL, payload), TTS_URL.format(voice=voice), payload,
+                    {"Content-Type": "application/json", "xi-api-key": key, "Accept": "audio/mpeg"})
 
-    def _forward(self, target, data, headers):
-        """POST to the upstream API and pass its status, content type and body back. Keys stay in `headers`."""
+    def _busy(self, retry_after, why):
+        with LOCK:
+            STATS["limited"] += 1
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Retry-After", str(retry_after))
+        data = json.dumps({"error": {"message": why, "code": 429, "friendly": FRIENDLY_BUSY},
+                           "retry_after": retry_after}).encode()
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _relay(self, kind, key, target, data, headers):
+        """Cache, then rate limit, then the upstream call (one polite retry on its 429)."""
+        hit = cache_get(key)
+        if hit:
+            return self._send(200, hit[0], hit[1])
+        with LOCK:
+            ok, wait = BUCKETS[kind].take()
+        if not ok:
+            return self._busy(wait, f"local {kind} limit reached")
+        for attempt in (1, 2):
+            status, ctype, out, retry = self._upstream(target, data, headers)
+            count_call(kind, status)
+            if status != 429 or attempt == 2 or retry is None or retry > 10:
+                break
+            time.sleep(retry)
+        if status == 429:
+            return self._busy(retry or 30, "upstream rate limit")
+        if status is None:
+            return self._json(502, {"error": f"upstream unreachable: {out}"})
+        if status == 200:
+            cache_put(key, ctype or "application/octet-stream", out)
+        self._send(status, ctype or "application/octet-stream", out)
+
+    def _upstream(self, target, data, headers):
+        """POST to the upstream API. Returns (status, content type, body, retry-after seconds). Keys stay in `headers`."""
         try:
             with urllib.request.urlopen(urllib.request.Request(target, data=data, headers=headers), timeout=90) as r:
-                status, ctype, out = r.status, r.headers.get("Content-Type"), r.read()
+                return r.status, r.headers.get("Content-Type"), r.read(), None
         except urllib.error.HTTPError as e:
-            status, ctype, out = e.code, e.headers.get("Content-Type"), e.read()
-        except Exception as e:  # network down, timeout…
-            return self._json(502, {"error": f"upstream unreachable: {type(e).__name__}"})
-        self._send(status, ctype or "application/octet-stream", out)
+            ra = e.headers.get("Retry-After")
+            try:
+                ra = int(float(ra)) if ra is not None else (2 if e.code == 429 else None)
+            except ValueError:
+                ra = 2
+            return e.code, e.headers.get("Content-Type"), e.read(), ra
+        except Exception as e:  # network down, timeout...
+            return None, None, type(e).__name__, None
 
     def _json(self, status, obj):
         self._send(status, "application/json", json.dumps(obj).encode())
@@ -153,5 +373,5 @@ class Server(socketserver.ThreadingTCPServer):
 
 if __name__ == "__main__":
     os.chdir(ROOT)
-    print(f"Walk-In on http://localhost:{PORT}  (no caching; relays: /api/gemini, /api/tts)")
+    print(f"Walk-In on http://localhost:{PORT}  (relays: /api/gemini, /api/tts{'; MOCK replies' if MOCK else ''})")
     Server(("", PORT), Handler).serve_forever()

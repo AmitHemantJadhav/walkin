@@ -16,3 +16,6 @@ node_modules/
 
 # agent loop logs
 .agent/
+
+# relay cache (serve.py, R10): Gemini/TTS answers kept on disk, may contain generated images
+.cache/

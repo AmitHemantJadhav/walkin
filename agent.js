@@ -6,7 +6,7 @@
 // Hooks that are not in the viewer yet (pointer, setWallMaterial, stageRoom, placeObject) are stubbed: the call is
 // logged and the model is told the feature is not available, so it says so instead of pretending.
 
-const MAX_ROUNDS = 3;      // tool-call rounds per question (R10: fewer, smaller calls)
+const MAX_ROUNDS = 4;      // tool-call rounds per question (R10: fewer, smaller calls)
 const MAX_TURNS = 16;      // history entries kept
 const VIEW_WIDTH = 512;    // px, screenshot sent when the user says "this" / "here"
 const DEICTIC = /\b(this|that|here|there|these|those)\b|\bwhat (am i|are we) looking at\b/i;
@@ -26,7 +26,11 @@ Rules:
 - Plant questions ("what plant should go here?"): call light_here, pick one plant that suits that light, call plant_preview,
   then place_object with the closest catalog kind (plant for a tall floor plant; plantsmall, plantfern or plantsucculent
   for small ones). Give the reason in a few words (e.g. "bright light from the big window").
-  Only name a compass direction if light_here gives one.`;
+  Only name a compass direction if light_here gives one.
+- Taste and budget questions ("what would look good here?", "furnish it to suit", "make it cheaper", "something nicer",
+  "under $2,000"): call suggest_room, then say in two short sentences why it suits the room (the house's style and the
+  light) and the room total from its say field. Prices are estimates from our catalogue: say "about", never quote a brand.
+- After stage_house, mention the estimated cost to furnish (estimated_cost_usd) next to the listing price if it is known.`;
 // Tool modules (furniture-tools.js, decor.js, …) add their own tools and a few lines of rules:
 //   (window.walkinTools = window.walkinTools || []).push({ declarations: [...], run: { name: fn }, rules: '...' })
 // They are merged into TOOLS / RUN / the system prompt when the agent starts, and live.js gets the same set.
@@ -50,6 +54,12 @@ const TOOLS = [{
         room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
         style: { type: 'string', description: 'For example: modern bedroom, cosy living room, home office.' } },
         required: ['style'] } },
+    { name: 'suggest_room',
+      description: 'Suggest and place furniture that suits a room: picks the style from the house (era, architectural style) and the room light, fits a full set against walls and doorways, shows a price tag on each piece and the room total. Use for "what would look good here", "furnish it to suit", "make it cheaper", "something nicer", "under $2000".',
+      parameters: { type: 'object', properties: {
+        room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
+        budget_usd: { type: 'number', description: 'Spending cap for the room, if the user gave one.' },
+        tier: { type: 'string', description: 'budget, mid, premium, or cheaper / nicer to step from the last suggestion.' } } } },
     { name: 'stage_house',
       description: 'Furnish every room in the house that has a set (living rooms, bedrooms, dining rooms, offices) in one go. Use for "furnish the whole house", "stage every room".',
       parameters: { type: 'object', properties: {
@@ -317,18 +327,31 @@ const RUN = {
       cleared: res.cleared || [], fits: !!res.fits, say: res.say || null };
   },
 
+  async suggest_room({ room, budget_usd, tier }) {
+    const w = W();
+    if (!w.suggest) return unavailable('suggest', 'shruti');
+    setStatus('Choosing furniture for this room…');
+    return w.suggest.suggestRoom({ room, tier, budget: Number(budget_usd) || 0 });
+  },
+
   async stage_house({ style }) {
     const w = W();
     if (typeof w.stageHouse !== 'function') return unavailable('stageHouse', 'shaurya');
     setStatus('Furnishing the house…');
     const res = (await w.stageHouse(style || undefined)) || {};
     const rooms = res.rooms || [];
+    const cost = w.suggest && (res.placed || 0) > 0 ? w.suggest.tagHouse() : null;    // price tags + house total
+    const listing = (describeHouse().listing || {});
     return { ok: (res.placed || 0) > 0, rooms: rooms.length, pieces: res.placed || 0,   // plain facts only
-      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null };
+      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null,
+      estimated_cost_usd: cost ? cost.total_usd : null, listing_price_usd: Number(listing.price) || null,
+      price_note: cost ? cost.price_note : null };
   },
 
   async set_wall_material({ description, tile_metres }) {
-    const w = W(), pointed = w.pointer && w.pointer.wall;
+    const w = W(), ww = w.wakeWall, live = w.pointer && w.pointer.type === 'wall' && w.pointer.wall;
+    // the wall faced at "Hey John" only when nothing is pointed now, so the two can't disagree
+    const pointed = live || (ww && performance.now() - ww.at < 20000 && ww.wall);
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
     // the wall pointed at; else the one straight ahead (cursor or gaze on the floor or a sofa is the usual miss)
     const wall = pointed || (w.wallAhead && w.wallAhead());
@@ -669,6 +692,7 @@ function fillerFor(text) {
   const t = text.toLowerCase();
   if (/wall|wallpaper|brick|paint/.test(t)) return 'Sure, let me look at this wall.';
   if (/plant/.test(t)) return 'Let me check the light here.';
+  if (/look good|suggest|suit|cheaper|nicer|budget|afford|under \$/.test(t)) return 'Let me take a look at this room.';
   if (/stage|furnish|set up/.test(t)) return 'Okay, setting up the room.';
   if (/take me|go to|walk to/.test(t)) return 'On our way.';
   if (/how big|size|area|measure|dimension/.test(t)) return 'Let me check the measurements.';
@@ -703,7 +727,8 @@ async function ask(text) {
       const img = await captureView();
       if (img) parts.push({ inlineData: { mimeType: 'image/jpeg', data: img } });
     }
-    history.push({ role: 'user', parts });
+    const userTurn = { role: 'user', parts };
+    history.push(userTurn);
     for (let i = 0; i < MAX_ROUNDS; i++) {
       const content = await gemini(history);
       history.push(content); // unchanged, so thought signatures survive the round trip
@@ -723,9 +748,13 @@ async function ask(text) {
       history.push({ role: 'user', parts: out });
       armSlow();
     }
+    // out of rounds, but the last tool usually did the job: say its own sentence instead of an error.
+    // Only this turn's tools: an older turn's "Plant on the floor" would claim something that didn't happen now.
+    const lastSay = history.slice(history.indexOf(userTurn)).reverse().flatMap((c) => c.parts).map((p) => p.functionResponse && p.functionResponse.response)
+      .find((r) => r && r.say);
     trimHistory();
     await filler;
-    return say('That took too many steps. Try asking for one thing at a time.');
+    return say(lastSay ? spoken(lastSay.say) : 'Done.');
   } catch (e) {
     console.error('[agent]', e);
     history.length = mark; // drop the failed turn so the next question starts clean
@@ -949,11 +978,14 @@ function buildUI() {
   // holding it and that door is 1.15 m — turn it and it goes through"). John says it out loud, captioned in the
   // headset, so the "will my sofa fit through that door?" beat needs no model call and no key. At most one line per
   // 6 s, and never over another line or while he is answering.
-  let blockedAt = 0;
+  let blockedAt = -Infinity;
   addEventListener('walkin:blocked', (e) => {
     const reason = e.detail && e.detail.reason, now = performance.now();
     if (!reason || busy || talking > 0 || now - blockedAt < 6000) return;
     blockedAt = now;
-    say(`${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`);
+    const line = `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
+    const live = window.walkin && window.walkin.live;
+    if (live && live.isActive && live.isActive() && live.sayExact(line)) { setStatus(line); return; } // one voice, John's
+    say(line);
   });
 })();

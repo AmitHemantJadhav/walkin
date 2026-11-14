@@ -588,6 +588,7 @@ export function placeObject(kind, x, y, opts = {}) {
   it.rotation.z = rot;
   it.userData.floor = floor;
   it.userData.on = support ? support.uuid : null;
+  it.userData.z0 = floorZ;          // where it belongs if whatever it is standing on is taken away
   if (w.select) w.select(it);
 
   const room = w.roomAt(spot.x, spot.y, floor);

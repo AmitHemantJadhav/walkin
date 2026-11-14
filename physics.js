@@ -455,9 +455,20 @@ function frame() {
   stats.frames++;
 
   const live = new Set();
+  // Everything that could be holding something up. A piece standing on another is skipped by the whole
+  // loop below, so if the thing it stood on is deleted it hangs in the air for ever and never collides
+  // with anything again: delete a television's stand and the television stays where it was, at 0.56 m,
+  // permanently intangible. Nothing else notices, because nothing else looks at `on`.
+  const present = new Set(w.furniture.children.map((o) => o.uuid));
   for (const item of w.furniture.children) {
     if (!item.userData.kind) continue;
     live.add(item);
+    if (item.userData.on && !present.has(item.userData.on)) {
+      item.userData.on = null;
+      const z0 = typeof item.userData.z0 === 'number' ? item.userData.z0
+        : (w.current && w.current.floorZ) || 0;
+      item.position.z = z0;                               // whatever held it up is gone: it is on the floor now
+    }
     const spec = FURNITURE[item.userData.kind];
     const st = ensure(item);
     if (spec.flat || item.userData.on) {                  // rugs and things on tables don't collide

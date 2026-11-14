@@ -89,6 +89,11 @@ export function loadLayout(data, { replace = true } = {}) {
     const by = typeof it.on === 'number' ? made[it.on] : null;
     obj.userData.on = by ? by.uuid
       : (typeof w.supportUnder === 'function' ? ((w.supportUnder(obj) || {}).uuid || null) : null);
+    // where it drops to if whatever it is standing on is deleted: the floor its support stands on,
+    // or its own height if it is already on the floor
+    const sup = by || (obj.userData.on
+      ? w.furniture.children.find((o) => o.uuid === obj.userData.on) : null);
+    obj.userData.z0 = sup ? sup.position.z : obj.position.z;
   });
   if (w.select) w.select(null);
 

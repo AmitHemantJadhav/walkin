@@ -4,6 +4,8 @@ Run from the walkin folder:  python serve.py   (port 8000; the cloudflared tunne
 Relays (keys are read from .env here and never reach the browser):
   POST /api/gemini[?model=<name>]  body = a Gemini generateContent request (JSON) -> Gemini's JSON reply
   POST /api/tts                    body = {"text": "...", "voice": "<voice id, optional>"} -> audio/mpeg
+  POST /api/live-token             -> {token, model, voice, apiVersion}: a one-use Gemini Live token (live.js opens the
+                                      voice conversation with it straight from the browser; the real key stays here)
   GET  /api/health                 -> which keys are set (never the keys), mock mode, calls this minute / today,
                                       the last upstream status, cache size and the rate limits
   GET  /api/houses                 -> [{id, name, panos, rooms}] for every data/<id>/house.json (house picker)
@@ -16,7 +18,8 @@ Quota (R10, so a rate limit can't kill the demo):
     from disk and cost nothing. RELAY_CACHE=0 turns it off. Run the demo once before judging to pre-warm it.
   - GEMINI_MOCK=1: canned Gemini replies (tool calls, text, a brick tile image) and a silent TTS clip, so the
     agent flow can be tested without keys or quota.
-Static files: no-store for code (so edits show up), one day of private (browser-only) caching for data/, models/ and vendor/.
+Static files: no-store for code (so edits show up), a day of private caching for models/ and vendor/; data/ is kept but re-checked on every load (cheap 304s),
+so a re-prepped house shows up at once.
 """
 import base64, collections, datetime, hashlib, http.server, json, os, re, socketserver, struct, sys, threading, time
 import urllib.error, urllib.parse, urllib.request, zlib
@@ -51,10 +54,15 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 TTS_VOICE = os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM"
 TTS_MODEL = os.environ.get("ELEVENLABS_MODEL_ID") or "eleven_flash_v2_5"
 MOCK = os.environ.get("GEMINI_MOCK", "") not in ("", "0", "false", "no")
+# Gemini Live (two-way voice, live.js). Needs a real Gemini key: OpenRouter has no realtime audio.
+LIVE_MODEL = os.environ.get("LIVE_MODEL") or "gemini-3.8-live"
+LIVE_VOICE = os.environ.get("LIVE_VOICE") or "Charon"
+LIVE_API_VERSION = os.environ.get("LIVE_API_VERSION") or "v1beta"   # the docs say v1beta; the SDK also knows v1alpha
 CACHE_DIR = os.path.join(ROOT, ".cache", "relay")
 CACHE_ON = os.environ.get("RELAY_CACHE", "1") not in ("0", "false", "no")
 FRIENDLY_BUSY = "One moment, I'm a bit busy. Ask me again in a few seconds."
-STATIC_CACHED = ("/data/", "/models/", "/vendor/")  # big and rarely change: let phones keep them
+STATIC_CACHED = ("/models/", "/vendor/")  # never change during the demo: let phones keep them for a day
+REVALIDATED = ("/data/",)                  # re-prepped houses must show up at once: re-check, 304 if unchanged
 
 
 # ------------------------------------------------------------------ quota: rate limits, stats, disk cache
@@ -86,7 +94,7 @@ class Bucket:
 
 LOCK = threading.Lock()
 BUCKETS = {"gemini": Bucket(_env_num("GEMINI_RPM", 8)), "image": Bucket(_env_num("GEMINI_IMAGE_RPM", 2)),
-           "tts": Bucket(_env_num("TTS_RPM", 20))}
+           "tts": Bucket(_env_num("TTS_RPM", 20)), "live": Bucket(_env_num("LIVE_RPM", 6))}
 STATS = {"recent": collections.deque(), "day": datetime.date.today().isoformat(), "today": 0,
          "cache_hits": 0, "limited": 0, "last": None}
 
@@ -118,7 +126,8 @@ def health():
                 "mock": MOCK, "calls_last_minute": len(recent), "calls_today": STATS["today"],
                 "rate_limited": STATS["limited"], "cache": {"on": CACHE_ON, "entries": entries, "hits": STATS["cache_hits"]},
                 "last_upstream": STATS["last"],
-                "limits_per_min": {k: round(b.cap) for k, b in BUCKETS.items()}, "model": GEMINI_MODEL}
+                "limits_per_min": {k: round(b.cap) for k, b in BUCKETS.items()}, "model": GEMINI_MODEL,
+                "live": bool(os.environ.get("GEMINI_API_KEY")) and not MOCK, "live_model": LIVE_MODEL, "live_voice": LIVE_VOICE}
 
 
 def cache_key(*parts):
@@ -236,9 +245,15 @@ def houses():
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         path = urllib.parse.urlsplit(self.path).path
-        cached = self.command in ("GET", "HEAD") and path.startswith(STATIC_CACHED)
-        # private: the phone keeps panos and models, but the tunnel's edge never stores the licensed data
-        self.send_header("Cache-Control", "private, max-age=86400" if cached else "no-store, max-age=0")
+        get = self.command in ("GET", "HEAD")
+        if get and path.startswith(STATIC_CACHED):
+            cc = "private, max-age=86400"
+        elif get and path.startswith(REVALIDATED):
+            cc = "private, no-cache"   # kept on the phone, but asked about every time (If-Modified-Since -> 304)
+        else:
+            cc = "no-store, max-age=0"
+        # private: the tunnel's edge never stores the licensed data
+        self.send_header("Cache-Control", cc)
         super().end_headers()
 
     # ---- static files: never serve dotfiles (.env, .git) — the tunnel makes this server public
@@ -275,7 +290,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._gemini(url, body)
         if url.path == "/api/tts":
             return self._tts(body)
+        if url.path == "/api/live-token":
+            return self._live_token(body)
         self._json(404, {"error": "unknown endpoint"})
+
+    def _live_token(self, body):
+        """Mint a one-use, short-lived Gemini Live token. The browser connects to Google with it directly (audio
+        is too latency-sensitive to relay), so the real key never leaves this machine."""
+        key = os.environ.get("GEMINI_API_KEY")
+        if MOCK or not key:
+            return self._json(503, {"error": "live voice needs GEMINI_API_KEY (OpenRouter has no realtime audio)"
+                                    if not MOCK else "live voice is off in GEMINI_MOCK mode"})
+        try:
+            req = json.loads(body or b"{}")
+        except ValueError:
+            req = {}
+        version = req.get("apiVersion") if req.get("apiVersion") in ("v1alpha", "v1beta") else LIVE_API_VERSION
+        with LOCK:
+            ok, wait = BUCKETS["live"].take()
+        if not ok:
+            return self._busy(wait, "local live limit reached")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        iso = lambda d: (now + d).strftime("%Y-%m-%dT%H:%M:%SZ")
+        url = f"https://generativelanguage.googleapis.com/{version}/auth_tokens"
+        headers = {"Content-Type": "application/json", "x-goog-api-key": key}
+        base = {"uses": 1, "expireTime": iso(datetime.timedelta(minutes=20)),
+                "newSessionExpireTime": iso(datetime.timedelta(minutes=2))}
+        # lock the token to our model when the API accepts that, else mint it unconstrained
+        tries = [dict(base, liveConnectConstraints={"model": f"models/{LIVE_MODEL}"}), base]
+        for attempt, payload in enumerate(tries):
+            status, _ctype, out, _retry = self._upstream(url, json.dumps(payload).encode(), headers, timeout=15)
+            count_call("live", status)
+            if status == 200:
+                break
+            if status != 400:
+                break
+        if status != 200:
+            msg = out.decode("utf-8", "replace")[:300] if isinstance(out, bytes) else str(out)
+            return self._json(502 if status is None or status >= 500 else status,
+                              {"error": f"couldn't mint a live token ({status}): {msg}"})
+        token = (json.loads(out) or {}).get("name")
+        if not token:
+            return self._json(502, {"error": "no token in the reply"})
+        self._json(200, {"token": token, "model": LIVE_MODEL, "voice": LIVE_VOICE, "apiVersion": version})
 
     def _gemini(self, url, body):
         model = (urllib.parse.parse_qs(url.query).get("model") or [GEMINI_MODEL])[0]
@@ -368,10 +425,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             cache_put(key, ctype or "application/octet-stream", out)
         self._send(status, ctype or "application/octet-stream", out)
 
-    def _upstream(self, target, data, headers):
+    def _upstream(self, target, data, headers, timeout=90):
         """POST to the upstream API. Returns (status, content type, body, retry-after seconds). Keys stay in `headers`."""
         try:
-            with urllib.request.urlopen(urllib.request.Request(target, data=data, headers=headers), timeout=90) as r:
+            with urllib.request.urlopen(urllib.request.Request(target, data=data, headers=headers), timeout=timeout) as r:
                 return r.status, r.headers.get("Content-Type"), r.read(), None
         except urllib.error.HTTPError as e:
             ra = e.headers.get("Retry-After")

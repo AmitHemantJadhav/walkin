@@ -15,14 +15,15 @@ Each one is explained where it belongs below; this is the list to read on the wa
 
 1. **Beat 5 only works at one doorway** — the 1.15 m one off the living room, **scan point 37**. At
    nineteen of La Mirada's twenty-two the sofa doesn't fit turned either, and John says so.
-2. **Go in square.** ±8 cm of the centre line goes through; past that the sofa lines up with the
-   doorway and stops in it. Back off half a metre, square up, go again.
-3. **Move the coffee table first.** Beat 2 puts one right in front of the sofa, and a sofa can't pass
-   through a coffee table: dragged straight at the door it travels 24 cm and stops.
-4. **Beat 5 is silent unless #54 is merged.** `physics.js` computes the sentence; the only thing that
-   speaks it is eleven lines in `agent.js` on that PR.
-5. **Beat 7 needs #60 merged** to be a real tool call; without it there is a safety net that works
-   in mock mode. `walkin.stageHouse('modern')` always does the house.
+2. **Go in square — forgiving since #97.** **±50 cm** off the centre line still goes through (it was
+   about 10 cm this morning). If it stops it is beside the door rather than wedged in it: back off
+   half a metre, aim at the doorway, go again.
+3. **Better: run beat 5 before beat 2**, carrying the sofa in from the porch. After beat 2 it takes
+   three drags (coffee table, armchair, tv stand) or the sofa travels 24 cm and stops.
+4. **In the headset, John's voice is the only version of beat 5.** The same sentence appears under
+   the room card on a phone or a laptop, but `ui.css` hides that panel in stereo. If the voice is
+   off, say the line yourself.
+5. **Beat 7 is a real tool call** (`stage_house`). `walkin.stageHouse('modern')` is the fallback.
 6. **Don't stand at scan point 38 or 16.** They are inside rooms the scan gives no outline, so
    staging refuses — and 38 is 0.63 m from the doorway beat 5 needs.
 
@@ -42,6 +43,9 @@ Open `…/?m=zvKHR9DHNjJ`, **stand inside a room**, and run one line in the cons
 ```js
 await walkin.preflight()
 ```
+
+**On a phone there is no console**, so add `&preflight` to the URL instead — it runs once the house
+is up and puts the same nine lines on the screen. Tap to dismiss.
 
 Nine ✓ or ✗ with the number behind each: the house, whether John answers, staging, whether this
 house even has a door the sofa beat works at, physics, the wallpaper fallback tiles, whether a layout
@@ -116,17 +120,66 @@ The tile is generated, then laid on that wall at real scale, **cut around the do
 window**, and shaded by the photo's own light, so the corner stays dark and the patch beside the
 window stays bright. Walk to another scan point: still the same wall.
 
+**Point at the right wall, and you can do it from where beat 5 happens.** Wallpaper used to sit a
+fixed 8 cm out from the wall graph's centre line, and on a thick wall the scan mesh bulged past that
+and the occluder ate the paper — La Mirada's 5.02 m, 0.28 m-thick **wall #1** lost **90%** of it from
+the dining-room side. **#61 fixed that**: each wall is now papered just in front of its own scanned
+face (#88 measured it, #89 shipped it), and `walkin.wallFit()` reports what is left.
+
+Measured on `main` from **scan point 37**, where beats 5 and 6 already put you — the share of each
+wall the scan still covers:
+
+| wall | cut | length | room |
+|---|---|---|---|
+| **#31 −side** | **0%** | 3.85 m | Living Room |
+| **#19 +side** | **1%** | 3.94 m | Living Room |
+| #13 +side | 3% | 5.81 m | Living Room |
+| #1 +side | 10% | 5.02 m | Living Room |
+
+So **paper wall #19 or #31** and nothing is lost. This is now belt-and-braces rather than a hazard —
+the worst wall in the house is no longer catastrophic, it is 10% — but a named wall is still the
+safer instruction on stage, and it means beats 4, 5 and 6 all happen without walking anywhere.
+
+`walkin.wallFit()` from the living room reports **4% cut, against 5% at the old fixed offset**; the
+bathroom is the worst room in the house and still only 14%. If a wall ever looks bare, run it.
+
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 
-**Move the coffee table first.** Beat 2 just put one directly in front of the sofa, because that is
-what a living room looks like, and a sofa cannot pass through a coffee table: dragged straight at the
-door it travels **24 cm** and stops. Grab the coffee table and pull it aside — one grab, it is light
-and it moves easily — or run this beat on a room you haven't staged. (Why the sofa doesn't just shove
-it out of the way: #57.)
+**Clear the path first — and it is three pieces, not one.** Beat 2 fills the living room, and the
+staged sofa cannot reach the front door through it. Dragged straight at the door it travels **24 cm**
+and stops. Taking the obstacles out one at a time, against `main`, from the position beat 2 leaves the
+sofa in (4.88 m from the door):
+
+| cleared | the sofa travels | and stops |
+|---|---|---|
+| nothing | **0.24 m** | 4.64 m from the door |
+| coffee table | 1.38 m | 3.58 m from the door |
+| + armchair | 2.85 m | 2.28 m from the door |
+| **+ tv stand and television** | **4.31 m** | **1.40 m — a clear run at the door** |
+
+In the same room with *only* the sofa in it, the identical drag travels 4.27 m, so this is the
+furniture and not the physics. **The coffee table alone is not enough**, which is what this page used
+to say: pull the **coffee table, the armchair and the tv stand** aside, or run beat 5 on a room you
+haven't staged. The rug makes no difference — rugs are `flat`, and the solver ignores them.
+
+**The better beat, and it needs no clearing at all.** Do beat 5 **before** beat 2 and let the viewer
+place the sofa for you. Standing at scan point 37 you are on the **front porch** — the 1.15 m opening
+is the **front door** — so this becomes the question people actually ask: *will my sofa fit through
+the front door?* Verified against `main`, end to end:
+
+| | |
+|---|---|
+| **⋯ → + Add → Sofa** | lands on the porch, **1.53 m from the front door**, nothing in the way |
+| carry it at the door **broadside** | stops dead, and John says the line |
+| **turn it square** and carry it through | ends **in the Living Room**, 1.8 m past the door, 3.4 m travelled |
+
+Then run beat 2 on the room you have just carried it into. (Why the sofa doesn't just shove the coffee
+table out of the way: #57.)
 
 **Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
-La Mirada has three out of twenty-two: the 2.50 m opening into the dining room (too wide, nothing to
-prove), one at 0.98 m into the dining room, and **the 1.15 m doorway off the living room — the one
+La Mirada has three out of twenty-two: the 2.50 m opening between the living and dining rooms (too
+wide, nothing to prove), one at 0.98 m **into a bathroom** off the hallway — the sofa does go through
+it, but think about what that looks like — and **the 1.15 m doorway off the living room — the one
 the sentence below quotes**. It is at model `(2.81, 0.02)`; stand at **scan point 37**, 0.47 m away,
 and you are looking straight through it. At the other nineteen the sofa doesn't fit turned either, so
 John correctly says *"it won't fit through at all"* and the beat goes nowhere.
@@ -135,23 +188,43 @@ Grab the sofa and carry it at the doorway **broadside**. It stops dead, and John
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
 
-**Check #54 is merged before you rely on that.** `physics.js` computes the sentence and fires it as a
-`walkin:blocked` event; the only thing that listens is eleven lines at the end of `agent.js` in #54.
-Without them the sofa stops at the door **in silence** and the beat is half of what it should be. One
-line in the console tells you:
+The same sentence appears under the room card at the same moment — `physics.js` works it out and
+fires it as a `walkin:blocked` event, John speaks it and `fit.js` writes it. **In the headset the
+card is hidden**, so his voice is the only version there; if `await walkin.preflight()` says the
+voice is off, say the line yourself.
+
+If you ever need to see the event directly:
 
 ```js
 addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door
 ```
 
-Turn it and walk it through — **square on**. Measured at that doorway: up to about **8 cm off the
-centre line it goes straight through**, which is the real clearance a 0.95 m sofa has in a 1.15 m
-door. Past that the assist does slide it towards the centre, but the hand is still pulling off to one
-side, so the sofa lines itself up with the doorway and stops in it rather than passing. It looks
-deliberate rather than broken — but if it stops, back off half a metre, square up and go again, and
-don't let anyone think it is meant to be forgiving. Fixing that properly needs the doorway to act as
-a rail for the whole traverse; four attempts at it this morning each made something else worse (#55),
-so it is written down rather than half-done.
+Turn it and walk it through — **square on**. Since #55 landed (jamb slide + door rail, #97) this is
+far more forgiving than it was this morning. Swept against `main`, walking the sofa at the front door
+on a straight line while holding a constant sideways offset — the harsh version of the gesture, worse
+than a hand actually does:
+
+| off the centre line | goes through? |
+|---|---|
+| **±50 cm** | **yes** |
+| ±70 cm | no — it meets the wall beside the door and stops there |
+
+**Half a metre either side.** Before #97 the figure was about 10 cm and past that the sofa stuck
+*in* the doorway, which is what the old version of this page warned about at length. A piece pushed at
+a door it fits now commits to that door and lines itself up as it goes.
+
+If it does stop, it will be against the wall beside the door rather than wedged in it, and the fix is
+the same: back off half a metre, aim at the doorway and go again.
+
+**The refusals are untouched, which is the point of the beat.** A broadside sofa still stops dead at
+the door and still says its line; a king bed still gets *"it won't fit through at all"* at every
+angle. The rail only ever helps a piece that genuinely fits.
+
+`?doorrail=off` and `?jambslide=off` put the old behaviour back if either ever misbehaves.
+
+How far off *square* you can be is a fair question and I don't have an honest number for it: turning
+the sofa in place a stride from the door makes the solver shove it, so every run I set up beyond a few
+degrees had already been pushed through the doorway before the walk started (#84). Go in square.
 
 A piece that genuinely doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it
 won't fit through at all"* instead.
@@ -171,10 +244,16 @@ He reads the light at that spot from the photo and the window positions, and pla
 
 > *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
 
-The plant depends on the reading: a fern out of the sun, a plant in indirect light, a tall cactus in
-a bright window. Standing in the living room this morning it answered *"A plant — that spot is medium
-light, 3.3 m from the nearest window, and it does well in indirect light."* — so don't promise a fern
-before you've heard it.
+The plant depends on the reading, so don't promise a fern before you've heard it. All three, measured
+at La Mirada:
+
+> *"A tall cactus — that spot is bright light, 0.5 m from the nearest window, and it takes direct sun."*
+> *"A tall potted plant — that spot is medium light, 3.3 m from the nearest window, and it does well in indirect light."*
+> *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
+
+**It never names a compass direction**, and that is deliberate: the scan is not aligned to north, so
+`light_here` says so and tells the model not to claim one. If anyone asks how it knows, the answer is
+the windows' size and how far the spot is from them, both measured in the scan — not the sun.
 
 If the model doesn't chain the two steps, `walkin.suggestPlant()` does the whole thing in one call
 and always lands.
@@ -209,16 +288,14 @@ name — *"stage this as a living room"* — and it will try anyway.
 
 Both La Mirada living rooms have a television, each one squarely facing its sofa.
 
-Other houses, measured the same way — and the numbers depend on whether **#51** is merged, because
-that is what lets a big open-plan kitchen take the living set:
+Other houses, measured the same way on today's `main`:
 
-| | with #51 | without |
+| | | |
 |---|---|---|
-| 10319 Dunvegan Way | 19 pieces, 4 rooms (its 31 m² kitchen gets the living set, television and all) | 12 pieces, 3 rooms |
-| 314 Gale St | 26 pieces, 4 rooms | 19 pieces, 4 rooms |
-
-La Mirada is 32 either way. If the counts come out low on the day, that is the reason — check
-whether #51 landed before assuming something is broken.
+| 5836 La Mirada Ave | **32 pieces** | 6 rooms |
+| 314 Gale St | **26 pieces** | 5 rooms — kitchen, living room, dining room and 2 bedrooms |
+| 10319 Dunvegan Way | **19 pieces** | 4 rooms — its 31 m² kitchen is open-plan, so it gets the living set, television and all |
+| the fixture (`?m=fixture`) | **12 pieces** | 2 rooms, no keys needed |
 
 ---
 
@@ -253,12 +330,15 @@ whether #51 landed before assuming something is broken.
 
 | symptom | do this |
 |---|---|
-| John doesn't answer | check `/api/health`; restart with `GEMINI_MOCK=1` |
+| John doesn't answer | run `await walkin.preflight()` — its John row makes a real call, so it says *why* rather than just that a key is set; then restart with `GEMINI_MOCK=1` |
 | no hands | reload, allow the camera, check it's the right camera with 📷 |
 | furniture won't move | `walkin.physics.enabled = false` |
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
-| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again **then hard-reload** (⌘⇧R) — `/data/` is cached for a day, so without that you keep seeing the old file (#59); or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all — the whole run works there now, beat 5 included, because its doorway is 1.15 m like the real one. If you have opened that fixture before, write it somewhere new (`python3 tools/fake_house.py data/fixture2`, then `?m=fixture2`) rather than fighting the cache |
+| the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move, the way it behaved before A6. `&a6=round` only swaps the wall proxy back and **still blinks** on long jumps, so `off` is the only full rollback |
+| John answers but has no voice | expected — there is no ElevenLabs key, so `/api/tts` 404s and he falls back to the **browser voice**. Verified on the live tunnel; the doorway sentence is spoken. Don't "fix" the 404 by removing the fallback |
+| John goes quiet after a `git pull` | restart `serve.py`. It is read once at startup, so a pull leaves the old process serving and `/api/health` 404s. `preflight` names this one |
+| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again and reload — since #75 a re-prepped house shows up at once; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all and does the whole run, beat 5 included |
 
 ## Console equivalents for every beat
 

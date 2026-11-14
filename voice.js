@@ -92,7 +92,7 @@ async function startLevel() {
 // Only while a command is being spoken (the glow is up), and only when the level moved: the headset is fps-bound.
 let pulsing = false, lastLvl = -1;
 function pulse() {
-  if (state.mode !== 'awake') { pulsing = false; return; }
+  if (state.mode !== 'awake' && state.mode !== 'live') { pulsing = false; return; }
   let lvl = 0.35 + 0.15 * Math.sin(performance.now() / 260);  // gentle breathing when there's no mic level
   if (analyser) {
     analyser.getByteTimeDomainData(levelBuf);
@@ -141,7 +141,7 @@ function stopRec() {
 function pause() { state.paused = true; stopRec(); }
 function resume() {
   state.paused = false;
-  if (state.mode !== 'thinking') startRec();
+  if (state.mode !== 'thinking' && state.mode !== 'live') startRec();   // live.js has the mic
 }
 
 function onResult(e) {
@@ -196,6 +196,7 @@ async function finishCommand() {
   setMode('thinking');
   stopRec();                                 // the agent's filler and reply will be spoken now
   const w = window.walkin;
+  if (await liveConversation(command)) return;   // a real two-way conversation (live.js) when there's a Gemini key
   try {
     if (!w || !w.agent) throw new Error('agent not ready');
     await w.agent.ask(command);             // speaks a filler at once, then the reply (captioned via walkin:speech)
@@ -207,6 +208,40 @@ async function finishCommand() {
   // back to listening once John has finished talking (the 'end' event resumes the microphone)
   if (!w || !w.agent || !w.agent.isSpeaking()) setTimeout(backToListening, 600);
 }
+
+// ------------------------------------------------------------------ live conversation (live.js, Gemini Live)
+let liveOk = null;
+async function liveAvailable() {
+  const live = window.walkin && window.walkin.live;
+  if (!live) return false;
+  if (liveOk === null) liveOk = await live.available();
+  return liveOk;
+}
+
+/** Hand the mic to Gemini Live for a back-and-forth; resolves true when it ran, false to use the old pipeline. */
+async function liveConversation(firstText) {
+  if (!(await liveAvailable())) return false;
+  setMode('live');
+  startPulse && startPulse();
+  const ran = await window.walkin.live.start({ firstText });
+  if (ran === false) {                         // couldn't connect (token, network): fall back for this command
+    setMode('thinking');
+    liveOk = null;
+    return false;
+  }
+  backToListening();
+  return true;
+}
+
+addEventListener('walkin:live', (e) => {
+  const d = e.detail || {};
+  if (d.kind === 'user') { clearTimeout(capTimer); showCaption(d.text, '', 'user'); }
+  else if (d.kind === 'john') { clearTimeout(capTimer); showCaption(d.text, '', 'john'); }
+  else if (d.kind === 'turn') { capTimer = setTimeout(clearCaption, 2500); }
+  else if (d.kind === 'state' && d.state === 'connecting') showHint('Connecting to John…', 2500);
+  else if (d.kind === 'state' && d.state === 'nomic') showHint("John can't hear you: allow the microphone, or tap the orb to type.", 6000);
+});
+let capTimer = 0;
 
 function backToListening() {
   if (window.walkin && window.walkin.agent && window.walkin.agent.isSpeaking()) return; // the 'end' event will call us
@@ -235,6 +270,7 @@ let unlocked = false;
 function unlock() {
   if (unlocked) return;
   unlocked = true;
+  try { window.walkin && window.walkin.live && window.walkin.live.prime(); } catch (e) { /* no live */ }
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) { /* ignore */ }
   if (!SR) { showHint('Voice needs Chrome or Safari here. Tap the orb to type.', 6000); return; }
   state.wanted = true;
@@ -248,8 +284,16 @@ addEventListener('keydown', (e) => { if (e.key !== '/' && e.key !== 'Escape') un
 // push to talk (Talk button, pinch-and-hold menu): skip the wake phrase
 function talkNow() {
   unlock();
-  if (!SR) { setPanel(true); return; }
+  if (state.mode === 'live') return window.walkin.live.stop('talk');   // Talk again = hang up
   if (state.mode === 'thinking') return;
+  liveAvailable().then((ok) => {               // push to talk: straight into a live conversation if we can
+    if (ok) { stopRec(); liveConversation(''); return; }
+    talkClassic();
+  });
+}
+
+function talkClassic() {
+  if (!SR) { setPanel(true); return; }
   state.wanted = true;
   window.walkin && window.walkin.agent && window.walkin.agent.isSpeaking() && stopRec();
   state.paused = false;

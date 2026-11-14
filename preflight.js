@@ -11,6 +11,32 @@ import { FURNITURE } from './furniture.js';
 const ok = (name, note) => ({ name, ok: true, note });
 const no = (name, note) => ({ name, ok: false, note });
 
+/**
+ * One real question through the relay, so a dead key fails the check instead of passing it.
+ * Eight tokens, no tools, no system prompt; `serve.py` caches it, so running preflight twice costs one.
+ */
+async function asksAndAnswers(timeoutMs = 8000) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch('/api/gemini', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal,
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Say ok.' }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 8 } }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = data.error || {};
+      return { ok: false, why: String(err.message || err || `the relay returned ${res.status}`).slice(0, 120) };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, why: e.name === 'AbortError' ? `no answer in ${timeoutMs / 1000} s` : String(e.message || e).slice(0, 120) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Frames rendered in `ms`, as a rate. */
 function fps(ms = 1000) {
   return new Promise((done) => {
@@ -41,19 +67,35 @@ export async function preflight({ quiet = false } = {}) {
     : no('the house', `${panos} scan points, ${rooms.length} rooms with outlines — one of those should not be 0`));
 
   // ---------------------------------------------------------------- John
+  // /api/health only says whether a key is *set*. A key that is set and rejected looks identical from
+  // there, and "John answers ✓" printed over a 401 is the worst kind of green — it is the one check
+  // nobody repeats by hand. So ask him something: one call, eight tokens, cached by the relay after.
   try {
     const h = await (await fetch('/api/health')).json();
     const live = h.gemini || h.openrouter;
-    rows.push(live || h.mock
-      ? ok('John answers', live ? `${h.provider || 'live'} key, voice ${h.tts ? 'on' : 'OFF — he will be read, not heard'}`
-        : 'MOCK replies — every scripted line still works, nothing dies on stage')
-      : no('John answers', 'no key and no mock: restart with GEMINI_MOCK=1 python3 serve.py'));
+    if (!live && !h.mock) {
+      rows.push(no('John answers', 'no key and no mock: restart with GEMINI_MOCK=1 python3 serve.py'));
+    } else {
+      const said = await asksAndAnswers();
+      const voice = h.tts ? '' : ', voice OFF — he will be read, not heard';
+      if (said.ok) {
+        rows.push(ok('John answers', h.mock
+          ? 'MOCK replies, and the relay answered — every scripted line still works, nothing dies on stage'
+          : `${h.provider || 'live'} key, and he answered${voice}`));
+      } else {
+        rows.push(no('John answers', h.mock
+          ? `the mock relay did not answer — ${said.why}. Is serve.py the one you just pulled?`
+          : `a ${h.provider || 'live'} key is set but the call failed — ${said.why}. `
+            + 'He cannot answer; a working key is #15'));
+      }
+    }
   } catch (e) {
     rows.push(no('John answers', '/api/health did not reply — is serve.py the one you just pulled?'));
   }
 
   // ---------------------------------------------------------------- staging, without losing the room
   const saved = typeof w.saveLayout === 'function' ? w.saveLayout() : null;
+  let mine = null;                                   // the pieces preflight itself put down
   try {
     const here = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
     if (typeof w.stageRoom !== 'function') rows.push(no('staging', 'staging.js never loaded'));
@@ -62,6 +104,7 @@ export async function preflight({ quiet = false } = {}) {
       const t0 = performance.now();
       const r = w.stageRoom(here, 'modern');
       const ms = Math.round(performance.now() - t0);
+      mine = w.furniture.children.filter((o) => o.userData.kind);
       rows.push(r.placed.length
         ? ok('staging', `${r.placed.length} pieces in the ${(here.label || '').toLowerCase()} in ${ms} ms, ${r.fits ? 'all of it fits' : 'SOME OF IT DOES NOT FIT'}`)
         : no('staging', r.say));
@@ -85,8 +128,14 @@ export async function preflight({ quiet = false } = {}) {
   if (w.physics && typeof w.physics.probe === 'function') {
     // Probe first, then read the count: the wall graph is built the first time anything asks about it,
     // so reading segments() on a house nobody has moved a piece in yet always answers 0.
+    // The home's own furniture is left out of this. Those pieces stand where they really stand, and
+    // their footprints are rectangles around irregular things — a chair tucked under a table overlaps
+    // it, a sofa overlaps the rug it sits on. That is the house being the house, not the solver
+    // failing, and counting it turns a green board red for something nobody can fix.
     const solid = w.furniture.children.filter((o) => o.userData.kind
-      && !(FURNITURE[o.userData.kind] || {}).flat && !(o.userData || {}).on);
+      && !(FURNITURE[o.userData.kind] || {}).flat && !(FURNITURE[o.userData.kind] || {}).real
+      && !(o.userData || {}).on);
+    const theirs = w.furniture.children.filter((o) => (FURNITURE[o.userData.kind] || {}).real).length;
     const stuck = solid.filter((o) => w.physics.probe(o, o.position.x, o.position.y, o.rotation.z).hit);
     const segs = w.physics.segments();
     if (!solid.length) {
@@ -98,7 +147,9 @@ export async function preflight({ quiet = false } = {}) {
     }
     else if (!segs) rows.push(no('physics', 'no wall segments: furniture will walk through walls'));
     else if (stuck.length) rows.push(no('physics', `${stuck.length} of ${solid.length} pieces are stuck in something`));
-    else rows.push(ok('physics', `${segs} wall segments, none of ${solid.length} pieces stuck, enabled: ${w.physics.enabled}`));
+    else rows.push(ok('physics', `${segs} wall segments, none of ${solid.length} pieces stuck, `
+      + `enabled: ${w.physics.enabled}`
+      + (theirs ? ` (plus ${theirs} of the home's own, not counted: they stand where they really stand)` : '')));
   } else rows.push(no('physics', 'physics.js never loaded'));
 
   // ---------------------------------------------------------------- wallpaper
@@ -124,20 +175,62 @@ export async function preflight({ quiet = false } = {}) {
       + 'from an earlier session will come back on a reload — open with &layout=none to start clean'));
 
   // ---------------------------------------------------------------- hands and the headset
-  rows.push(typeof w.hands === 'object' || typeof w.handRay === 'function'
-    ? ok('hands', 'hooks are there — this does NOT prove the camera works, press ✋ and look')
-    : no('hands', 'hands.js never loaded'));
+  // Two different questions, and only one of them is answerable from here. Whether the camera works
+  // needs a camera. Whether MediaPipe will load without the venue's Wi-Fi is a HEAD request, and it is
+  // the one that bites at a hackathon: the model is 7.8 MB off storage.googleapis.com unless the local
+  // copies are both present and used (#50).
+  if (typeof w.hands !== 'object' && typeof w.handRay !== 'function') {
+    rows.push(no('hands', 'hands.js never loaded'));
+  } else {
+    let local = false;
+    try {
+      const [lib, model] = await Promise.all([
+        fetch('vendor/mediapipe/tasks-vision@0.10.14/vision_bundle.mjs', { method: 'HEAD' }),
+        fetch('vendor/mediapipe/hand_landmarker.task', { method: 'HEAD' }),
+      ]);
+      local = lib.ok && model.ok;
+    } catch (e) { local = false; }
+    rows.push(local
+      ? ok('hands', 'hooks there and MediaPipe is on disk, so no venue Wi-Fi needed — this still does '
+        + 'NOT prove the camera works, press ✋ and look')
+      : no('hands', 'hooks are there, but vendor/mediapipe is missing — the hands will try to fetch '
+        + '7.8 MB from googleapis.com when you press ✋'));
+  }
 
   // ---------------------------------------------------------------- frame rate, as it stands now
   const rate = await fps(1200);
   const n = w.furniture.children.filter((o) => o.userData.kind).length;
-  rows.push(rate >= 45
-    ? ok('frame rate', `${rate} fps with ${n} pieces`)
-    : no('frame rate', `${rate} fps with ${n} pieces — under 45, check it in the headset before you rely on it`));
+  // Under 5 is not a slow device, it is a tab that isn't being drawn - a background tab, or an
+  // automated one, gets no animation frames at all. Reporting "0 fps, under 45" for that is a red row
+  // about something other than the app, which is exactly as unhelpful as a false green. Amit hit it
+  // running this on the live host. A genuinely struggling phone reads 10-30, not 0.
+  if (rate < 5) {
+    rows.push(no('frame rate', `only ${rate} fps, which means this tab wasn't drawing rather than that `
+      + 'the app is slow — bring the page to the front and run it again. The number only means '
+      + 'anything on the device you present from'));
+  } else {
+    rows.push(rate >= 45
+      ? ok('frame rate', `${rate} fps with ${n} pieces`)
+      : no('frame rate', `${rate} fps with ${n} pieces — under 45, check it in the headset before you rely on it`));
+  }
 
   // ---------------------------------------------------------------- put the room back
-  if (saved && typeof w.loadLayout === 'function') w.loadLayout(saved);
-  else if (typeof w.clearLayout === 'function') w.clearLayout();
+  // Unless somebody has been furnishing while this ran. ?preflight starts a second after the house
+  // is up, and a presenter who says "stage this as a cosy living room" straight away would otherwise
+  // have it undone by a restore they never asked for. If the room is not as this left it, leave it.
+  // Compare the pieces themselves, not how many there are: staging the same room again gives the same
+  // count and different objects, which is exactly the case that matters.
+  const now = w.furniture.children.filter((o) => o.userData.kind);
+  const untouched = mine === null
+    || (now.length === mine.length && mine.every((o) => now.includes(o)));
+  if (!untouched) {
+    rows.push(ok('the room', `left alone — the furniture changed while this was running (${now.length} `
+      + `piece${now.length === 1 ? '' : 's'} there now), so it was not put back`));
+  } else if (saved && typeof w.loadLayout === 'function') {
+    w.loadLayout(saved);
+  } else if (typeof w.clearLayout === 'function') {
+    w.clearLayout();
+  }
 
   if (!quiet) print(rows);
   return rows;
@@ -154,10 +247,36 @@ function print(rows) {
   if (bad) console.log('%cWhat to do about each one is in docs/demo-runbook.md.', 'color:#888');
 }
 
+/**
+ * The same nine lines, on the screen instead of in the console — because the demo device is a phone
+ * in a headset and a phone has no console. `?preflight` in the URL runs it once the house is up and
+ * shows the result; tap it to dismiss. Everything else about it is unchanged, including putting back
+ * whatever furniture was in the room.
+ */
+function panel(rows) {
+  const bad = rows.filter((r) => !r.ok).length;
+  const el = document.createElement('div');
+  el.id = 'preflightPanel';
+  el.className = 'panel';
+  el.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;'
+    + 'max-width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 64px);overflow:auto;'
+    + 'padding:16px 18px;border-radius:22px;font:500 13px/1.45 system-ui,sans-serif;cursor:pointer';
+  el.innerHTML = `<div style="font-weight:600;margin-bottom:8px;color:${bad ? '#ff5a5f' : '#3ccf8e'}">`
+    + `Walk-In preflight — ${rows.length - bad}/${rows.length} ok</div>`
+    + rows.map((r) => `<div style="margin:3px 0"><span style="color:${r.ok ? '#3ccf8e' : '#ff5a5f'};`
+      + `font-weight:600">${r.ok ? '✓' : '✗'} ${r.name}</span> <span style="opacity:.8">${r.note}</span></div>`).join('')
+    + '<div style="margin-top:10px;opacity:.6">tap to dismiss</div>';
+  el.addEventListener('click', () => el.remove());
+  document.body.appendChild(el);
+}
+
 (function start(tries = 0) {
   if (!window.walkin) {
     if (tries < 600) return setTimeout(() => start(tries + 1), 50);
     return;
   }
   window.walkin.preflight = preflight;
+  if (new URLSearchParams(location.search).has('preflight')) {
+    setTimeout(() => preflight().then(panel).catch((e) => console.warn('preflight:', e)), 1200);
+  }
 })();

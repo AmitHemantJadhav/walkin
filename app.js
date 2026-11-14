@@ -6,6 +6,8 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
 import { createRealHands } from './realhands.js';
+import { createRadial } from './radial.js';
+import { liftOff, setDown } from './tabletop.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -110,23 +112,62 @@ function loadTex(url) {
   return p;
 }
 
+// A6 step 2: wall pieces the move's proxy room can hold. 64 puts 99% of level rays on the floor plan's nearest wall
+// in the 3 prepped houses (24 did 83%); the loop stops at nSeg and only runs during a move.
+const A6_SEGS = 64;
 const panoMat = new THREE.ShaderMaterial({
   uniforms: {
     texA: { value: null }, texB: { value: null }, invA: { value: new THREE.Matrix3() }, invB: { value: new THREE.Matrix3() },
     mixAB: { value: 0 },
+    // A6: depth-aware move. depthAB = 1 while walking between two panos on the same floor: camP is the moving camera,
+    // posA / posB where the two photos were taken, proxy = (floor z, ceiling z, wall radius, -), mid = centre of the walls.
+    depthAB: { value: 0 }, camP: { value: new THREE.Vector3() }, posA: { value: new THREE.Vector3() },
+    posB: { value: new THREE.Vector3() }, proxy: { value: new THREE.Vector4(0, 2.6, 3, 0) }, mid: { value: new THREE.Vector2() },
+    // A6 step 2: the real wall pieces near the path, (ax, ay, bx, by) each, doorways left open; the round wall is the fallback
+    segs: { value: Array.from({ length: A6_SEGS }, () => new THREE.Vector4()) }, nSeg: { value: 0 },
   },
   vertexShader: `varying vec3 vDir;
     void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB; varying vec3 vDir;
+  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB, depthAB;
+    uniform vec3 camP, posA, posB; uniform vec4 proxy; uniform vec2 mid; uniform vec4 segs[${A6_SEGS}]; uniform int nSeg;
+    varying vec3 vDir;
     vec4 pano(sampler2D t, mat3 inv, vec3 d) {
       vec3 l = normalize(inv * d);
       float lon = atan(l.x, l.z);
       float lat = asin(clamp(l.y, -1.0, 1.0));
       return texture2D(t, vec2(lon / 6.28318530718 + 0.5, 0.5 + lat / 3.14159265359));
     }
+    // Where this pixel's ray from the moving camera meets a simple room: floor and ceiling planes, the floor plan's
+    // walls near the path, and a round wall around it for rays that leave through a doorway. Each photo is then read
+    // from where it was taken, so the floor slides under you like walking and the photos agree on the walls too.
+    vec3 hitRoom(vec3 d) {
+      float t = 1000.0;
+      if (d.z < -0.0001) t = (proxy.x - camP.z) / d.z;
+      else if (d.z > 0.0001) t = (proxy.y - camP.z) / d.z;
+      vec2 o = camP.xy - mid, h = d.xy;
+      float a = dot(h, h);
+      if (a > 0.000001) {
+        float b = dot(h, o), c = dot(o, o) - proxy.z * proxy.z;
+        t = min(t, (-b + sqrt(max(b * b - a * c, 0.0))) / a);
+      }
+      for (int i = 0; i < ${A6_SEGS}; i++) { // real walls: nearest crossing of the ray with a wall piece
+        if (i >= nSeg) break;
+        vec2 sa = segs[i].xy;
+        vec2 e = segs[i].zw - sa;
+        vec2 w = sa - camP.xy;
+        float den = h.x * e.y - h.y * e.x;
+        if (abs(den) < 0.000001) continue;
+        float tw = (w.x * e.y - w.y * e.x) / den, s = (w.x * h.y - w.y * h.x) / den;
+        if (tw > 0.0 && s >= 0.0 && s <= 1.0) t = min(t, tw);
+      }
+      return camP + d * max(t, 0.01);
+    }
     void main() {
-      vec4 a = pano(texA, invA, vDir);
-      gl_FragColor = mixAB > 0.001 ? mix(a, pano(texB, invB, vDir), mixAB) : a;
+      vec3 dA = vDir, dB = vDir;
+      if (depthAB > 0.5) { vec3 P = hitRoom(normalize(vDir)); dA = P - posA; dB = P - posB; }
+      if (mixAB <= 0.001) gl_FragColor = pano(texA, invA, dA);
+      else if (mixAB >= 0.999) gl_FragColor = pano(texB, invB, dB);
+      else gl_FragColor = mix(pano(texA, invA, dA), pano(texB, invB, dB), mixAB);
     }`,
   side: THREE.BackSide, depthTest: false, depthWrite: false,
 });
@@ -134,6 +175,27 @@ const sphere = new THREE.Mesh(new THREE.SphereGeometry(100, 64, 32), panoMat); /
 sphere.frustumCulled = false;
 sphere.renderOrder = -10;
 scene.add(sphere);
+
+// A6 step 3: a black ball around the camera for the blink (both eyes are inside it in the headset). Drawn over the
+// pano, furniture and walls; the radial menu stays on top.
+const dimmer = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 8), new THREE.MeshBasicMaterial({
+  color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false }));
+dimmer.renderOrder = 45;
+dimmer.frustumCulled = false;
+dimmer.visible = false;
+scene.add(dimmer);
+function dimTo(target, ms) {
+  const m = dimmer.material, start = m.opacity, t0 = performance.now();
+  dimmer.visible = true;
+  return new Promise((done) => {
+    const step = () => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      m.opacity = start + (target - start) * k * k * (3 - 2 * k);
+      if (k < 1) requestAnimationFrame(step); else { dimmer.visible = target > 0; done(); }
+    };
+    step();
+  });
+}
 
 // ------------------------------------------------------------------ occluders: the empty-house mesh (or walls) hide furniture behind walls
 const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
@@ -275,6 +337,54 @@ const camPos = new THREE.Vector3();
 
 function imgFor(p) { return (showEmpty && p.imgEmpty) || p.img; }
 
+// A6 step 2: the solid wall pieces of a floor as [ax, ay, bx, by] (doorways and dividers left open, windows kept:
+// the photo shows them on the wall).
+function solidWalls(floorId) {
+  const f = house.floors.find((x) => x.id === floorId), segs = [];
+  for (const w of f ? f.walls : []) {
+    if (w.type !== 'wall') continue;
+    const ax = w.a[0], ay = w.a[1], dx = w.b[0] - ax, dy = w.b[1] - ay, len = Math.hypot(dx, dy);
+    if (len < 0.05) continue;
+    const piece = (s, e) => { if (e - s > 0.05) segs.push([ax + (dx * s) / len, ay + (dy * s) / len, ax + (dx * e) / len, ay + (dy * e) / len]); };
+    let cursor = 0;
+    for (const o of [...(w.openings || [])].sort((x, y) => x.at - y.at)) {
+      if (o.type === 'window') continue;
+      const c = o.at * len, half = (o.width || 0.9) / 2;
+      piece(cursor, c - half);
+      cursor = Math.max(cursor, c + half);
+    }
+    piece(cursor, len);
+  }
+  return segs;
+}
+
+// A6 step 3: does the straight path from -> to go through a solid wall piece (not a doorway)?
+function crossesWall(floorId, from, to) {
+  const hx = to.x - from.x, hy = to.y - from.y;
+  return solidWalls(floorId).some(([ax, ay, bx, by]) => {
+    const ex = bx - ax, ey = by - ay, den = hx * ey - hy * ex;
+    if (Math.abs(den) < 1e-9) return false;
+    const wx = ax - from.x, wy = ay - from.y, t = (wx * ey - wy * ex) / den, s = (wx * hy - wy * hx) / den;
+    return t > 0.02 && t < 0.98 && s > 0.02 && s < 0.98;
+  });
+}
+
+// A6 step 2: the wall pieces nearest the path from -> to first, written into `out` as (ax, ay, bx, by). Returns how many.
+function wallSegsNear(floorId, from, to, out) {
+  const near = (px, py, ax, ay, bx, by) => { // distance from a point to a segment
+    const ex = bx - ax, ey = by - ay, L = ex * ex + ey * ey || 1;
+    const k = Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / L));
+    return Math.hypot(px - ax - k * ex, py - ay - k * ey);
+  };
+  const segs = solidWalls(floorId);
+  const pathGap = (s) => Math.min( // distance between a wall piece and the path (the camera only ever stands on it)
+    near(from.x, from.y, ...s), near(to.x, to.y, ...s),
+    near(s[0], s[1], from.x, from.y, to.x, to.y), near(s[2], s[3], from.x, from.y, to.x, to.y));
+  const ranked = segs.map((s) => [pathGap(s), s]).filter(([d]) => d < 12).sort((a, b) => a[0] - b[0]).slice(0, out.length);
+  ranked.forEach(([, s], i) => out[i].set(s[0], s[1], s[2], s[3]));
+  return ranked.length;
+}
+
 async function goTo(id, instant = false) {
   const p = panoById.get(id);
   if (!p || transitioning || (current && current.id === id)) return false;
@@ -288,6 +398,7 @@ async function goTo(id, instant = false) {
     return false;
   } finally {
     transitioning = false; // a failed load must not freeze navigation
+    if (dimmer.material.opacity > 0.01) dimTo(0, 150); // ...or leave the screen dark mid-blink
   }
 }
 
@@ -300,18 +411,46 @@ async function moveTo(p, instant) {
     panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
     camPos.copy(to);
   } else {
-    panoMat.uniforms.texB.value = tex; panoMat.uniforms.invB.value = inv;
-    const t0 = performance.now(), dur = 550;
-    await new Promise((done) => {
+    const U = panoMat.uniforms;
+    U.texB.value = tex; U.invB.value = inv;
+    // A6: on the same floor, walk through a simple room (floor, ceiling, walls around the path) instead of
+    // cross-fading two flat photos, and take longer for a longer step. ?a6=off keeps the plain fade for every move.
+    // A6 step 3: stairs, 10 m+ jumps and moves through a wall (most of the agent's "go to the kitchen") blink instead:
+    // a quick dip to dark with the cut in the middle, the usual VR comfort teleport, so nothing slides through a wall.
+    const dist = from.distanceTo(to), a6 = params.get('a6') !== 'off';
+    const blink = a6 && (floorChanged || dist >= 10 || crossesWall(p.floor, from, to));
+    const deep = a6 && !blink && dist > 0.05;
+    if (blink) {
+      await dimTo(1, 150);
+      U.texA.value = tex; U.invA.value = inv; U.mixAB.value = 0; U.depthAB.value = 0;
+      camPos.copy(to);
+      buildPucks(p); // the new pano's pucks, not the old ones, while it fades in
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); // new photo on the GPU while dark
+      await dimTo(0, 220);
+    } else if (deep) {
+      const room = roomAt(to.x, to.y, p.floor) || roomAt(from.x, from.y, p.floor), d = room?.dims || {};
+      const ceil = Math.max(p.floorZ + (d.height > 1.8 && d.height < 6 ? d.height : 2.6), Math.max(from.z, to.z) + 0.3);
+      const wallR = THREE.MathUtils.clamp(d.width && d.depth ? Math.hypot(d.width, d.depth) / 2 : 3, 2.5, 8);
+      U.nSeg.value = params.get('a6') === 'round' ? 0 : wallSegsNear(p.floor, from, to, U.segs.value);
+      // with real walls, the round wall only catches rays that leave through a doorway: put it far out
+      U.proxy.value.set(p.floorZ, ceil, U.nSeg.value ? 12 : Math.max(wallR, dist / 2 + 1), 0);
+      U.mid.value.set((from.x + to.x) / 2, (from.y + to.y) / 2);
+      U.posA.value.copy(from); U.posB.value.copy(to); U.camP.value.copy(from);
+    }
+    U.depthAB.value = deep ? 1 : 0;
+    const t0 = performance.now(), dur = THREE.MathUtils.clamp(420 + 160 * dist, 550, 950);
+    if (!blink) await new Promise((done) => { // a blink has already cut to the new photo
       const step = () => {
         const k = Math.min(1, (performance.now() - t0) / dur), e = k * k * (3 - 2 * k);
         camPos.lerpVectors(from, to, e);
-        panoMat.uniforms.mixAB.value = e;
+        U.camP.value.copy(camPos);
+        // with the photos lined up on the room, hold each one longer and swap in the middle (less ghosting)
+        U.mixAB.value = deep ? THREE.MathUtils.smoothstep(e, 0.2, 0.8) : e;
         if (k < 1) requestAnimationFrame(step); else done();
       };
       step();
     });
-    panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
+    U.texA.value = tex; U.invA.value = inv; U.mixAB.value = 0; U.depthAB.value = 0;
   }
   current = p;
   buildPucks(p);
@@ -412,8 +551,10 @@ canvas.addEventListener('pointerdown', (e) => {
   const item = hitFurniture();
   if (item) {
     select(item);
-    const f = hitFloor();
-    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2() };
+    liftOff(item); // #58: a plant on a table comes off it into your hand
+    const f = hitFloor(), P = phys();
+    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2(),
+      phys: P && P.grab(item, 'mouse') ? P : null };
   } else {
     drag = { mode: 'look', x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, yaw: view.yaw, pitch: view.pitch };
   }
@@ -423,7 +564,12 @@ canvas.addEventListener('pointermove', (e) => {
   if (drag.mode === 'item') {
     setNDC(e.clientX, e.clientY);
     const f = hitFloor();
-    if (f) { drag.item.position.x = f.x + drag.off.x; drag.item.position.y = f.y + drag.off.y; checkFit(); }
+    if (f) {
+      const x = f.x + drag.off.x, y = f.y + drag.off.y;
+      drag.tx = x; drag.ty = y;
+      if (drag.phys) drag.phys.moveTarget('mouse', [x, y]); else { drag.item.position.x = x; drag.item.position.y = y; }
+      checkFit();
+    }
   } else if (!gyro.on) {
     const k = (camera.fov / 75) * 0.0045;
     view.yaw = drag.yaw + (e.clientX - drag.x) * k;
@@ -437,6 +583,8 @@ canvas.addEventListener('pointerup', (e) => {
     if (h) goTo(h.object.userData.pano);
     else { selected = null; checkFit(); }
   }
+  if (drag?.phys) drag.phys.release('mouse'); // mouse sets pieces down where they are: no fling
+  if (drag?.mode === 'item' && setDown(drag.item, drag.tx ?? drag.item.position.x, drag.ty ?? drag.item.position.y)) checkFit();
   drag = null;
 });
 canvas.addEventListener('dblclick', (e) => {
@@ -463,11 +611,31 @@ function onOrient(ev) {
   gyro.q.premultiply(yUpToZUp);
   gyro.have = true;
 }
+// alert() is a modal nobody can dismiss with the phone in the headset (#2). There the message is shown once per
+// eye for 10 s (tap to close); otherwise it's a plain alert. Every message is also kept for the ?a1=1 report.
+const warnings = [];
+function warn(msg) {
+  warnings.push(msg);
+  console.warn(msg);
+  if (!vr) { alert(msg); return; }
+  const box = document.createElement('div');
+  box.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;background:#000c;color:#fff;'
+    + 'font:600 18px system-ui;text-align:center;white-space:pre-line';
+  for (let i = 0; i < 2; i++) {
+    const eye = document.createElement('div');
+    eye.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:10%';
+    eye.textContent = msg;
+    box.appendChild(eye);
+  }
+  box.onclick = () => box.remove();
+  document.body.appendChild(box);
+  setTimeout(() => box.remove(), 10000);
+}
 async function toggleGyro() {
   if (!gyro.on) {
     if (typeof DeviceOrientationEvent !== 'undefined' && DeviceOrientationEvent.requestPermission) {
       const r = await DeviceOrientationEvent.requestPermission().catch(() => 'denied');
-      if (r !== 'granted') { alert('Motion access was denied. On iPhone this needs HTTPS and a tap to allow.'); return; }
+      if (r !== 'granted') { warn('Motion access was denied. On iPhone this needs HTTPS and a tap to allow.'); return; }
     }
     addEventListener('deviceorientation', onOrient);
     gyro.on = true;
@@ -507,13 +675,82 @@ const skinMat = new THREE.MeshStandardMaterial({ color: 0xf0c3a2, roughness: 0.5
 const pinchMat = new THREE.MeshStandardMaterial({ color: 0xffc400, emissive: 0x664400, roughness: 0.4 });
 const jointGeo = new THREE.SphereGeometry(1, 12, 10);
 const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
-const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
+const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {}, aims = {};
+// A2: a pinch grabs the nearest piece within 0.4 m of the pinch point (no need to hit it exactly), and teleports
+// only after the hand has pointed at the same puck for 300 ms (the cursor turns green), so a missed grab never jumps.
+const GRAB_RADIUS = 0.4, PUCK_RADIUS = 0.45, PUCK_DWELL_MS = 300;
+// A2 step 3: with Shaurya's physics.js loaded (walkin.physics, #44) hands and mouse give it a *target* instead of
+// setting the position, so a piece stops at walls, lags by its mass and slides if you let go while moving.
+// Without it (or with ?physics=off) we set the position directly, as before.
+const FLING_MIN = 0.5; // m/s: let go slower than this and the piece is just set down
+const phys = () => { const p = window.walkin?.physics; return p && p.enabled ? p : null; };
+function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants the piece, for the fling on release
+  const t = performance.now(), dt = g.last ? (t - g.last.t) / 1000 : 0;
+  if (g.last && dt < 0.005) return;
+  if (g.last) {
+    const a = Math.min(1, dt / 0.08);
+    g.vel[0] += ((x - g.last.x) / dt - g.vel[0]) * a;
+    g.vel[1] += ((y - g.last.y) / dt - g.vel[1]) * a;
+  }
+  g.last = { x, y, t };
+}
+// A2: push it away, pull it back. While carrying, moving the hand toward / away from the camera (metric depth from
+// hands.js) slides the piece along the pointing direction, DEPTH_GAIN metres per metre of hand travel, after a small
+// dead zone so depth noise doesn't wobble it. Front camera (handheld): toward the phone = away from you; back camera
+// (headset): away from the phone = away. ?dgain=0 turns it off.
+// Drift: a single camera's depth wanders a few cm while the hand is held still, and at 6× gain that would walk the
+// piece away. So once the hand has been still (within DEPTH_DEAD) for DEPTH_STILL_MS, whatever it has pushed so far
+// is kept and the anchor moves to where the hand is now: anything slower than ~DEPTH_DEAD / DEPTH_STILL_MS (3 cm/s)
+// never moves the piece, a real push (20+ cm/s) does.
+// Drift that never stops (just over 3 cm/s, so the hand is never "still"): each DEPTH_DEAD step is timed, and once
+// the hand is already moving, a step slower than DEPTH_SLOW_MS (under ~6 cm/s) right after another slow step is
+// folded out like drift. The first step after a still spell always counts (its time includes the still spell), and
+// so does one slow step after fast ones (the smoothed depth settling at the end of a real push or pull).
+const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015, DEPTH_STILL_MS = 500;
+const DEPTH_SLOW_MS = 250;
+const deadZone = (v) => Math.sign(v) * Math.max(0, Math.abs(v) - DEPTH_DEAD);
+function anchorDepth(g, depth, now) { g.d0 = depth; g.ref = depth; g.refT = now; g.base = 0; g.moving = false; }
+function handPush(g, depth, sign, now) { // metres of hand travel away from you since the grab, drift folded out
+  if (g.d0 == null && depth != null) anchorDepth(g, depth, now); // grabbed before depth came in: start from here
+  if (g.d0 == null || depth == null) return (g.base || 0) * sign;
+  if (Math.abs(depth - g.ref) > DEPTH_DEAD) { // moving: one more step, restart the stillness clock
+    const slow = now - g.refT > DEPTH_SLOW_MS;
+    if (g.moving && slow && g.slow) g.d0 += depth - g.ref; // two slow steps in a row: drift, not a push
+    g.ref = depth; g.refT = now; g.moving = true; g.slow = slow;
+  } else if (now - g.refT >= DEPTH_STILL_MS) { g.base += deadZone(depth - g.d0); g.d0 = depth; g.refT = now; g.moving = false; }
+  return (g.base + deadZone(depth - g.d0)) * sign;
+}
+function carryPoint(f, cam, push, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
+  if (!gain || !push) return [f.x, f.y];
+  const dx = f.x - cam.x, dy = f.y - cam.y, r = Math.hypot(dx, dy);
+  if (r < 0.05) return [f.x, f.y]; // pointing at your feet: no direction to push along
+  const r2 = Math.min(Math.max(r + gain * push, Math.min(r, 0.4)), Math.max(r, 12)); // not behind you, not miles off
+  return [cam.x + (dx / r) * r2, cam.y + (dy / r) * r2];
+}
+const depthSign = () => (handCam === 'user' ? -1 : 1);
+function letGo(side, fling) {
+  const g = grabs[side];
+  if (!g) return;
+  const thrown = fling && Math.hypot(g.vel[0], g.vel[1]) > FLING_MIN;
+  if (g.phys) g.phys.release(side, thrown ? g.vel : null);
+  delete grabs[side];
+  // #58: let go over a table and it stands on the table. Not while the other hand still holds it, and not a throw.
+  if (!Object.values(grabs).some((o) => o.item === g.item)
+    && setDown(g.item, thrown ? null : g.tx ?? g.item.position.x, g.ty ?? g.item.position.y)) checkFit();
+}
+function moveHeld(g, side, x, y, yaw) {
+  trackVel(g, x, y);
+  g.tx = x; g.ty = y; // where the hand wants it: a plant stopped beside a table still has the hand over it (#58)
+  if (g.phys) { g.phys.moveTarget(side, [x, y], yaw); return; }
+  g.item.position.x = x; g.item.position.y = y;
+  if (typeof yaw === 'number') g.item.rotation.z = yaw;
+}
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
-const realHands = createRealHands($('handcam'));
+const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 0.6 });
 function setHandStyle(s) {
   handStyle = s === 'skeleton' ? 'skeleton' : 'real';
   if (handStyle !== 'real') realHands.clear();
@@ -550,8 +787,8 @@ function drawHands() {
     seen.add(h.side);
     const g = handViz[h.side] || (handViz[h.side] = makeHandViz());
     g.visible = true;
-    // bigger in the camera image = closer; about an arm's length when relaxed
-    const d = THREE.MathUtils.clamp(0.42 * (0.2 / h.size), 0.22, 0.8);
+    // metric distance to the camera from hands.js (world landmarks); else bigger in the image = closer
+    const d = THREE.MathUtils.clamp(h.depth ?? 0.42 * (0.2 / h.size), 0.22, 0.8);
     const P = h.pts.map((p, i) => screenToWorld(p.x, p.y, d * (1 + p.z * 1.2), g.userData.joints[i].position));
     for (const i of [4, 8]) g.userData.joints[i].material = h.pinch ? pinchMat : skinMat;
     BONES.forEach(([a, b], k) => {
@@ -566,6 +803,49 @@ function drawHands() {
   for (const [side, g] of Object.entries(handViz)) if (!seen.has(side)) g.visible = false;
 }
 
+const _gbox = new THREE.Box3();
+function nearestFurniture(f) { // the piece whose footprint is closest to floor point f, if within GRAB_RADIUS
+  let best = null, bestD = GRAB_RADIUS;
+  for (const o of furniture.children) {
+    if (!o.userData?.kind || o.visible === false) continue;
+    _gbox.setFromObject(o);
+    const d = Math.hypot(Math.max(_gbox.min.x - f.x, 0, f.x - _gbox.max.x), Math.max(_gbox.min.y - f.y, 0, f.y - _gbox.max.y));
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+function puckAt(f) { return f ? pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < PUCK_RADIUS) || null : null; }
+
+// A5: pinch and hold still (HOLD_SLOP of the screen) for HOLD_MS where there is nothing to grab and no puck ->
+// radial menu (radial.js). Move toward an option and let go to pick it; let go in the middle to cancel.
+const HOLD_MS = 600, HOLD_SLOP = 0.04;
+const holds = {};
+const placeHere = (kind) => (f) => { // where you pinched, fit-checked by staging.js; else 2 m ahead like the buttons
+  const r = f && window.walkin?.placeObject?.(kind, f.x, f.y);
+  if (!r || !r.fits) addFurniture(kind);
+};
+const radial = createRadial({ scene, camera, toWorld: screenToWorld,
+  aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight,
+  items: [
+    { icon: '🛋️', label: 'Sofa', run: placeHere('sofa') },
+    { icon: '🛏️', label: 'Bed', run: placeHere('queen') },
+    { icon: '🍽️', label: 'Table', run: placeHere('table') },
+    { icon: '🪴', label: 'Plant', run: placeHere('plant') },
+    { icon: '🏠', label: () => (showEmpty ? 'Scanned' : 'Empty'), run: () => $('bEmpty').click() },
+    { icon: '🎙️', label: 'Talk', run: () => window.walkin?.onTalk?.() },
+  ] });
+function holdMenu(h, now) {
+  const hd = holds[h.side];
+  if (!hd) return;
+  if (radial.side === h.side) { radial.point(h.x, h.y); return; }
+  if (radial.side) { hd.t0 = now; hd.x = h.x; hd.y = h.y; return; } // the other hand has it: this hold starts later
+  if (Math.hypot(h.x - hd.x, h.y - hd.y) > HOLD_SLOP) delete holds[h.side]; // it moved: not a hold
+  else if (now - hd.t0 >= HOLD_MS) {
+    for (const s of Object.keys(holds)) if (s !== h.side) delete holds[s]; // so it doesn't pop open again for the other hand
+    radial.open(h.side, hd.x, hd.y, hd.floor);
+  }
+}
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -573,8 +853,11 @@ function onHands(list, cam) {
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
-  for (const side of Object.keys(grabs)) if (!present.has(side)) delete grabs[side];
+  for (const side of Object.keys(grabs)) if (!present.has(side)) letGo(side, false); // lost hand: no fling
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
+  for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
+  for (const side of Object.keys(holds)) if (!present.has(side)) delete holds[side];
+  if (radial.side && !present.has(radial.side)) radial.cancel(); // lost the hand: never pick by accident
 
   const act = list.find((h) => h.pinch) || list[0];
   if (act) {
@@ -591,23 +874,35 @@ function onHands(list, cam) {
     const cur = handCursors[h.side] || (handCursors[h.side] = makeCursor());
     cur.visible = !!f;
     if (f) cur.position.set(f.x, f.y, f.z + 0.02);
-    cur.material.color.set(h.pinch ? 0xffc400 : 0x00e5ff);
+    const near = puckAt(f), now = performance.now();
+    if (aims[h.side]?.puck !== near) aims[h.side] = { puck: near, since: now };
+    const puckReady = !!near && now - aims[h.side].since >= PUCK_DWELL_MS;
+    cur.material.color.set(h.pinch ? 0xffc400 : puckReady ? 0x3dff8a : 0x00e5ff);
     cur.scale.setScalar(h.pinch ? 0.7 : 1);
 
     if (h.pinch && !prevPinch[h.side]) {
-      // pinch started: grab furniture you point at (or the selected piece if it's close); otherwise jump to a puck
+      // pinch started: grab the piece you point at; a held aim at a puck (300 ms) means teleport; otherwise grab
+      // the nearest piece within 0.4 m, or the selected piece if it's close
       let item = hitFurniture();
-      if (!item && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
+      if (!item && !puckReady && f) item = nearestFurniture(f);
+      if (!item && !puckReady && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
       if (item && f) {
         select(item);
-        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) };
-      } else if (f) {
-        const near = pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < 0.45);
-        if (near) goTo(near.userData.pano);
-      }
+        liftOff(item); // #58
+        const P = phys();
+        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };
+        anchorDepth(grabs[h.side], h.depth ?? null, now);
+      } else if (puckReady) {
+        aims[h.side] = null;
+        goTo(near.userData.pano);
+      } else holds[h.side] = { t0: now, x: h.x, y: h.y, floor: f }; // empty space: maybe a pinch-hold (A5)
     } else if (!h.pinch) {
-      delete grabs[h.side];
+      letGo(h.side, true);
+      delete holds[h.side];
+      if (radial.side === h.side) radial.release();
     }
+    if (h.pinch) holdMenu(h, now);
     prevPinch[h.side] = h.pinch;
   }
 
@@ -620,18 +915,28 @@ function onHands(list, cam) {
     if (!twist || twist.item !== ga.item) {
       twist = { item: ga.item, a0: angle, r0: ga.item.rotation.z, off: new THREE.Vector2(ga.item.position.x - mid.x, ga.item.position.y - mid.y) };
     }
-    ga.item.rotation.z = twist.r0 + (angle - twist.a0);
-    ga.item.position.x = mid.x + twist.off.x;
-    ga.item.position.y = mid.y + twist.off.y;
+    const x = mid.x + twist.off.x, y = mid.y + twist.off.y, yaw = twist.r0 + (angle - twist.a0);
+    moveHeld(ga, ha.side, x, y, yaw);
+    moveHeld(gb, hb.side, x, y, yaw);
     checkFit();
     return;
   }
-  twist = null;
+  if (twist) { // two-hand hold just ended: re-anchor the hand still holding to where the piece is, so it doesn't jump
+    for (const h of list) {
+      const g = grabs[h.side];
+      if (g && g.item === twist.item && h.floor) {
+        g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
+        anchorDepth(g, h.depth ?? null, performance.now()); // push / pull starts again from where the hand is now
+      }
+    }
+    twist = null;
+  }
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      g.item.position.x = h.floor.x + g.off.x;
-      g.item.position.y = h.floor.y + g.off.y;
+      g.push = handPush(g, h.depth ?? null, depthSign(), performance.now());
+      const [cx, cy] = carryPoint(h.floor, camera.position, g.push);
+      moveHeld(g, h.side, cx + g.off.x, cy + g.off.y);
       checkFit();
     }
   }
@@ -646,6 +951,7 @@ async function restartHands(mode) {
   if (handsApi) handsApi.stop();
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
+    onFrame: (cam) => { if (handStyle === 'real' && handsList.length) realHands.snap(cam); }, // same frame as the landmarks
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
@@ -654,6 +960,9 @@ async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
+    for (const side of Object.keys(grabs)) letGo(side, false); // else physics keeps the piece held by a ghost hand
+    radial.cancel();
+    for (const side of Object.keys(holds)) delete holds[side];
     realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
@@ -666,7 +975,7 @@ async function toggleHands() {
     await restartHands(vr ? 'environment' : handCam);
     btn.classList.add('on');
   } catch (e) {
-    alert('Hand tracking failed to start: ' + e.message + '\n(Camera needs HTTPS or localhost.)');
+    warn('Hand tracking failed to start: ' + e.message + '\n(Camera needs HTTPS or localhost.)');
   }
   btn.textContent = '✋ Hands';
 }
@@ -742,6 +1051,30 @@ const fpsEls = [0, 1].map((i) => {
 });
 const fpsAlways = params.has('fps');
 
+// A1 needs a number from an iPhone in the headset with hands on, and nobody wearing it has a hand free to write
+// it down. So in that mode the page reports its own frame rate: every 10 measured seconds, one HEAD request for
+// index.html with the numbers in the query (no body; it only shows up as a line in the server's access log).
+// `node tools/fps-report.mjs <server log>` reads them back. ?fpsreport=off stops it.
+const fpsReport = { on: params.get('fpsreport') !== 'off', sid: Math.random().toString(36).slice(2, 7), s: [] };
+function reportFps(fps, handHz) {
+  if (!fpsReport.on || !vr || !handsApi) { fpsReport.s.length = 0; return; }
+  fpsReport.s.push(fps);
+  if (fpsReport.s.length < 10) return;
+  const s = fpsReport.s.sort((a, b) => a - b);
+  fpsReport.s = [];
+  const ua = navigator.userAgent;
+  const px = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const q = new URLSearchParams({
+    fpsreport: 1, sid: fpsReport.sid,
+    dev: /iPhone|iPad/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'desktop',
+    scr: `${screen.width}x${screen.height}@${devicePixelRatio}`,
+    med: s[5].toFixed(0), min: s[0].toFixed(0), pr: perf.pr, px: `${px.x}x${px.y}`,
+    hz: handHz.toFixed(0), hms: (handsApi.stats?.ms ?? 0).toFixed(0), src: handsApi.stats?.src ?? '',
+    draws: renderer.info.render.calls, ktris: (renderer.info.render.triangles / 1000).toFixed(0),
+  });
+  fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
+}
+
 function tickPerf() {
   perf.frames++;
   const now = performance.now(), dt = now - perf.t0;
@@ -764,13 +1097,15 @@ function tickPerf() {
     if (perf.pr < perf.cap) setPixelRatio(perf.pr + 0.25);
     else if (handHzNow < perf.handCap) { handsApi.setMaxHz(handHzNow + 5); console.log(`[perf] hand detection ${handHzNow + 5} Hz`); }
   }
+  reportFps(fps, handHz);
   const show = debug || fpsAlways;
   fpsEls.forEach((el, i) => { el.style.display = show && (i === 0 || vr) ? 'block' : 'none'; });
   if (!show) return;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
-    + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
-      + `${handsList.length} seen` : 'off'} · `
+    + `hands ${handsApi ? `${handsApi.stats?.src ?? ''} ${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
+      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}`
+      + `${Object.values(grabs).map((g) => (g.push ? ` · pushed ${(g.push * DEPTH_GAIN).toFixed(2)} m` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }
@@ -786,6 +1121,43 @@ $('bHands').onclick = toggleHands;
 $('bCam').onclick = toggleCam;
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
 $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+// A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
+// so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
+// numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.
+// Each step is caught on its own, so a refused motion prompt still starts hands. The server log gets a
+// `HEAD /index.html?a1start=...` line the moment of the tap (step=tap), one when both steps are done (step=done,
+// with any error), and one if hands come up only after that (step=late); fps-report prints them. A prompt nobody
+// answers leaves its promise pending forever, so each step gets 15 s before the report goes out without it (#2).
+// ?a1=off = no overlay.
+if (params.has('a1') && params.get('a1') !== 'off') {
+  const tip = document.createElement('div');
+  tip.textContent = 'A1 test: tap anywhere and allow Motion and Camera, then put the phone in the headset for 30 s';
+  tip.style.cssText = 'position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;'
+    + 'padding:24px;text-align:center;font:600 22px system-ui;color:#fff;background:#000b';
+  document.body.appendChild(tip);
+  const a1send = (step, err = []) => {
+    const q = new URLSearchParams({ a1start: 1, step, sid: fpsReport.sid, vr: +vr, gyro: +gyro.on, hands: +!!handsApi,
+      err: err.join('; ').slice(0, 200) });
+    fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
+  };
+  const within = (p, what) => Promise.race([p, new Promise((_, no) => setTimeout(
+    () => no(new Error(`${what} prompt not answered after 15 s`)), 15000))]);
+  tip.onclick = async () => {
+    tip.remove();
+    a1send('tap');
+    const err = [], seen = warnings.length;
+    try { await within(toggleVR(true), 'motion'); } catch (e) { err.push(`headset: ${e?.message || e}`); }
+    let handsP = null;
+    if (!handsApi) handsP = toggleHands();
+    try { if (handsP) await within(handsP, 'camera'); } catch (e) { err.push(`hands: ${e?.message || e}`); }
+    if (!handsApi && handsP) handsP.then(() => { if (handsApi) a1send('late'); });
+    const all = [...err, ...warnings.slice(seen)]; // toggleGyro / toggleHands report through warn(), already on screen
+    console.log(`[a1] headset ${vr}, gyro ${gyro.on}, hands ${!!handsApi}, fps report ${fpsReport.on ? `on (sid ${fpsReport.sid})` : 'off'}`
+      + (all.length ? `, errors: ${all.join('; ')}` : ''));
+    a1send('done', all);
+    if (err.length) warn(`A1 test could not start everything: ${err.join('; ')}`);
+  };
+}
 $('bEmpty').onclick = async () => {
   showEmpty = !showEmpty;
   $('bEmpty').classList.toggle('on', showEmpty);
@@ -796,8 +1168,14 @@ if (!house.panos.some((p) => p.imgEmpty)) { showEmpty = false; $('bEmpty').textC
 
 // ------------------------------------------------------------------ main loop
 const _dir = new THREE.Vector3(), _fwd = new THREE.Vector3();
+// walkin.beforeRender: add (dt) => {} to run every frame after all input (mouse, hands) and right before the draw,
+// e.g. physics.js constraining pieces. A callback that throws is dropped so it can't stop the render loop.
+const beforeRender = new Set();
+let lastFrameT = performance.now();
 function frame() {
   requestAnimationFrame(frame);
+  const now = performance.now(), dt = Math.min(0.05, (now - lastFrameT) / 1000);
+  lastFrameT = now;
   camera.position.copy(camPos);
   if (gyro.on && gyro.have) {
     if (gyro.offset === null) {
@@ -812,8 +1190,13 @@ function frame() {
     camera.lookAt(_dir.add(camPos));
   }
   sphere.position.copy(camPos);
+  dimmer.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
+  radial.layout(); // A5: keep an open menu where you pinched while the head turns
+  for (const fn of beforeRender) {
+    try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
+  }
   if (selected && selBox.visible) selBox.box.setFromObject(selected);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
   tickPerf();
@@ -830,10 +1213,56 @@ await goTo(start.id, true);
 $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
+  renderer, // for env maps / tone mapping (#29); don't resize it or change its pixel ratio, app.js owns that
+  beforeRender, // Set of (dt) => {} run every frame after input, before the draw (physics.js, #44)
   get current() { return current; }, get selected() { return selected; },
   get handRay() { return handRay; },
+  get occluderMesh() { return meshOccluder; }, // the empty-house OBJ in model space, or null (walls.js #61); read-only
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },
+  get radial() { return radial.state; }, // A5: {side, hot, label} while the pinch-hold menu is open, else null
+  // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
+  // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
+  // Add depth (metres from the camera) to try push / pull: with the front camera a smaller depth pushes the piece away.
+  simHands(list = []) {
+    onHands(list.map((h) => ({ side: 'Right', pinch: false, size: 0.2, ...h,
+      pts: h.pts || Array.from({ length: 21 }, () => ({ x: h.x, y: h.y, z: 0 })) })), null);
+    return handsList.map((h) => ({ side: h.side, floor: h.floor ? [h.floor.x, h.floor.y] : null,
+      holding: grabs[h.side]?.item?.userData.kind ?? null }));
+  },
 }; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin
+
+// #108: the home's own furniture as 3D pieces, cut from the MatterPak by tools/meshdiff.py (data/<model>/furniture.bin).
+// realfurniture.js builds them; this is the way in without a console, which a phone doesn't have.
+// More → 🛋 Own furniture toggles them; ?mesh=1 puts them in on load (add &a1=1 to get the headset fps with them on).
+// Pieces photogrammetry got wrong (melted plants, shredded chairs) are left out: fold/captured from
+// tools/meshquality.py, thresholds from #117. ?mesh=all loads every piece, for debugging.
+const meshBtn = $('bMesh');
+const meshOpts = params.get('mesh') === 'all' ? {} : { maxFold: 33, maxCaptured: 1.0 };
+const meshPieces = () => furniture.children.filter((o) => o.userData.meshPiece);
+let meshBusy = false;
+async function toggleMeshFurniture() {
+  const w = window.walkin;
+  if (meshBusy) return; // a second tap while furniture.bin loads would put every piece in twice
+  if (!w.meshFurniture) { warn('Own furniture: realfurniture.js did not load'); return; }
+  meshBusy = true;
+  try {
+    if (meshPieces().length) {
+      if (selected?.userData.meshPiece) select(null);
+      w.clearMeshFurniture();
+    } else {
+      const r = await w.meshFurniture(meshOpts);
+      console.log(`[mesh] ${r.say}`, r);
+      if (!r.ok || !r.placed) warn(`Own furniture: ${r.say}`);
+    }
+  } finally { meshBusy = false; }
+  const n = meshPieces().length;
+  if (meshBtn) { meshBtn.classList.toggle('on', n > 0); meshBtn.textContent = n ? `🛋 Own furniture (${n})` : '🛋 Own furniture'; }
+}
+if (meshBtn) meshBtn.onclick = toggleMeshFurniture;
+if (['1', 'all'].includes(params.get('mesh'))) (function wait(tries = 0) { // realfurniture.js attaches its hooks a moment after this
+  if (window.walkin.meshFurniture) toggleMeshFurniture();
+  else if (tries < 100) setTimeout(() => wait(tries + 1), 50);
+})();

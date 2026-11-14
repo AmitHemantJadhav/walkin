@@ -1,0 +1,201 @@
+<!doctype html><meta charset="utf-8">
+<!-- Goal 2 "a full 3-minute demo run from main without a crash", no microphone, camera or phone needed:
+       http://localhost:8000/tools/demo-check.html        (?m=<model> for another house)
+     Opens the real page (?layout=none, so nothing is saved) in an iframe and runs docs/demo-card.md in its order,
+     1 -> 5 -> 2 -> 3 -> 4 -> 6 -> 7, through the hooks the console fallbacks use (beat 5 carries the sofa with
+     walkin.physics, the way the hands do). One line per beat, then every uncaught error and console.error. ~1 min.
+     Keep the tab in front: a background tab gets no frames and physics stops. -->
+<pre id="out">RESULT</pre>
+<iframe id="f" width="1280" height="720"></iframe>
+<script>
+const q = new URLSearchParams(location.search);
+const model = q.get('m') || 'zvKHR9DHNjJ';
+const f = document.getElementById('f');
+const out = document.getElementById('out');
+const log = (s) => { out.textContent += '\n' + s; };
+const hard = [], soft = [];                     // uncaught errors / rejections, and console.error lines
+const blocked = [];                             // walkin:blocked reasons (beat 5's spoken sentence)
+const hook = setInterval(() => {                // attach to the page's window as soon as it exists
+  const cw = f.contentWindow;
+  if (!cw || cw.__demoCheck || cw.location.href === 'about:blank') return;
+  cw.__demoCheck = true;
+  cw.addEventListener('error', (e) => hard.push(`${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`));
+  cw.addEventListener('unhandledrejection', (e) => hard.push(`unhandled rejection: ${e.reason && (e.reason.stack || e.reason.message || e.reason)}`));
+  cw.addEventListener('walkin:blocked', (e) => blocked.push(e.detail && e.detail.reason));
+  const ce = cw.console.error.bind(cw.console);
+  cw.console.error = (...a) => { soft.push(a.map((x) => (x && x.message) || String(x)).join(' ').slice(0, 200)); ce(...a); };
+}, 5);
+f.src = `../index.html?m=${model}&layout=none`;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const frames = (n = 1) => new Promise((r) => { const go = () => (n-- > 0 ? f.contentWindow.requestAnimationFrame(go) : r()); go(); });
+let fails = 0;
+async function beat(name, fn) {
+  const t0 = performance.now(), e0 = hard.length;
+  let r;
+  try { r = await fn(); } catch (e) { r = { ok: false, note: 'threw ' + (e.stack || e) }; }
+  const bad = r.ok === false || hard.length > e0;
+  if (bad) fails++;
+  log(`${bad ? 'FAIL' : 'ok  '} ${name}  ${((performance.now() - t0) / 1000).toFixed(1)} s  ${r.note || ''}`
+    + `${hard.length > e0 ? `  + ${hard.length - e0} uncaught error(s)` : ''}`);
+}
+
+(async () => {
+  for (let i = 0; i < 600 && !(f.contentWindow.walkin && f.contentWindow.walkin.stageHouse && f.contentWindow.walkin.doorsFor); i++) await sleep(100);
+  const w = f.contentWindow.walkin;
+  if (!w || !w.stageHouse) { log('FAIL the viewer never got ready (60 s)'); return; }
+  const T0 = performance.now();
+  const pano = (label) => w.house.panos.find((p) => String(p.label) === String(label));
+  const go = async (p) => { await w.goTo(p.id); await sleep(400); return w.current.id === p.id; };
+  const pieces = () => w.furniture.children.filter((o) => o.userData.kind);
+  const roomOf = (o) => (w.roomAt(o.position.x, o.position.y, o.userData.floor) || {}).label || null;
+
+  // Beat 5's doorway: La Mirada's is the card's 1.15 m front door by scan point 37. Elsewhere, the roomiest
+  // doorway a sofa fits through only when turned (what preflight calls "the door beat"), and its scan point.
+  const sofa0 = w.FURNITURE.sofa, narrow = Math.min(sofa0.w, sofa0.d), wide = Math.max(sofa0.w, sofa0.d);
+  let door = null;
+  for (const fl of w.house.floors) for (const wl of fl.walls || []) {
+    const len = Math.hypot(wl.b[0] - wl.a[0], wl.b[1] - wl.a[1]);
+    if (len < 0.05) continue;
+    const ux = (wl.b[0] - wl.a[0]) / len, uy = (wl.b[1] - wl.a[1]) / len;
+    for (const o of wl.openings || []) {
+      if (o.at == null || /window/i.test(o.type || '') || (o.bottom || 0) >= 0.3) continue;
+      if (!(narrow <= o.width - 0.02 && wide > o.width - 0.02)) continue;
+      const d = { floor: fl.id, x: wl.a[0] + ux * o.at * len, y: wl.a[1] + uy * o.at * len, ux, uy, width: o.width };
+      const near = w.house.panos.filter((p) => p.floor === fl.id || p.floor == null)
+        .map((p) => ({ p, d: Math.hypot(p.pos[0] - d.x, p.pos[1] - d.y) })).sort((a, b) => a.d - b.d)[0];
+      d.pano = near && near.p;
+      const want = model === 'zvKHR9DHNjJ' ? d.pano && String(d.pano.label) === '37' : true;
+      if (want && (!door || d.width > door.width)) door = d;
+    }
+  }
+
+  // 1. "This is a real house, and it's empty." Walk two scan points, ending where beat 5 happens.
+  await beat('1 walk', async () => {
+    if (!door) return { ok: false, note: 'no doorway in this house fits a sofa turned, so there is no beat 5 to walk to' };
+    const nb = (door.pano.neighbors || []).map((id) => w.house.panos.find((p) => p.id === id)).filter(Boolean);
+    const route = [nb[0] && nb[0].id !== w.current.id ? nb[0] : nb[1], door.pano].filter(Boolean);
+    const ok = [];
+    for (const p of route) ok.push(await go(p));
+    return { ok: ok.every(Boolean), note: `scan points ${route.map((p) => p.label).join(' -> ')}, `
+      + `${pieces().length} pieces in the house, standing at ${w.current.label}` };
+  });
+
+  // 5. "Will my sofa fit?" (run before beat 2, as the card says). Add a sofa, carry it at the door broadside:
+  // it must stop and say "turn it". Back off, turn it end-on, carry it through: it must end in the next room.
+  let sofa = null;
+  await beat('5 sofa through the front door', async () => {
+    if (!door) return { ok: false, note: 'no door' };
+    const ph = w.physics;
+    w.addFurniture('sofa');
+    sofa = pieces().find((o) => o.userData.kind === 'sofa');
+    if (!sofa) return { ok: false, note: 'addFurniture("sofa") added nothing' };
+    // Carry it *in*: start on the side of the door that is in no room (La Mirada: the porch, scan point 37 is
+    // in the living room), 1.6 m out, where the card's "+ Add -> Sofa" lands it. Else from the scan point's side.
+    let nx = -door.uy, ny = door.ux;
+    const roomAhead = (s) => !!w.roomAt(door.x + nx * s, door.y + ny * s, door.floor);
+    if (roomAhead(-1.6) === roomAhead(1.6)
+      ? (door.pano.pos[0] - door.x) * nx + (door.pano.pos[1] - door.y) * ny > 0
+      : roomAhead(-1.6)) { nx = -nx; ny = -ny; }
+    const at = (s) => [door.x + nx * s, door.y + ny * s];   // s < 0: before the door, s > 0: past it
+    const endOn = Math.atan2(ny, nx), broad = endOn + Math.PI / 2;
+    const sideU = () => (sofa.position.x - door.x) * nx + (sofa.position.y - door.y) * ny;
+    [sofa.position.x, sofa.position.y] = at(-1.6);
+    sofa.rotation.z = broad;
+    await frames(40);
+    const carry = async (from, to, yaw, speed = 0.6) => {
+      const t0 = performance.now(), dist = Math.abs(to - from), dir = Math.sign(to - from);
+      for (;;) {
+        const s = Math.min(dist, ((performance.now() - t0) / 1000) * speed);
+        ph.moveTarget('demo', at(from + dir * s), yaw);
+        await frames(1);
+        if (s >= dist) break;
+      }
+      await sleep(600);                              // let the mass lag catch up
+    };
+    ph.grab(sofa, 'demo', at(-1.6));
+    await carry(-1.6, 2.0, broad);
+    const broadEnd = sideU(), said = blocked.filter(Boolean).pop() || '';
+    await carry(Math.min(broadEnd, 2.0), -1.6, broad);   // back off from where it stopped...
+    ph.moveTarget('demo', at(-1.6), endOn);              // ...and turn it
+    await sleep(1500);
+    const turned = Math.abs(Math.atan2(Math.sin(sofa.rotation.z - endOn), Math.cos(sofa.rotation.z - endOn))) < 0.05;
+    let how = 'backed off and turned it';
+    if (!turned) {                                   // couldn't turn there: put it down end-on, as a person would
+      ph.release('demo'); await sleep(2200);
+      [sofa.position.x, sofa.position.y] = at(-1.6); sofa.rotation.z = endOn; await frames(40);
+      ph.grab(sofa, 'demo', at(-1.6)); how = 'could NOT turn it 1.6 m from the door, re-placed end-on';
+    }
+    await carry(-1.6, 2.0, endOn);
+    ph.release('demo');
+    await sleep(300);
+    const through = sideU(), room = roomOf(sofa);
+    const ok = broadEnd < 0.3 && through > 1.0 && /turn it/i.test(said);   // sideU < 0: still before the door
+    return { ok, note: `broadside stopped ${(-broadEnd).toFixed(2)} m short, said "${said}"; ${how}; `
+      + `end-on ended ${through.toFixed(2)} m past the ${door.width.toFixed(2)} m door, in ${room}` };
+  });
+
+  // 2. "Stage this as a cosy living room." The room you're standing in, or the one the sofa was carried into.
+  await beat('2 stage this room', async () => {
+    const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor)
+      || (sofa && w.roomAt(sofa.position.x, sofa.position.y, sofa.userData.floor));
+    if (!room) return { ok: false, note: `scan point ${w.current.label} is in no room` };
+    const r = w.stageRoom(room, 'cozy');
+    return { ok: r.placed.length > 0, note: `${r.placed.length} pieces in the ${room.label}, ${r.fits ? 'all fit' : 'SOME DO NOT FIT'}: ${r.say || ''}` };
+  });
+
+  // 3. "Now walk around it." Another scan point: nothing may move.
+  await beat('3 walk around it', async () => {
+    const before = pieces().map((o) => [o, o.position.x, o.position.y, o.rotation.z]);
+    const here = w.house.panos.find((p) => p.id === w.current.id);
+    const next = (here.neighbors || []).map((id) => w.house.panos.find((p) => p.id === id))
+      .find((p) => p && !['38', '16'].includes(String(p.label)));
+    if (!next) return { ok: false, note: 'no neighbouring scan point' };
+    const arrived = await go(next);
+    await sleep(800);
+    const moved = Math.max(0, ...before.map(([o, x, y]) => Math.hypot(o.position.x - x, o.position.y - y)));
+    const back = await go(here);                     // beats 4 and 6 are back at the beat-5 scan point
+    return { ok: arrived && back && moved < 0.001, note: `to ${next.label} and back, ${before.length} pieces, max moved ${(moved * 1000).toFixed(1)} mm` };
+  });
+
+  // 4. "Put red brick wallpaper on this wall." The card's wall #19 at La Mirada, else the pointed wall.
+  await beat('4 wallpaper', async () => {
+    const wall = model === 'zvKHR9DHNjJ' ? { floor: w.current.floor, index: 19 } : w.pointer && w.pointer.wall;
+    if (!wall) return { ok: false, note: 'not pointing at a wall' };
+    const r = await w.setWallMaterial(wall, 'models/textures/brick_red.jpg', 0.9);
+    const fit = typeof w.wallFit === 'function' ? w.wallFit() : null;
+    return { ok: !!r && r.ok !== false, note: `${JSON.stringify(r).slice(0, 140)}${fit ? `; wallFit ${JSON.stringify(fit).slice(0, 80)}` : ''}` };
+  });
+
+  // 6. "What plant should go here?"
+  await beat('6 plant', async () => {
+    const r = await w.suggestPlant();
+    return { ok: !!r && r.ok !== false, note: (r && (r.say || JSON.stringify(r))) || 'nothing returned' };
+  });
+
+  // 7. "Furnish the whole house." Then tour it.
+  await beat('7 whole house + tour', async () => {
+    const r = w.stageHouse('modern');
+    const tour = w.house.panos.filter((p) => !['38', '16'].includes(String(p.label))).filter((_, i, a) => i % Math.ceil(a.length / 4) === 0);
+    for (const p of tour) await go(p);
+    return { ok: r.placed > 0, note: `${r.say}; toured scan points ${tour.map((p) => p.label).join(', ')}` };
+  });
+
+  // After the run: nothing stuck, nothing outside a room, and the frame rate with everything in.
+  await beat('after: stuck / outside / fps', async () => {
+    const solid = pieces().filter((o) => !(w.FURNITURE[o.userData.kind] || {}).flat && !o.userData.on);
+    const stuck = solid.filter((o) => w.physics.probe(o, o.position.x, o.position.y, o.rotation.z).hit);
+    const outside = pieces().filter((o) => !roomOf(o));
+    const t0 = performance.now(); await frames(120); const fps = Math.round(120000 / (performance.now() - t0));
+    return { ok: !stuck.length && !outside.length,
+      note: `${pieces().length} pieces, ${stuck.length} stuck${stuck.length ? ' (' + stuck.map((o) => o.userData.kind).join(', ') + ')' : ''}, `
+        + `${outside.length} outside a room, ${fps} fps here (desktop, not the phone)` };
+  });
+
+  clearInterval(hook);
+  log(`\n${((performance.now() - T0) / 1000).toFixed(0)} s, ${hard.length} uncaught error(s), ${soft.length} console.error line(s)`);
+  for (const e of hard) log('  uncaught: ' + e);
+  for (const e of soft) log('  console.error: ' + e);
+  log(fails || hard.length ? `${fails} BEAT(S) FAILED` : 'ALL PASSED');
+})();
+</script>

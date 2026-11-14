@@ -45,6 +45,8 @@ const ASSIST_MIN = 0.03;       // ...but at least this much per frame it is actu
                                // gets a handful of those: it alternates between nudging sideways and moving
                                // forward again, and 0.35 m/s of a 16 ms frame is 6 mm
 const ASSIST_RANGE = 1.2;      // how close to the doorway the assist starts
+const PUSH_RATIO = 1.8;        // #57: a piece this many times heavier than what it meets shoves it aside...
+const PUSH_MAX = 0.06;         // ...by at most this much a frame
 
 const mass = (kind) => MASS[kind] || DEFAULT_MASS;
 // how long a piece takes to catch up with your hand: a plant is immediate, a sofa drags
@@ -53,10 +55,14 @@ const lagOf = (kind) => 0.02 + mass(kind) / 420;
 const state = new Map();       // item -> { x, y, rot, vx, vy, still, sliding }
 let segCache = null;           // { floor, segs: [{poly, a, b}], doors: [{x, y, width, a, b}] }
 
-const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, lastHit: null };
+const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, pushed: 0, lastHit: null };
 
 export const physics = {
   enabled: true,
+  jambSlide: true,              // #55: slide along a doorway's jamb, not into it (?jambslide=off)
+  doorRail: true,               // #55: a piece pushed at a doorway it fits commits to that door (?doorrail=off)
+  neighbourState: true,         // #63: bump into where physics has a piece, not what ⟳ just wrote (?neighbourstate=off)
+  pushAside: true,              // #57: a carried sofa shoves a coffee table instead of stopping dead (?pushaside=off)
   MASS,
   stats,
   grab, moveTarget, release, shove,
@@ -155,10 +161,23 @@ function clearPath(item, st, nx, ny, rot, walls) {
 function blockedBy(poly, item, walls) {
   for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
   for (const o of neighbours(item)) {
-    const p = footprint(o.userData.kind, o.position.x, o.position.y, o.rotation.z, -SKIN);
-    if (overlaps(poly, p)) return { kind: 'piece', item: o };
+    if (overlaps(poly, whereIs(o))) return { kind: 'piece', item: o };
   }
   return null;
+}
+
+/**
+ * #63: where a neighbour really is. The ⟳ button writes item.rotation.z before this loop has looked at the
+ * turn, so a piece earlier in the list was tested against a turn that might then be refused, and a 45° plant
+ * reaches 9 cm further than a square one. A piece next to it saw itself "already overlapping" and took the
+ * escape crawl, which ignores other pieces, straight 8 cm into a third. Test against where physics last put
+ * a piece (this frame's position if it has already moved, else last frame's) rather than what was written
+ * onto it. ?neighbourstate=off restores the old test.
+ */
+function whereIs(o) {
+  const s = physics.neighbourState ? state.get(o) : null;
+  if (s && s.wroteX !== undefined) return footprint(o.userData.kind, s.x, s.y, s.rot, -SKIN);
+  return footprint(o.userData.kind, o.position.x, o.position.y, o.rotation.z, -SKIN);
 }
 
 const fp = (item, x, y, rot) => footprint(item.userData.kind, x, y, rot, -SKIN);
@@ -170,7 +189,7 @@ const fp = (item, x, y, rot) => footprint(item.userData.kind, x, y, rot, -SKIN);
  * hand kept going built up a 2.3 m step and reappeared in the next room.
  * Returns what it hit, or null.
  */
-function step(item, st, tx, ty, trot, walls) {
+function step(item, st, tx, ty, trot, walls, push = false) {
   let hit = null;
 
   let dx = tx - st.x, dy = ty - st.y;
@@ -225,7 +244,17 @@ function step(item, st, tx, ty, trot, walls) {
     // started overlapping another piece walked 4.8 m through the living room wall in a demo rehearsal.
     const crawl = Math.min(1, ESCAPE / (dist || 1));
     const cx = st.x + dx * crawl, cy = st.y + dy * crawl;
-    if (hitsWall(fp(item, cx, cy, st.rot), walls)) return { kind: 'wall', dir: [0, 0] };  // say why, as usual
+    const there = fp(item, cx, cy, st.rot);
+    if (hitsWall(there, walls)) return { kind: 'wall', dir: [0, 0] };  // say why, as usual
+    // #63: crawl out of what it is stuck in, never into something new. A chair touching a wall crawled
+    // 8 cm into the plant beside it, because this ignored pieces altogether.
+    if (physics.neighbourState) {
+      const here = fp(item, st.x, st.y, st.rot);
+      for (const o of neighbours(item)) {
+        const p = whereIs(o);
+        if (overlaps(there, p) && !overlaps(here, p)) return { kind: 'piece', item: o };
+      }
+    }
     st.x = cx;
     st.y = cy;
     return { kind: 'overlapping' };
@@ -258,6 +287,11 @@ function step(item, st, tx, ty, trot, walls) {
 
   const first = sweep(dx, dy, n);
   if (!first.blocked) return hit;
+  // #57: a sofa carried into a coffee table shoves it rather than stopping dead
+  if (push && first.blocked.kind === 'piece') {
+    const rest = 1 - first.moved / n;
+    if (pushAside(item, st, first.blocked.item, dx * rest, dy * rest, walls)) return hit;
+  }
   hit = first.blocked;
 
   // slide what is left of the move along whatever stopped it: a wall has a direction of its own, and for
@@ -272,10 +306,72 @@ function step(item, st, tx, ty, trot, walls) {
     ux = -ny2 / len2; uy = nx2 / len2;                    // perpendicular to the line between centres
   }
   const along = (dx * ux + dy * uy) * left;
+  const sx0 = st.x, sy0 = st.y;
   if (Math.abs(along) > 1e-4) {
     sweep(ux * along, uy * along, Math.max(1, Math.ceil(Math.abs(along) / sub)));
   }
+  // #55: a wall segment has ends as well as sides, and at a doorway the ends are the jambs. A piece inside
+  // the opening that touches a jamb was slid "along the wall", which is straight into the jamb, so the
+  // forward half of the move was thrown away and the sofa sat pinned 11 cm off the centre line, half
+  // through the door, for as long as the hand held it. If sliding along the wall got nowhere, slide along
+  // the jamb face instead: through the doorway. ?jambslide=off restores the old behaviour.
+  if (physics.jambSlide && first.blocked.kind === 'wall' && Math.hypot(st.x - sx0, st.y - sy0) < 1e-3) {
+    const jx = -uy, jy = ux;
+    const thru = (dx * jx + dy * jy) * left;
+    if (Math.abs(thru) > 1e-4) sweep(jx * thru, jy * thru, Math.max(1, Math.ceil(Math.abs(thru) / sub)));
+  }
   return hit;
+}
+
+/**
+ * #57: the piece being moved has run into a lighter one. If it is at least PUSH_RATIO times the weight, the
+ * two move on together, slowed by the extra mass and by at most PUSH_MAX a frame: the coffee table in front
+ * of a staged sofa no longer ends beat 5 after 24 cm. One level deep: a table that meets a wall, a third
+ * piece or someone's hand stops, and the sofa stops behind it as before.
+ *
+ * Shaurya's first version lost the invariant (the sofa and table ended up inside each other after circling
+ * the room) because each piece was tested only on its own move. Here every 2 cm sub-step tests the table's
+ * new place against everything, the sofa included, then the sofa's against everything, the moved table
+ * included, and stops at the first refusal. So nothing is ever written where it overlaps something.
+ * Returns true if it took the whole move. ?pushaside=off turns it off.
+ */
+function pushAside(item, st, o, rx, ry, walls) {
+  if (!physics.pushAside || !o || !o.userData) return false;
+  const m = mass(item.userData.kind), mo = mass(o.userData.kind);
+  if (m < PUSH_RATIO * mo) return false;
+  for (const h of hands.values()) if (h.item === o) return false;          // someone is holding it
+  const ost = state.get(o);
+  // only a piece standing where physics left it: one dragged this frame is someone else's to move
+  if (!ost || ost.wroteX === undefined || Math.abs(o.position.x - ost.wroteX) > 1e-6
+    || Math.abs(o.position.y - ost.wroteY) > 1e-6) return false;
+  const want = Math.hypot(rx, ry);
+  const len = Math.min(want * (m / (m + mo)), PUSH_MAX);                     // heavier together
+  if (len < 1e-4) return false;
+  const ux = rx / want, uy = ry / want;
+  const n = Math.ceil(len / 0.02), s = len / n;
+  const ox0 = ost.x, oy0 = ost.y;
+  let moved = 0;
+  for (let i = 0; i < n; i++) {
+    const ox = ost.x + ux * s, oy = ost.y + uy * s;
+    if (blockedBy(fp(o, ox, oy, ost.rot), o, walls)) break;                // the table is up against something
+    const px = ost.x, py = ost.y;
+    ost.x = o.position.x = ost.wroteX = ox;                                 // whereIs() reads either, depending
+    ost.y = o.position.y = ost.wroteY = oy;                                 // on ?neighbourstate
+    if (blockedBy(fp(item, st.x + ux * s, st.y + uy * s, st.rot), item, walls)) {
+      ost.x = o.position.x = ost.wroteX = px;
+      ost.y = o.position.y = ost.wroteY = py;
+      break;
+    }
+    st.x += ux * s;
+    st.y += uy * s;
+    moved++;
+  }
+  if (!moved) return false;
+  // it stays where it was shoved: its own turn in the frame loop must not pull it back to its old target
+  ost.tx = ost.x; ost.ty = ost.y; ost.vx = ost.vy = 0; ost.sliding = false;
+  carry(o, ox0, oy0, ost.rot, ost);                                         // and the plant on it comes too
+  stats.pushed++;
+  return moved === n;               // slower than the hand is the extra mass, not a refusal
 }
 
 /**
@@ -339,13 +435,59 @@ function widthAcross(item, rot, d) {
 }
 
 /**
+ * #55: commit to one doorway. The per-frame assist slides a piece towards the nearest door ahead, and the
+ * hand pulls it back towards wherever the hand is, so from 35 cm off the sofa sat against the wall beside
+ * La Mirada's front door with the assist firing 500 times. And "the nearest door ahead" changes as the
+ * piece moves: the living room has three. So the first time a pushed piece is stopped by a wall with its
+ * centre line inside a doorway it fits through, that doorway becomes a rail: the hand still drives the
+ * piece through it, but the hand's offset along the wall is clamped to the band the doorway allows.
+ * Let go of the rail once the piece is through, or the hand pulls back or goes well off to the side.
+ * Returns the target to use this frame. ?doorrail=off turns it off.
+ */
+function doorRail(item, st, walls, tx, ty, trot, hit) {
+  if (!physics.doorRail) return [tx, ty];
+  const fitsAt = (d) => Math.min(widthAcross(item, st.rot, d), widthAcross(item, trot, d));
+  if (!st.rail && hit && hit.kind === 'wall') {
+    let best = null;
+    for (const d of walls.doors) {
+      const nx = -d.dy, ny = d.dx;                                  // the door's normal
+      const off = (st.x - d.x) * d.dx + (st.y - d.y) * d.dy;
+      const side = (st.x - d.x) * nx + (st.y - d.y) * ny;
+      const half = widthAcross(item, st.rot, { dx: nx, dy: ny }) / 2;   // the piece's depth through the door
+      if (Math.abs(off) > d.width / 2 || Math.abs(side) > half + 0.15) continue;  // not aimed at this one
+      if (fitsAt(d) > d.width - 0.02) continue;                     // a real misfit still stops and says so
+      const s = side > 0 ? -1 : 1;                                  // normal pointing from the piece through
+      if (((tx - st.x) * nx + (ty - st.y) * ny) * s <= 0) continue; // the hand isn't pushing through it
+      if (!best || Math.abs(off) < Math.abs(best.off)) best = { d, off, nx: nx * s, ny: ny * s };
+    }
+    if (best) st.rail = { d: best.d, nx: best.nx, ny: best.ny };
+  }
+  const r = st.rail;
+  if (!r) return [tx, ty];
+  const d = r.d;
+  const side = (st.x - d.x) * r.nx + (st.y - d.y) * r.ny;           // > 0: past the door plane
+  const tSide = (tx - d.x) * r.nx + (ty - d.y) * r.ny;
+  const tOff = (tx - d.x) * d.dx + (ty - d.y) * d.dy;
+  const half = widthAcross(item, st.rot, { dx: r.nx, dy: r.ny }) / 2;
+  if (side > half + 0.05 || side < -half - 0.6 || tSide < side - 0.1 || Math.abs(tOff) > d.width / 2 + 0.75) {
+    st.rail = null;                                                 // through, backed off, or gone elsewhere
+    return [tx, ty];
+  }
+  const band = Math.max(0, (d.width - fitsAt(d)) / 2 - 0.015);
+  const off = Math.max(-band, Math.min(band, tOff));
+  return [tx + d.dx * (off - tOff), ty + d.dy * (off - tOff)];
+}
+
+/**
  * S9: a piece that would fit through a doorway only goes through within about 10 cm of its centre line,
  * which is finer than tracked hands can hold. When one is blocked at a jamb and it *would* fit the way it
  * is turned, slide it sideways towards the centre line instead of stopping. A piece that genuinely does
  * not fit is left alone, so it still stops and still says "turn it".
  */
 function assistThroughDoor(item, st, walls, dt, dx, dy, wantRot) {
-  const near = doorAhead(item, st, walls, dx, dy);
+  // on a rail, help through that door and no other (#55)
+  const near = st.rail ? { d: st.rail.d, off: (st.rail.d.x - st.x) * st.rail.d.dx + (st.rail.d.y - st.y) * st.rail.d.dy }
+    : doorAhead(item, st, walls, dx, dy);
   if (!near) return false;
   // Judge the fit by the way it is turned OR the way the user is turning it: pressed against a jamb a
   // piece can't turn at all, so waiting for the turn to happen first would deadlock the two.
@@ -461,6 +603,7 @@ export function release(handId, velocity) {
   const h = hands.get(handId);
   if (!h) return false;
   const st = ensure(h.item);
+  st.rail = null;                 // the next carry picks its own doorway
   if (velocity) {
     const v = Math.min(MAX_V, Math.hypot(velocity[0], velocity[1]));
     const n = Math.hypot(velocity[0], velocity[1]) || 1;
@@ -561,13 +704,13 @@ function frame() {
     }
     if (st.tx === undefined) { st.tx = item.position.x; st.ty = item.position.y; }
     if (st.trot === undefined) st.trot = item.rotation.z;
-    const tx = st.tx, ty = st.ty, trot = st.trot;
-
+    let tx = st.tx, ty = st.ty;
+    const trot = st.trot;
     const jump = Math.hypot(tx - st.x, ty - st.y);
     const pushing = !!held || now - (st.pushT || 0) < SETTLED || now - (st.blockT || 0) < HOLD_BLOCK;
     if (jump > TELEPORT && !pushing) {                    // a placement, not a push: take it as given
       stats.teleports++;
-      st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;
+      st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false; st.rail = null;
       item.position.x = st.x; item.position.y = st.y; item.rotation.z = st.rot;
       st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
       continue;
@@ -575,14 +718,17 @@ function frame() {
 
     if (jump > 1e-4 || trot !== st.rot) {
       st.pushT = now;
+      if (st.rail) [tx, ty] = doorRail(item, st, walls, tx, ty, trot, null);   // #55: on a doorway's rail
+      const gap = Math.hypot(tx - st.x, ty - st.y);
       // heavier pieces lag further behind the hand, but never by more than MAX_LAG
       let k = 1 - Math.exp(-dt / lagOf(item.userData.kind));
-      if (jump * (1 - k) > MAX_LAG) k = 1 - MAX_LAG / jump;
+      if (gap * (1 - k) > MAX_LAG) k = 1 - MAX_LAG / gap;
       const nx = st.x + (tx - st.x) * k, ny = st.y + (ty - st.y) * k;
       const before = [st.x, st.y];
-      const hit = step(item, st, nx, ny, trot, walls);
+      const hit = step(item, st, nx, ny, trot, walls, true);
       stats.moved++;
       if (hit) { stats.blocked++; stats.lastHit = hit.kind; st.blockT = now; }
+      if (hit && !st.rail) doorRail(item, st, walls, tx, ty, trot, hit);   // #55: aimed at a doorway? take its rail
       st.vx = (st.x - before[0]) / dt;
       st.vy = (st.y - before[1]) / dt;
       st.sliding = false;
@@ -627,6 +773,10 @@ function frame() {
     return;
   }
   if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
+  if (new URLSearchParams(location.search).get('jambslide') === 'off') physics.jambSlide = false;
+  if (new URLSearchParams(location.search).get('doorrail') === 'off') physics.doorRail = false;
+  if (new URLSearchParams(location.search).get('neighbourstate') === 'off') physics.neighbourState = false;
+  if (new URLSearchParams(location.search).get('pushaside') === 'off') physics.pushAside = false;
   window.walkin.physics = physics;
   // the wall list is per floor and cheap, but drop it when the house or floor changes
   let lastFloor = null;

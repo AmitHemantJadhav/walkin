@@ -29,7 +29,7 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ---
 
-## State of this lane (updated Sat 08:10 ET by the overnight agent)
+## State of this lane (updated Sat 08:50 ET by the overnight agent)
 
 **All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
 
@@ -91,7 +91,8 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ### `stageRoom` answers "the whole house" with the whole house
 
-John has no `stage_house` tool (#56) — his only staging tool is `stage_room`, so beat 7 arrives here
+John has a `stage_house` tool as of #60, and this stays as the net under it. It was written when
+`stage_room` was his only staging tool, so beat 7 arrived here
 with the whole sentence as the style. `WHOLE_HOUSE` catches *whole house / entire home / every room /
 all the rooms* and delegates to `stageHouse`, returning a `stageRoom`-shaped result so `agent.js` and the
 mock need no change. **Strip the phrase before delegating** — `stageHouse` calls `stageRoom` for every
@@ -120,6 +121,19 @@ standing in the living room.
 three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
 nothing leaks. La Mirada stages 32 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
 
+### Open, with the measurements, deliberately not fixed
+
+Five things I found today and chose to write up rather than land unreviewed on demo morning. Each has
+the numbers and the dead ends on the issue, so picking one up is an hour rather than a morning.
+
+| | |
+|---|---|
+| **#55** | the doorway assist lines a piece up but doesn't carry it through — four attempts, four reverts. Not an angle problem: the sofa comes out 0.00° square and 11.3 cm off centre against 10.0 cm of clearance |
+| **#57** | a sofa pushed into a coffee table stops dead; `MASS` has never been used for contact. Built it, tripled the travel, and it left two pieces overlapping, so it is on the issue |
+| **#58** | you can put a plant on a table by asking but not by dragging — the frame loop knows nothing about surfaces |
+| **#61** | wallpaper clips against the scan mesh on one 314 Gale St wall. It is the mesh, not the quad; raising the 8 cm offset makes the paper stand proud |
+| **#63** | dragging *and* rotating together can leave two pieces overlapping. Drag-only is clean, rotate-only is clean. Probably the sequencing: two pieces moving in one frame are each checked against the other's old position |
+
 ### If there is time after the demo
 
 `scripts/smoke.sh` checks syntax, that no key or `data/` is tracked, and that `index.html` doesn't
@@ -132,6 +146,61 @@ that class: staging placing nothing, a piece stuck in something, no wall segment
 tiles missing. @sshruti115 has a headless Chrome setup (she tested #60 with it) — **running
 `preflight()` headlessly in `smoke.sh` and failing on a red row** is the cheapest real test suite
 this repo could have. `scripts/` is the humans' to change, so this is a note, not a commit.
+
+### Don't measure physics by teleporting a piece and turning it
+
+Checking how far off square the sofa can enter a doorway, I set each run up by teleporting it a
+stride from the door, grabbing it, calling `moveTarget(hand, point, yaw)` with the yaw I wanted and
+letting it settle. **Turning a 2.1 m sofa in place that close to a door makes the solver shove it**,
+so every run past about 5° had already been pushed through the doorway before the walk started. The
+end states looked plausible and I nearly shipped "±7° goes through, ±8° stops a metre short" as a
+measurement (#84).
+
+What gave it away was a result that was too good rather than obviously broken: the **0.98 m** bathroom
+door looked *more* forgiving than the **1.15 m** demo door, which cannot be true. Both were the same
+artefact.
+
+So, for anything physics:
+- **Assert where the run started**, not just where it ended — `roomAt(x, y)` at the first frame, plus a
+  plausible travel distance. A run that travelled 0.20 m did not traverse anything.
+- **Don't teleport into a tight spot.** Grab the piece and walk it to the start gradually so the
+  solver tracks it, and turn it in open floor away from the obstacle.
+- **Say which direction you drove.** Through the *same* door, 12 cm off centre goes through one way
+  and stops the other, and the whole envelope differs by direction. Worth knowing before retrying #55.
+- `-0/1` is `0` and `op.at` is not `op.relativeCenter`. Same family of mistake: the number came back
+  looking usable.
+
+The lateral figure that survived all this was **about 10 cm**, not symmetric, which is what
+`physics.js:342` documented at the time. **Superseded:** @AmitHemantJadhav fixed #55 in #97 (slide
+along the jamb, then commit to the door as a rail) and it is now **±50 cm** on the same door. The
+lesson about controls stands; the number doesn't.
+
+### Delete the thing you are blaming before you blame it
+
+On #89 I reported a "thin white wedge" in the wallpaper on La Mirada wall #1 and guessed it was the
+paper quad overhanging a corner. @AmitHemantJadhav filed **#91** on that report and built returns at
+every opening edge to fix it.
+
+**There was nothing to fix.** The control took one call: `clearWallMaterial` on that wall and look at
+the same spot from the same viewpoint. The white shapes are **still there** with no wallpaper in the
+scene at all — they are the photographed door jamb and its trim, seen through the hole the paper is
+correctly cut around.
+
+| | the bright shapes |
+|---|---|
+| paper + returns | present |
+| paper, `&wallreturn=off` | present, identical |
+| **no paper at all** | **present, identical** |
+
+Anything that survives deleting the thing you draw is not a bug in the thing you draw. When something
+looks wrong *on* a surface we render, remove the surface first; it is cheaper than any amount of
+reasoning about quads and z-fighting, and it is the test I skipped.
+
+This is the same shape of mistake as [[#84]]: both times the missing step was a control, and both
+times I had a plausible mechanism in hand that made me feel finished before I had checked anything.
+A plausible mechanism is the *reason* to run the control, not a substitute for it. Also: pixel → ray
+arithmetic across a scaled screenshot is not good enough to identify geometry — I tried that first on
+#93 and it put a pixel I could plainly see as brick inside a doorway.
 
 ### Still untested by anyone, as of this writing
 

@@ -2,6 +2,20 @@
 // Three questions the room-outline check in app.js can't answer: does it stick out of the room, does it
 // overlap something else, and can you still walk round it and through the doors.
 // Pure geometry on top of window.walkin (house, rooms, walls with `openings`). Units: metres.
+//
+// What it checks, so nobody has to claim more than it does:
+//   - the piece is inside the room's own polygon
+//   - it doesn't overlap another piece AT THE SAME HEIGHT (a lamp on a table is fine)
+//   - it doesn't stand in the DOOR_CLEAR metres of floor in front of a doorway
+//   - a WALK-wide walkway still reaches everywhere: rasterise at CELL, erode by a WALK disc, flood fill
+//
+// What it does not know about:
+//   - WINDOWS. `doorways()` filters the API's openings down to doors, so nothing stops a sofa across one.
+//   - CEILING HEIGHT. A 1.8 m bookcase under a sloped ceiling passes.
+//   - A DOOR'S SWING ARC. We keep a rectangle clear in front of a doorway, not the quarter-circle.
+//   - ANYTHING THE WALL GRAPH DOESN'T HAVE - a chimney breast, a radiator, a bay window. The graph is
+//     idealised; the defurnished scan mesh knows about those and this never looks at it. Same root as
+//     #61, where the wallpaper clips on a 314 Gale St wall: both want the mesh, not the graph.
 import { FURNITURE } from './furniture.js';
 
 export const WALK = 0.6;        // a walkway has to be this wide
@@ -356,9 +370,28 @@ export function doorsFor(kind = 'sofa') {
   extra.style.cssText = 'margin-top:2px;font-size:12px;color:#ffb199';
   host.after(extra);
 
+  // Put the doorway answer on the screen. physics.js works out "the sofa is 2.10 m across the way
+  // you're holding it and that door is 1.15 m - turn it and it goes through" and fires it as
+  // walkin:blocked; John says it out loud once #54 is merged, and until then nothing in the repo
+  // listens at all, so the beat the runbook says to land hardest happens in silence. This is the
+  // written half, which costs nothing and doesn't depend on a key, a voice or a merge. The headset
+  // hides this panel, so there is no double when John has it too.
+  //
+  // It holds the line for four seconds against the fit checks that run while you drag, and after that
+  // the next thing that actually changes replaces it - so a piece sitting still at a door keeps its
+  // answer on screen to be read rather than blinking out on a timer.
+  let blockedUntil = 0;
+  addEventListener('walkin:blocked', (e) => {
+    const reason = e.detail && e.detail.reason;
+    if (!reason) return;
+    extra.textContent = reason;
+    blockedUntil = performance.now() + 4000;
+  });
+
   // While a piece is moving, run the cheap checks (room, overlaps, doorways) at ~7 Hz; the walkway
   // raster only runs once it has been still for a moment, so dragging on a phone stays smooth.
   const show = (r) => {
+    if (performance.now() < blockedUntil) return;   // don't write over the doorway answer
     const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
     extra.textContent = say.join(' · ');   // app.js already says "outside a room" on the line above
   };
@@ -367,7 +400,7 @@ export function doorsFor(kind = 'sofa') {
     requestAnimationFrame(tick);
     const sel = window.walkin.selected;
     if (!sel) {
-      if (lastKey) { extra.textContent = ''; lastKey = ''; clearTimeout(settleTimer); }
+      if (lastKey && performance.now() >= blockedUntil) { extra.textContent = ''; lastKey = ''; clearTimeout(settleTimer); }
       return;
     }
     const key = `${sel.id}|${sel.position.x.toFixed(2)}|${sel.position.y.toFixed(2)}|${sel.rotation.z.toFixed(2)}`

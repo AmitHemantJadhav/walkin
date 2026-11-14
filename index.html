@@ -35,6 +35,7 @@
 </style>
 <link rel="stylesheet" href="ui.css">
 <link rel="stylesheet" href="voice.css">
+<link rel="stylesheet" href="outside.css">
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three/build/three.module.js",
@@ -90,6 +91,7 @@
     <button id="bDelete">✕ Delete</button>
     <button id="bStage" title="Furnish the room you are standing in">⌂ Stage room</button>
     <button id="bClearRoom" title="Take everything out of this room">⌁ Clear room</button>
+    <button id="bMesh" title="Put the home's own furniture back as 3D pieces you can pick up (#108)">🛋 Own furniture</button>
     <button id="bCam" title="Which camera watches your hands (the headset always uses the back camera)">📷 Front</button>
     <button id="bHandStyle" title="Show your real hands from the camera, or a 3D skeleton">🖐 Real hands</button>
     <button id="bGyro" title="Look around by moving the phone">Gyro</button>
@@ -97,8 +99,10 @@
   </div>
 </div>
 
+<script type="module" src="outside.js"></script>
 <script type="module" src="app.js"></script>
 <script type="module" src="lighting.js"></script>
+<script type="module" src="realfurniture.js"></script>
 <script type="module" src="fit.js"></script>
 <script type="module" src="staging.js"></script>
 <script type="module" src="walls.js"></script>
@@ -109,6 +113,7 @@
 <script type="module" src="picker.js"></script>
 <script type="module" src="pointer.js"></script>
 <script type="module" src="ui.js"></script>
+<script type="module" src="live.js"></script>
 <script type="module" src="voice.js"></script>
 </body>
 </html>

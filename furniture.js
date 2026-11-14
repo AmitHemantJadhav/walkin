@@ -8,8 +8,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // `against` says how a piece wants to be placed when staging a room:
 //   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', against: 'wall' },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', against: 'free', tone: 'fabricLt' },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/Sofa_01/Sofa_01_1k.gltf', against: 'wall' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/ArmChair_01/ArmChair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
   queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', against: 'wall' },
   king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', against: 'wall' },
   table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', against: 'free' },
@@ -18,7 +18,7 @@ export const FURNITURE = {
   chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', against: 'small' },
   nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small', tone: 'woodLt' },
   sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small', tone: 'woodLt' },
-  coffeetable: { name: 'Coffee table', w: 1.1, d: 0.6, h: 0.42, model: 'tableCoffee.glb', against: 'free' },
+  coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', against: 'free' },
   tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall', tone: 'woodLt' },
   tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
   bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall', tone: 'woodLt' },
@@ -41,6 +41,9 @@ const MODEL_DIR = new URL('models/', import.meta.url).href;
 // The kit's models are glTF Y-up and face +z before the Y-up -> Z-up turn; these face the other way,
 // so they get a half turn to put the front on -y.
 const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
+// Photoreal CC0 pieces from Poly Haven (see models/CREDITS.md). They are bigger than the kit models,
+// so they load after it: a piece appears instantly as the kit model and sharpens when the hero arrives.
+const HERO_FLIPPED = new Set();
 
 
 // ------------------------------------------------------------------ materials (S7)
@@ -49,11 +52,11 @@ const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
 // plant, lamp - so we can swap in a neutral palette part by part instead of guessing from colours.
 export const STYLES = {
   modern: { fabric: 0x8e8a84, fabricLt: 0xcfc8bb, fabricDk: 0x46464a, wood: 0x6b4a32, woodLt: 0xa9825a,
-            metal: 0x2a2a2d, leaf: 0x4f6b4a, shade: 0xeee5d2, name: 'modern' },
+            metal: 0x2a2a2d, leaf: 0x4f6b4a, shade: 0xeee5d2, hero: 0xdedcd8, name: 'modern' },
   cozy:   { fabric: 0xa07a63, fabricLt: 0xe0d3bd, fabricDk: 0x55402f, wood: 0x5c3b25, woodLt: 0x946a42,
-            metal: 0x3a3430, leaf: 0x55693f, shade: 0xf2e3c4, name: 'cozy' },
+            metal: 0x3a3430, leaf: 0x55693f, shade: 0xf2e3c4, hero: 0xe8c6a0, name: 'cozy' },
   scandi: { fabric: 0xb6b2aa, fabricLt: 0xe6e2d9, fabricDk: 0x5d6168, wood: 0xb08a5e, woodLt: 0xd2b58a,
-            metal: 0x3c3f44, leaf: 0x5d7a55, shade: 0xf6f1e6, name: 'scandi' },
+            metal: 0x3c3f44, leaf: 0x5d7a55, shade: 0xf6f1e6, hero: 0xf2efe7, name: 'scandi' },
 };
 const DEFAULT_STYLE = 'modern';
 let currentStyle = DEFAULT_STYLE;
@@ -96,9 +99,11 @@ function styleMaterial(src, style, tone) {
 /** Re-material one piece (or everything under a group) in the given style. */
 export function applyStyle(root, style = currentStyle) {
   const tone = (FURNITURE[root.userData.kind] || {}).tone;
+  const pal = STYLES[style] || STYLES[DEFAULT_STYLE];
   root.traverse((o) => {
-    if (!o.isMesh || !o.userData.styleSrc) return;
-    o.material = styleMaterial(o.userData.styleSrc, style, tone);
+    if (!o.isMesh) return;
+    if (o.userData.hero) o.material.color.setHex(pal.hero);   // tint the photo texture, keep its detail
+    else if (o.userData.styleSrc) o.material = styleMaterial(o.userData.styleSrc, style, tone);
   });
   root.userData.style = style;
   return root;
@@ -240,11 +245,16 @@ export function preloadModels() {
   return Promise.all([...new Set(Object.values(FURNITURE).map((s) => s.model))].filter(Boolean).map(load));
 }
 
+/** The photoreal pieces, fetched once something is actually placed (2.2 MB, so not on page load). */
+export function preloadHeroModels() {
+  return Promise.all([...new Set(Object.values(FURNITURE).map((s) => s.hero))].filter(Boolean).map(load));
+}
+
 /**
  * Turn a glTF model (Y-up, arbitrary origin and scale) into our frame: x = width, y = depth with the front
  * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
  */
-function fitToSpec(src, spec, flipped, style) {
+function fitToSpec(src, spec, flipped, style, hero) {
   const b = new THREE.Box3().setFromObject(src);
   const size = b.getSize(new THREE.Vector3());
   const c = b.getCenter(new THREE.Vector3());
@@ -256,8 +266,22 @@ function fitToSpec(src, spec, flipped, style) {
     if (!o.isMesh) return;
     o.renderOrder = 2;          // after the depth-only occluders
     o.castShadow = o.receiveShadow = false;
-    o.userData.styleSrc = o.material;          // the kit's own material, kept so the style can change
-    o.material = styleMaterial(o.material, style, spec.tone);
+    if (hero) {
+      // The packed AO/roughness/metalness maps drive metalness to 1 on parts of these models, and a
+      // fully metallic surface with nothing to reflect renders black. Until the scene has an
+      // environment map (needs the renderer; asked Amit for walkin.renderer), keep metal near zero.
+      o.material = o.material.clone();
+      o.material.metalness = Math.min(o.material.metalness, 0.12);
+      o.material.envMapIntensity = 1;
+      // CoffeeTable_01 ships a baked COLOR_0 attribute that multiplies its texture to black.
+      // The textures already carry the look, so vertex colours are never wanted here.
+      o.material.vertexColors = false;
+      o.userData.hero = true;                  // styles tint these instead of recolouring them
+      o.material.color.setHex((STYLES[style] || STYLES[DEFAULT_STYLE]).hero);
+    } else {
+      o.userData.styleSrc = o.material;        // the kit's own material, kept so the style can change
+      o.material = styleMaterial(o.material, style, spec.tone);
+    }
   });
 
   const zUp = new THREE.Group();
@@ -283,14 +307,18 @@ export function buildFurniture(kind, style = currentStyle) {
   g.add(boxes);
   g.add(shadow(spec.w, spec.d));
 
-  if (spec.model) {
-    load(spec.model).then((src) => {
-      if (!src) return;          // load failed: keep the boxes
-      g.remove(boxes);
-      g.add(fitToSpec(src.clone(true), spec, FLIPPED.has(spec.model), g.userData.style || currentStyle));
-      g.userData.model = spec.model;
-    });
-  }
+  let shown = boxes;
+  const swapIn = (file, flipSet, isHero) => load(file).then((src) => {
+    if (!src || (spec.hero && g.userData.model === spec.hero)) return;  // load failed, or the hero already won
+    const next = fitToSpec(src.clone(true), spec, flipSet.has(file), g.userData.style || currentStyle, isHero);
+    g.remove(shown);
+    g.add(next);
+    shown = next;
+    g.userData.model = file;
+  });
+
+  if (spec.model) swapIn(spec.model, FLIPPED, false);
+  if (spec.hero) swapIn(spec.hero, HERO_FLIPPED, true);   // bigger, so it lands second and replaces it
   return g;
 }
 

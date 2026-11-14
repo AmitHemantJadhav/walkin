@@ -80,18 +80,30 @@ function invLocalToModel(p) {
 
 // ------------------------------------------------------------------ the pano sphere (cross-fades between two panos)
 const texLoader = new THREE.TextureLoader();
-const texCache = new Map();
+// Least recently used first. A 2k pano is ~8 MB on the GPU, so keep the last TEX_CACHE_MAX and dispose older ones
+// (never the two on screen). A failed load is dropped from the cache so the next try fetches it again.
+const TEX_CACHE_MAX = 12;
+const texCache = new Map(); // url -> Promise<Texture>
+const texReady = new Map(); // url -> Texture, once loaded
 function loadTex(url) {
-  if (!texCache.has(url)) {
-    texCache.set(url, new Promise((res, rej) => texLoader.load(BASE + url, (t) => {
-      t.generateMipmaps = false;
-      t.minFilter = THREE.LinearFilter;
-      t.wrapS = THREE.RepeatWrapping;
-      t.colorSpace = THREE.NoColorSpace; // show the photo's bytes as they are
-      res(t);
-    }, undefined, rej)));
+  let p = texCache.get(url);
+  if (p) { texCache.delete(url); texCache.set(url, p); return p; } // mark as most recently used
+  p = new Promise((res, rej) => texLoader.load(BASE + url, (t) => {
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+    t.wrapS = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace; // show the photo's bytes as they are
+    res(t);
+  }, undefined, rej));
+  p.then((t) => texReady.set(url, t), () => { if (texCache.get(url) === p) texCache.delete(url); });
+  texCache.set(url, p);
+  for (const [u] of texCache) {
+    if (texCache.size <= TEX_CACHE_MAX) break;
+    const t = texReady.get(u), U = panoMat.uniforms;
+    if (!t || t === U.texA.value || t === U.texB.value) continue; // still loading, or on screen
+    texCache.delete(u); texReady.delete(u); t.dispose();
   }
-  return texCache.get(url);
+  return p;
 }
 
 const panoMat = new THREE.ShaderMaterial({
@@ -261,8 +273,21 @@ function imgFor(p) { return (showEmpty && p.imgEmpty) || p.img; }
 
 async function goTo(id, instant = false) {
   const p = panoById.get(id);
-  if (!p || transitioning || (current && current.id === id)) return;
+  if (!p || transitioning || (current && current.id === id)) return false;
   transitioning = true;
+  try {
+    await moveTo(p, instant);
+    return true;
+  } catch (e) {
+    if (!current) throw e; // the first pano must load; later failures (Wi-Fi or tunnel blip, 404) keep you where you are
+    console.warn(`[goTo] couldn't load ${p.id}; staying on ${current.id}`, e);
+    return false;
+  } finally {
+    transitioning = false; // a failed load must not freeze navigation
+  }
+}
+
+async function moveTo(p, instant) {
   const tex = await loadTex(imgFor(p));
   const inv = invLocalToModel(p);
   const from = camPos.clone(), to = new THREE.Vector3(...p.pos);
@@ -292,8 +317,7 @@ async function goTo(id, instant = false) {
   }
   $('room').textContent = roomText(roomAt(p.pos[0], p.pos[1], p.floor));
   // preload neighbours
-  for (const m of pucks.children) { const q = panoById.get(m.userData.pano); if (q) loadTex(imgFor(q)); }
-  transitioning = false;
+  for (const m of pucks.children) { const q = panoById.get(m.userData.pano); if (q) loadTex(imgFor(q)).catch(() => {}); }
   updateDebug();
 }
 
@@ -481,6 +505,7 @@ const jointGeo = new THREE.SphereGeometry(1, 12, 10);
 const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
 const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
 let handsApi = null, handsList = [], twist = null;
+let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
 
@@ -537,6 +562,13 @@ function onHands(list) {
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
   for (const side of Object.keys(grabs)) if (!present.has(side)) delete grabs[side];
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
+
+  const act = list.find((h) => h.pinch) || list[0];
+  if (act) {
+    ndc.set(act.x * 2 - 1, -(act.y * 2 - 1));
+    ray.setFromCamera(ndc, camera);
+    handRay = { origin: ray.ray.origin.toArray(), dir: ray.ray.direction.toArray(), side: act.side };
+  } else handRay = null;
 
   for (const h of list) {
     ndc.set(h.x * 2 - 1, -(h.y * 2 - 1));
@@ -607,7 +639,7 @@ async function restartHands(mode) {
 async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
-    handsApi.stop(); handsApi = null; handsList = [];
+    handsApi.stop(); handsApi = null; handsList = []; handRay = null;
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
     btn.classList.remove('on'); showCamPreview(handCam);
@@ -770,4 +802,6 @@ await goTo(start.id, true);
 $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
-  get current() { return current; }, get selected() { return selected; } }; // hooks for agent.js and other modules
+  get current() { return current; }, get selected() { return selected; },
+  get handRay() { return handRay; } }; // hooks for agent.js and other modules
+dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

@@ -15,10 +15,11 @@ Each one is explained where it belongs below; this is the list to read on the wa
 
 1. **Beat 5 only works at one doorway** — the 1.15 m one off the living room, **scan point 37**. At
    nineteen of La Mirada's twenty-two the sofa doesn't fit turned either, and John says so.
-2. **Go in square.** ±8 cm of the centre line goes through; past that the sofa lines up with the
-   doorway and stops in it. Back off half a metre, square up, go again.
-3. **Move the coffee table first.** Beat 2 puts one right in front of the sofa, and a sofa can't pass
-   through a coffee table: dragged straight at the door it travels 24 cm and stops.
+2. **Go in square — forgiving since #97.** **±50 cm** off the centre line still goes through (it was
+   about 10 cm this morning). If it stops it is beside the door rather than wedged in it: back off
+   half a metre, aim at the doorway, go again.
+3. **Better: run beat 5 before beat 2**, carrying the sofa in from the porch. After beat 2 it takes
+   three drags (coffee table, armchair, tv stand) or the sofa travels 24 cm and stops.
 4. **In the headset, John's voice is the only version of beat 5.** The same sentence appears under
    the room card on a phone or a laptop, but `ui.css` hides that panel in stereo. If the voice is
    off, say the line yourself.
@@ -198,19 +199,28 @@ If you ever need to see the event directly:
 addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door
 ```
 
-Turn it and walk it through — **square on**. Swept at that doorway against `main`, walking the sofa out
-of the living room on a straight line: **up to about 10 cm off the centre line it goes straight
-through**, which is the clearance a 0.95 m sofa really has in a 1.15 m door, and matches the 10 cm
-`physics.js` documents. It is not symmetric — 12 cm to one side still went through and 12 cm to the
-other stopped — so **10 cm is the figure to trust, not a boundary to lean on**. By 16 cm it lines
-itself up with the doorway and stops in it, 0.10 m short of crossing.
+Turn it and walk it through — **square on**. Since #55 landed (jamb slide + door rail, #97) this is
+far more forgiving than it was this morning. Swept against `main`, walking the sofa at the front door
+on a straight line while holding a constant sideways offset — the harsh version of the gesture, worse
+than a hand actually does:
 
-Past that limit the assist does slide it towards the centre, but the hand is still pulling off to one
-side, so the sofa squares up to the gap and stops rather than passing. It looks deliberate rather
-than broken — if it stops, back off half a metre, square up and go again, and don't let anyone think
-it is meant to be forgiving. Fixing it properly needs the doorway to act as a rail for the whole
-traverse; four attempts at it each made something else worse (#55), so it is written down rather than
-half-done.
+| off the centre line | goes through? |
+|---|---|
+| **±50 cm** | **yes** |
+| ±70 cm | no — it meets the wall beside the door and stops there |
+
+**Half a metre either side.** Before #97 the figure was about 10 cm and past that the sofa stuck
+*in* the doorway, which is what the old version of this page warned about at length. A piece pushed at
+a door it fits now commits to that door and lines itself up as it goes.
+
+If it does stop, it will be against the wall beside the door rather than wedged in it, and the fix is
+the same: back off half a metre, aim at the doorway and go again.
+
+**The refusals are untouched, which is the point of the beat.** A broadside sofa still stops dead at
+the door and still says its line; a king bed still gets *"it won't fit through at all"* at every
+angle. The rail only ever helps a piece that genuinely fits.
+
+`?doorrail=off` and `?jambslide=off` put the old behaviour back if either ever misbehaves.
 
 How far off *square* you can be is a fair question and I don't have an honest number for it: turning
 the sofa in place a stride from the door makes the solver shove it, so every run I set up beyond a few

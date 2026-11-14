@@ -13,8 +13,8 @@
   transition: opacity .35s cubic-bezier(.2, .8, .2, 1), transform .35s cubic-bezier(.2, .8, .2, 1);
 }
 body[data-voice="awake"] .vx-glow { opacity: calc(.7 + var(--lvl) * .3); transform: translateY(calc(18px - var(--lvl) * 30px)) scaleY(calc(.8 + var(--lvl) * .4)); transition-duration: .12s; }
-body[data-voice="thinking"] .vx-glow, body[data-voice="replying"] .vx-glow { opacity: .85; transform: translateY(14px); animation: vx-shimmer 1.6s linear infinite; }
-@keyframes vx-shimmer { 0% { filter: blur(28px) hue-rotate(0deg); } 100% { filter: blur(28px) hue-rotate(360deg); } }
+body[data-voice="thinking"] .vx-glow, body[data-voice="replying"] .vx-glow { opacity: .85; transform: translateY(14px); animation: vx-shimmer 1.6s ease-in-out infinite; }
+@keyframes vx-shimmer { 50% { opacity: .55; } }   /* opacity only: compositor-cheap, no blur re-render per frame */
 
 /* ------------------------------------------------------------------ live captions, like subtitles */
 .vx-captions { position: fixed; left: 0; right: 0; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 84px); z-index: 7; pointer-events: none;

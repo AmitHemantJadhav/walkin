@@ -412,6 +412,11 @@ async function runTool(name, args) {
 // ------------------------------------------------------------------ current view
 // The WebGL buffer is cleared after each frame, so copy it inside a frame callback (ours runs after the viewer's).
 function captureView() {
+  // never let a missing frame hold up the command: without one in 600 ms, go on without the picture
+  return Promise.race([grabFrame(), new Promise((resolve) => setTimeout(() => resolve(null), 600))]);
+}
+
+function grabFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => {
     try {
       const src = document.querySelector('canvas');

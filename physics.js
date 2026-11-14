@@ -59,6 +59,7 @@ export const physics = {
   enabled: true,
   jambSlide: true,              // #55: slide along a doorway's jamb, not into it (?jambslide=off)
   doorRail: true,               // #55: a piece pushed at a doorway it fits commits to that door (?doorrail=off)
+  neighbourState: true,         // #63: bump into where physics has a piece, not what ⟳ just wrote (?neighbourstate=off)
   MASS,
   stats,
   grab, moveTarget, release, shove,
@@ -157,10 +158,23 @@ function clearPath(item, st, nx, ny, rot, walls) {
 function blockedBy(poly, item, walls) {
   for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
   for (const o of neighbours(item)) {
-    const p = footprint(o.userData.kind, o.position.x, o.position.y, o.rotation.z, -SKIN);
-    if (overlaps(poly, p)) return { kind: 'piece', item: o };
+    if (overlaps(poly, whereIs(o))) return { kind: 'piece', item: o };
   }
   return null;
+}
+
+/**
+ * #63: where a neighbour really is. The ⟳ button writes item.rotation.z before this loop has looked at the
+ * turn, so a piece earlier in the list was tested against a turn that might then be refused, and a 45° plant
+ * reaches 9 cm further than a square one. A piece next to it saw itself "already overlapping" and took the
+ * escape crawl, which ignores other pieces, straight 8 cm into a third. Test against where physics last put
+ * a piece (this frame's position if it has already moved, else last frame's) rather than what was written
+ * onto it. ?neighbourstate=off restores the old test.
+ */
+function whereIs(o) {
+  const s = physics.neighbourState ? state.get(o) : null;
+  if (s && s.wroteX !== undefined) return footprint(o.userData.kind, s.x, s.y, s.rot, -SKIN);
+  return footprint(o.userData.kind, o.position.x, o.position.y, o.rotation.z, -SKIN);
 }
 
 const fp = (item, x, y, rot) => footprint(item.userData.kind, x, y, rot, -SKIN);
@@ -227,7 +241,17 @@ function step(item, st, tx, ty, trot, walls) {
     // started overlapping another piece walked 4.8 m through the living room wall in a demo rehearsal.
     const crawl = Math.min(1, ESCAPE / (dist || 1));
     const cx = st.x + dx * crawl, cy = st.y + dy * crawl;
-    if (hitsWall(fp(item, cx, cy, st.rot), walls)) return { kind: 'wall', dir: [0, 0] };  // say why, as usual
+    const there = fp(item, cx, cy, st.rot);
+    if (hitsWall(there, walls)) return { kind: 'wall', dir: [0, 0] };  // say why, as usual
+    // #63: crawl out of what it is stuck in, never into something new. A chair touching a wall crawled
+    // 8 cm into the plant beside it, because this ignored pieces altogether.
+    if (physics.neighbourState) {
+      const here = fp(item, st.x, st.y, st.rot);
+      for (const o of neighbours(item)) {
+        const p = whereIs(o);
+        if (overlaps(there, p) && !overlaps(here, p)) return { kind: 'piece', item: o };
+      }
+    }
     st.x = cx;
     st.y = cy;
     return { kind: 'overlapping' };
@@ -692,6 +716,7 @@ function frame() {
   if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
   if (new URLSearchParams(location.search).get('jambslide') === 'off') physics.jambSlide = false;
   if (new URLSearchParams(location.search).get('doorrail') === 'off') physics.doorRail = false;
+  if (new URLSearchParams(location.search).get('neighbourstate') === 'off') physics.neighbourState = false;
   window.walkin.physics = physics;
   // the wall list is per floor and cheap, but drop it when the house or floor changes
   let lastFloor = null;

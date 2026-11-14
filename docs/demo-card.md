@@ -3,7 +3,8 @@
 One screen. The whole run is in `demo-runbook.md`; this is what you hold while you present.
 
 ```
-…/?m=zvKHR9DHNjJ&layout=none        stand in a room, then:  await walkin.preflight()
+…/?m=zvKHR9DHNjJ&layout=none             stand in a room, then:  await walkin.preflight()
+…/?m=zvKHR9DHNjJ&layout=none&preflight   on a phone — same nine lines, on the screen
 ```
 
 | | say | and then |
@@ -45,5 +46,5 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 | furniture flies away from your hand | add `&dgain=0` |
 | furniture won't move | `walkin.physics.enabled = false` |
 | everything looks wrong | `walkin.clearLayout()` then **⋯ → ⌂ Stage room** |
-| the house won't load | `?m=fixture` after `python3 tools/fake_house.py` — needs no keys, does the whole run |
+| the house won't load | re-prep it and reload, or `?m=fixture` after `python3 tools/fake_house.py` — needs no keys, does the whole run |
 | you changed `serve.py` | restart it. It is read once at startup |

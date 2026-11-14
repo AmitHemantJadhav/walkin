@@ -757,7 +757,16 @@ async function ask(text) {
     return say(lastSay ? spoken(lastSay.say) : 'Done.');
   } catch (e) {
     console.error('[agent]', e);
+    // the model failed (rate limit, timeout) AFTER tools already changed the house: say what was done, not "busy"
+    const start = history.findIndex((c, i) => i >= mark && c.role === 'user');
+    const done = (start >= 0 ? history.slice(start) : []).flatMap((c) => c.parts || []).map((p) => p.functionResponse)
+      .filter((r) => r && r.response && r.response.ok !== false && !/^(describe_house|list_furniture|light_here|estimate_cost)$/.test(r.name));
     history.length = mark; // drop the failed turn so the next question starts clean
+    if (done.length) {
+      const said = done.map((r) => r.response.say).filter(Boolean).pop();
+      await filler;
+      return say(said ? spoken(said) : "Done, have a look. Tell me if you'd like anything changed.");
+    }
     return say(friendlyError(e));
   } finally {
     clearTimeout(slow);

@@ -294,6 +294,9 @@ const tools = () => (W().furnitureTools && W().furnitureTools.run) || W().agent.
 async function addObject(args = {}) {
   const w = W(), desc = String(args.description || args.kind || '').trim();
   if (!desc) return { ok: false, reason: 'Say what to add.' };
+  if (args.room && !findRoom(args.room)) {             // "the nursery" on a plan that calls it "Bedroom": let the model pick
+    return { ok: false, reason: `No room called "${args.room}". Pick one of these and call again: ${w.house.rooms.map((r) => r.label).join(', ')}.` };
+  }
   const m = matchObject(desc, args);
   const colourText = args.color || (desc.match(COLOR_WORDS) || [])[0] || '';
   const kind = m.catalog || register(m.proc, m.spec, m.generic);
@@ -572,6 +575,7 @@ const declarations = [
 ];
 
 const rules = `- Anything not in the catalog (fireplace, piano, crib, bunk bed, dresser, wardrobe, sectional, Christmas tree, treadmill, mirror, table lamp, aquarium…) -> add_object with the user's words, never a refusal. Say it is a simple real-size stand-in. "X on the desk" -> add_object with on.
+- Rooms the plan doesn't name ("nursery", "kids' room", "master", "guest room", "office") mean the matching room in describe_house: a bedroom (the biggest for master, a smaller one for nursery/kids/guest), never a made-up name.
 - "Swap / replace the X with a Y": remove_furniture the X, then add_object (or add_furniture) the Y, in the same turn.
 - "Paint everything / the whole room / all the walls X" -> paint_room (room "all" for the whole house). One wall -> set_wall_material.
 - "Undo", "undo that", "go back", "never mind", "put it back" -> undo (not remove_decor). Say what it reverted from its result.

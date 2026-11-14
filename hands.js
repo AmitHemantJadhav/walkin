@@ -40,7 +40,16 @@ async function getLandmarker() {
 // The crop has the view's own aspect, so hands keep their real proportions instead of being stretched to the
 // screen: wider on a 16:10 laptop, narrower per eye in the headset. Never more than 90% of the image either way.
 const SPAN = 0.7, MAX_SPAN = 0.9;
-export function cropFor(viewAspect, vw, vh) {
+// With viewVfov (the 3D camera's vertical field of view) and camHfov (the hand camera's, along the video width),
+// the mapping is by angle instead: each camera pixel lands in the direction it really comes from, so a hand shows at
+// its real size and place (passthrough). The camera then covers only the middle of a wider view: sx/sy > 1.
+// ?handmap=crop in app.js keeps the old zoomed crop.
+export function cropFor(viewAspect, vw, vh, viewVfov, camHfov) {
+  if (viewVfov && camHfov && vw && vh) {
+    const tV = Math.tan((viewVfov * Math.PI) / 360), tC = Math.tan((camHfov * Math.PI) / 360);
+    const sx = (tV * viewAspect) / tC, sy = tV / ((tC * vh) / vw);
+    return { cx: (1 - sx) / 2, cy: (1 - sy) / 2, sx, sy };
+  }
   const va = vw / vh || 4 / 3;
   let sy = SPAN, sx = (SPAN * viewAspect) / va;
   if (sx > MAX_SPAN) { sx = MAX_SPAN; sy = (MAX_SPAN * va) / viewAspect; }
@@ -85,7 +94,7 @@ export function handDepth(L, W, vw, vh, hfovDeg = 63) {
 // phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
 // aspect(): width / height of the view the hands are drawn in (one eye in the headset).
 // onFrame(cam): called right before each detection, so realhands.js can copy the very image the landmarks come from.
-export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight }) {
+export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight, viewFov = null }) {
   const lm = await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
@@ -108,7 +117,7 @@ export async function startHands({ video, facingMode = 'user', onHands, onFrame,
     nextRun = Math.max(nextRun + 1000 / stats.maxHz, t);
     last = video.currentTime;
     // how screen units map back to the video (realhands.js draws the same rectangle)
-    const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight) };
+    const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight, viewFov && viewFov(), stats.hfov) };
     onFrame?.(cam);
     const t1 = performance.now(); // stats.ms is the detection alone
     const r = lm.detectForVideo(video, t);

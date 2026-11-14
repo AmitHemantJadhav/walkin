@@ -37,11 +37,11 @@ const TOOLS = [{
         style: { type: 'string', description: 'For example: modern bedroom, cosy living room, home office.' } },
         required: ['style'] } },
     { name: 'set_wall_material',
-      description: 'Cover the wall the user points at with a tiling texture (wallpaper, brick, paint, wood).',
+      description: 'Cover the wall the user points at with a material (wallpaper, brick, tiles, wood panels, paint). A seamless tile is generated from the description and placed at real scale.',
       parameters: { type: 'object', properties: {
-        texture_url: { type: 'string', description: 'URL or data URL of a seamless tile image.' },
-        tile_metres: { type: 'number', description: 'Real width of one tile in metres. Default 1.' } },
-        required: ['texture_url'] } },
+        description: { type: 'string', description: 'What the surface looks like, e.g. "red brick with light grey mortar", "sage green paint", "art deco gold wallpaper".' },
+        tile_metres: { type: 'number', description: 'Real width of one tile in metres: about 0.9 for brick (several bricks per tile), 0.6 for wallpaper patterns, 1 for paint.' } },
+        required: ['description'] } },
     { name: 'place_object',
       description: 'Place a small object (plant, lamp, rug) where the user points, or 1.5 m in front of them.',
       parameters: { type: 'object', properties: {
@@ -134,12 +134,14 @@ const RUN = {
     return { ok: true, room: r.label, result: (await w.stageRoom(r.id, style)) ?? null };
   },
 
-  async set_wall_material({ texture_url, tile_metres }) {
+  async set_wall_material({ description, tile_metres }) {
     const w = W(), wall = w.pointer && w.pointer.wall;
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
-    if (!wall) return { ok: false, reason: 'The user is not pointing at a wall.' };
-    await w.setWallMaterial(wall, texture_url, tile_metres || 1);
-    return { ok: true };
+    if (!wall) return { ok: false, reason: 'The user is not pointing at a wall. Ask them to point at the wall first.' };
+    setStatus('Making the tile…');
+    const url = await generateTile(description);
+    await w.setWallMaterial(wall, url, tile_metres || 1);
+    return { ok: true, material: description };
   },
 
   async place_object({ kind }) {
@@ -161,6 +163,48 @@ const RUN = {
     return { ok: true, room: r.label };
   },
 };
+
+// ------------------------------------------------------------------ generated tiles (R4)
+// Gemini's image model ("Nano Banana 2"). Override with ?imageModel=<name> if the name changes.
+const IMAGE_MODEL = new URLSearchParams(location.search).get('imageModel') || 'gemini-3.1-flash-image';
+const TILE_PX = 512;
+const tileCache = new Map(); // description -> data URL, so asking twice doesn't generate twice
+
+async function generateTile(description) {
+  const key = String(description).trim().toLowerCase();
+  if (tileCache.has(key)) return tileCache.get(key);
+  const prompt = `A seamless, tileable texture of ${description}, for covering an interior wall. ` +
+    'Flat and straight-on, orthographic, evenly lit, no shadows, no perspective, no objects, no text, no border. ' +
+    'The left edge must continue into the right edge and the top into the bottom. Square.';
+  const res = await fetch(`/api/gemini?model=${encodeURIComponent(IMAGE_MODEL)}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { responseModalities: ['IMAGE'] } }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.error && (data.error.message || data.error)) || `image relay returned ${res.status}`);
+  const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+  const img = parts.find((p) => p.inlineData && p.inlineData.data);
+  if (!img) throw new Error('the image model returned no image');
+  const url = await squareTile(`data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`);
+  tileCache.set(key, url);
+  return url;
+}
+
+// Centre-crop to a square and scale to TILE_PX, so the wall gets a small, power-of-two texture.
+function squareTile(src) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.onload = () => {
+      const s = Math.min(im.width, im.height), c = document.createElement('canvas');
+      c.width = c.height = TILE_PX;
+      c.getContext('2d').drawImage(im, (im.width - s) / 2, (im.height - s) / 2, s, s, 0, 0, TILE_PX, TILE_PX);
+      resolve(c.toDataURL('image/jpeg', 0.9));
+    };
+    im.onerror = () => resolve(src);
+    im.src = src;
+  });
+}
 
 async function runTool(name, args) {
   try {

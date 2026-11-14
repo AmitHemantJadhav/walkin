@@ -109,9 +109,14 @@ function toB64(buf) {
 }
 
 let workletCtx = null, micSource = null;        // the processor is registered once per context
-async function startMic() {
-  micStream = await navigator.mediaDevices.getUserMedia({
+async function startMic(isCurrent = () => true) {
+  const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  if (!isCurrent()) {                            // that call ended while the mic was coming up: release only this
+    stream.getTracks().forEach((t) => t.stop()); // stream, never a newer call's mic
+    return false;
+  }
+  micStream = stream;
   if (!micCtx || micCtx.state === 'closed') micCtx = new (window.AudioContext || window.webkitAudioContext)();
   if (micCtx.state === 'suspended') await micCtx.resume();   // Safari starts it suspended outside a tap
   if (workletCtx !== micCtx) {
@@ -119,6 +124,11 @@ async function startMic() {
     await micCtx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
     workletCtx = micCtx;
+  }
+  if (!isCurrent()) {                            // ended during the awaits above: same rule, release only ours
+    stream.getTracks().forEach((t) => t.stop());
+    if (micStream === stream) micStream = null;
+    return false;
   }
   micNode = new AudioWorkletNode(micCtx, 'walkin-down');
   micNode.port.onmessage = (e) => {
@@ -234,8 +244,9 @@ async function start({ firstText = '' } = {}) {
       session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: firstText }] }], turnComplete: true });
     }
     const mine = session;                        // then open the mic in the background: a slow or missing mic
-    Promise.race([startMic(), new Promise((_, no) => setTimeout(() => no(new Error('mic timed out')), 5000))])
-      .then(() => { if (session !== mine || ending) stopMic(); })   // hung up meanwhile: let go of the mic
+    const current = () => session === mine && !ending;
+    Promise.race([startMic(current), new Promise((_, no) => setTimeout(() => no(new Error('mic timed out')), 5000))])
+      .then((ok) => { if (ok !== false && !current()) stopMic(); })   // ended after the mic came up: let go of it
       .catch((e) => {
         console.warn('[live] microphone unavailable:', e && (e.message || e));
         if (session === mine && !ending) emit({ kind: 'state', state: 'nomic' });

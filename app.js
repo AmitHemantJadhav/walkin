@@ -1093,7 +1093,9 @@ $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on',
 // A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
 // so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
 // numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.
-if (params.has('a1')) {
+// Each step is caught on its own, so a refused motion prompt still starts hands, and the result (with any error) goes
+// to the console and to the server log as `HEAD /index.html?a1start=...` (fps-report skips it). ?a1=off = no overlay.
+if (params.has('a1') && params.get('a1') !== 'off') {
   const tip = document.createElement('div');
   tip.textContent = 'A1 test: tap anywhere, then put the phone in the headset for 30 s';
   tip.style.cssText = 'position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;'
@@ -1101,9 +1103,14 @@ if (params.has('a1')) {
   document.body.appendChild(tip);
   tip.onclick = async () => {
     tip.remove();
-    await toggleVR(true);
-    if (!handsApi) await toggleHands();
-    console.log(`[a1] headset ${vr}, hands ${!!handsApi}, fps report ${fpsReport.on ? `on (sid ${fpsReport.sid})` : 'off'}`);
+    const err = [];
+    try { await toggleVR(true); } catch (e) { err.push(`headset: ${e?.message || e}`); }
+    try { if (!handsApi) await toggleHands(); } catch (e) { err.push(`hands: ${e?.message || e}`); }
+    console.log(`[a1] headset ${vr}, gyro ${gyro.on}, hands ${!!handsApi}, fps report ${fpsReport.on ? `on (sid ${fpsReport.sid})` : 'off'}`
+      + (err.length ? `, errors: ${err.join('; ')}` : ''));
+    const q = new URLSearchParams({ a1start: 1, sid: fpsReport.sid, vr: +vr, gyro: +gyro.on, hands: +!!handsApi, err: err.join('; ').slice(0, 200) });
+    fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
+    if (err.length) alert(`A1 test could not start everything: ${err.join('; ')}`);
   };
 }
 $('bEmpty').onclick = async () => {

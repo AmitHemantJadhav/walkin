@@ -12,6 +12,13 @@ if (!file) { console.error('usage: node tools/fps-report.mjs <server log>'); pro
 
 const sessions = new Map();
 for (const line of readFileSync(file, 'utf8').split('\n')) {
+  // ?a1=1 sends one a1start line when the tester taps: did headset, motion and hands start (and why not).
+  const a = line.match(/\[([^\]]+)\] "HEAD \/index\.html\?(a1start=[^ "]+) HTTP/);
+  if (a) {
+    const q = Object.fromEntries(new URLSearchParams(a[2]));
+    console.log(`a1 start ${q.sid} ${a[1]}  headset ${q.vr} gyro ${q.gyro} hands ${q.hands}${q.err ? `  error: ${q.err}` : ''}`);
+    continue;
+  }
   const m = line.match(/\[([^\]]+)\] "HEAD \/index\.html\?(fpsreport=[^ "]+) HTTP/);
   if (!m) continue;
   const q = Object.fromEntries(new URLSearchParams(m[2]));

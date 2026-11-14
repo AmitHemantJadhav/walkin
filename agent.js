@@ -99,7 +99,13 @@ function placedItems() {
   const w = W();
   return (w.furniture ? w.furniture.children : []).filter((o) => o.userData && o.userData.kind).map((o) => {
     const room = w.roomAt(o.position.x, o.position.y, o.userData.floor);
-    return { kind: o.userData.kind, room: room ? room.label : null };
+    const out = { kind: o.userData.kind, room: room ? room.label : null };
+    if (typeof w.fitReport === 'function') {
+      const r = w.fitReport({ item: o });
+      out.fits = r.ok;
+      if (!r.ok || (r.warnings && r.warnings.length)) out.problems = [...r.reasons, ...(r.warnings || [])];
+    }
+    return out;
   });
 }
 
@@ -236,6 +242,12 @@ const RUN = {
     const w = W();
     if (!w.FURNITURE[kind]) return { ok: false, reason: `Unknown kind. Use one of: ${Object.keys(w.FURNITURE).join(', ')}.` };
     w.addFurniture(kind);
+    const item = w.selected || w.furniture.children[w.furniture.children.length - 1];
+    if (typeof w.fitReport === 'function' && item) { // S4: real reasons ("blocks the bedroom door")
+      const r = w.fitReport({ item });
+      return { ok: true, placed: kind, fits: r.ok, fit: w.fitLine ? w.fitLine(r) : r.reasons.join(', '),
+        room: r.room ? r.room.label : null };
+    }
     const fit = document.getElementById('fit');
     return { ok: true, placed: kind, fit: fit ? fit.textContent : null };
   },

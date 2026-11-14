@@ -744,4 +744,16 @@ function buildUI() {
     isBusy: () => busy };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
+
+  // physics.js fires walkin:blocked (doors only) with a ready sentence ("the sofa is 2.10 m across the way you're
+  // holding it and that door is 1.15 m — turn it and it goes through"). John says it out loud, captioned in the
+  // headset, so the "will my sofa fit through that door?" beat needs no model call and no key. At most one line per
+  // 6 s, and never over another line or while he is answering.
+  let blockedAt = 0;
+  addEventListener('walkin:blocked', (e) => {
+    const reason = e.detail && e.detail.reason, now = performance.now();
+    if (!reason || busy || talking > 0 || now - blockedAt < 6000) return;
+    blockedAt = now;
+    say(`${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`);
+  });
 })();

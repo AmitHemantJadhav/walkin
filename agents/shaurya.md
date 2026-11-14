@@ -29,7 +29,7 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ---
 
-## State of this lane (updated Sat 08:10 ET by the overnight agent)
+## State of this lane (updated Sat 08:50 ET by the overnight agent)
 
 **All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
 
@@ -91,7 +91,8 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ### `stageRoom` answers "the whole house" with the whole house
 
-John has no `stage_house` tool (#56) — his only staging tool is `stage_room`, so beat 7 arrives here
+John has a `stage_house` tool as of #60, and this stays as the net under it. It was written when
+`stage_room` was his only staging tool, so beat 7 arrived here
 with the whole sentence as the style. `WHOLE_HOUSE` catches *whole house / entire home / every room /
 all the rooms* and delegates to `stageHouse`, returning a `stageRoom`-shaped result so `agent.js` and the
 mock need no change. **Strip the phrase before delegating** — `stageHouse` calls `stageRoom` for every
@@ -119,6 +120,19 @@ standing in the living room.
 61 fps with 28 pieces, the same in headset (side-by-side) mode, **on a laptop**. Twenty full-house stagings in
 three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
 nothing leaks. La Mirada stages 32 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
+
+### Open, with the measurements, deliberately not fixed
+
+Five things I found today and chose to write up rather than land unreviewed on demo morning. Each has
+the numbers and the dead ends on the issue, so picking one up is an hour rather than a morning.
+
+| | |
+|---|---|
+| **#55** | the doorway assist lines a piece up but doesn't carry it through — four attempts, four reverts. Not an angle problem: the sofa comes out 0.00° square and 11.3 cm off centre against 10.0 cm of clearance |
+| **#57** | a sofa pushed into a coffee table stops dead; `MASS` has never been used for contact. Built it, tripled the travel, and it left two pieces overlapping, so it is on the issue |
+| **#58** | you can put a plant on a table by asking but not by dragging — the frame loop knows nothing about surfaces |
+| **#61** | wallpaper clips against the scan mesh on one 314 Gale St wall. It is the mesh, not the quad; raising the 8 cm offset makes the paper stand proud |
+| **#63** | dragging *and* rotating together can leave two pieces overlapping. Drag-only is clean, rotate-only is clean. Probably the sequencing: two pieces moving in one frame are each checked against the other's old position |
 
 ### If there is time after the demo
 

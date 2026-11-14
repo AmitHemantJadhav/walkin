@@ -293,7 +293,7 @@ Other houses, measured the same way on today's `main`:
 | | | |
 |---|---|---|
 | 5836 La Mirada Ave | **32 pieces** | 6 rooms |
-| 314 Gale St | **26 pieces** | 4 rooms |
+| 314 Gale St | **26 pieces** | 5 rooms — kitchen, living room, dining room and 2 bedrooms |
 | 10319 Dunvegan Way | **19 pieces** | 4 rooms — its 31 m² kitchen is open-plan, so it gets the living set, television and all |
 | the fixture (`?m=fixture`) | **12 pieces** | 2 rooms, no keys needed |
 

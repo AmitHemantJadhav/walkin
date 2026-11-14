@@ -177,6 +177,7 @@ function onCommandWords(finalPart, interimPart, allFinal) {
 
 function wake() {
   setMode('awake');
+  try { const p = window.walkin && window.walkin.pointer; window.walkin.wakeWall = p && p.wall ? { wall: p.wall, at: performance.now() } : null; } catch (e) { /* no pointer */ }
   startPulse();
   state.wakeIdx = -1;
   state.carry = state.heard = state.interim = '';
@@ -211,6 +212,15 @@ async function finishCommand() {
 
 // ------------------------------------------------------------------ live conversation (live.js, Gemini Live)
 let liveOk = null;
+// Captions are two lines (~90 characters per eye in the headset): show the sentence being said, not the start of the turn.
+function tail(text, max = 90) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();   // one line: '.' in the split below doesn't cross a newline
+  if (t.length <= max) return t;
+  const parts = (t.match(/[^.!?]+[.!?]*\s*/g) || [t]).map((s) => s.trim()); // no lookbehind: Safari < 16.4 can't parse it
+  let out = parts.pop();
+  while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max) out = `${parts.pop()} ${out}`;
+  return out.length > max ? `…${out.slice(-max + 1)}` : out;
+}
 async function liveAvailable() {
   const live = window.walkin && window.walkin.live;
   if (!live) return false;
@@ -226,7 +236,8 @@ async function liveConversation(firstText) {
   const ran = await window.walkin.live.start({ firstText });
   if (ran === false) {                         // couldn't connect (token, network): fall back for this command
     setMode('thinking');
-    liveOk = null;
+    liveOk = false;                            // don't retry on every command: try Live again in a minute
+    setTimeout(() => { liveOk = null; }, 60000);
     return false;
   }
   backToListening();
@@ -235,8 +246,8 @@ async function liveConversation(firstText) {
 
 addEventListener('walkin:live', (e) => {
   const d = e.detail || {};
-  if (d.kind === 'user') { clearTimeout(capTimer); showCaption(d.text, '', 'user'); }
-  else if (d.kind === 'john') { clearTimeout(capTimer); showCaption(d.text, '', 'john'); }
+  if (d.kind === 'user') { clearTimeout(capTimer); showCaption(tail(d.text), '', 'user'); }
+  else if (d.kind === 'john') { clearTimeout(capTimer); showCaption(tail(d.text), '', 'john'); }
   else if (d.kind === 'turn') { capTimer = setTimeout(clearCaption, 2500); }
   else if (d.kind === 'state' && d.state === 'connecting') showHint('Connecting to John…', 2500);
   else if (d.kind === 'state' && d.state === 'nomic') showHint("John can't hear you: allow the microphone, or tap the orb to type.", 6000);

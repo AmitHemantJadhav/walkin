@@ -418,6 +418,85 @@ function checkSwap() {
   }
 }
 
+// ------------------------------------------------------------------ the mesh route (#104 option A)
+//
+// The cut-outs above are the piece's own photograph, which is honest but flat. `tools/meshdiff.py`
+// does the same subtraction in 3D — the MatterPak's textured mesh of the real house minus the
+// defurnished mesh of the empty one — and writes the leftovers as real geometry. That is a piece you
+// can walk around and turn, still made of their own sofa rather than our catalog one.
+//
+// It ships as one `furniture.bin` of positions, vertex colours and indices, plus a `furniture.json`
+// index saying where each piece stands and how big it is. 1.3 MB for La Mirada's 43 pieces, against
+// the 56 MB of mesh and textures it was built from, because the colour is baked per vertex instead
+// of carrying 45 JPEGs.
+
+const meshMade = [];
+
+/** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
+export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {}) {
+  const w = window.walkin;
+  if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
+  const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
+  let meta, buf;
+  try {
+    const [a, b] = await Promise.all([fetch(base + 'furniture.json'), fetch(base + 'furniture.bin')]);
+    if (!a.ok || !b.ok) throw new Error(`${a.status}/${b.status}`);
+    meta = await a.json();
+    buf = await b.arrayBuffer();
+  } catch (e) {
+    return { ok: false, say: 'this house has no mesh furniture yet — run tools/meshdiff.py export' };
+  }
+  const t0 = performance.now();
+  const floorZ = (w.current && w.current.floorZ) ?? meta.floorZ ?? 0;
+  const placed = [];
+  for (const p of meta.pieces) {
+    if (placed.length >= max) break;
+    if (Math.max(p.size[0], p.size[1]) < minSize) continue;
+    if (room && p.room !== room) continue;
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, p.pos[0], p.pos[1] / 4), 3));
+    const col = new Uint8Array(buf, p.col[0], p.col[1]);
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+    g.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, p.idx[0], p.idx[1] / 4), 1));
+    g.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+    mesh.renderOrder = 2;
+    const grp = new THREE.Group();
+    grp.add(mesh);
+    // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands here
+    grp.position.set(p.at[0], p.at[1], floorZ);
+    const kind = `mesh${++seq}`;
+    FURNITURE[kind] = { name: p.room ? `${p.room.toLowerCase()} piece` : 'piece the home already had',
+                        real: true, mesh: true,
+                        w: p.size[0], d: p.size[1], h: p.size[2], against: 'free' };
+    grp.userData.kind = kind;
+    grp.userData.real = true;
+    grp.userData.meshPiece = true;
+    grp.userData.z0 = floorZ;
+    grp.userData.floor = w.current && w.current.floor;     // physics finds walls and neighbours by floor
+    w.furniture.add(grp);
+    meshMade.push(grp);
+    placed.push({ kind, room: p.room, size: p.size, tris: p.tris });
+  }
+  return { ok: true, ms: Math.round(performance.now() - t0), built: meta.built,
+           available: meta.pieces.length, placed: placed.length, items: placed,
+           say: placed.length ? `I put back ${placed.length} pieces of the home's own furniture, as real objects.`
+                              : 'I found no mesh furniture to place.' };
+}
+
+/** Take the mesh pieces away again. */
+export function clearMeshFurniture() {
+  let n = 0;
+  for (const g of meshMade.splice(0)) {
+    if (g.parent) { g.parent.remove(g); n++; }
+    g.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+  }
+  return n;
+}
+
 // ------------------------------------------------------------------ keep the cut-outs facing you
 //
 // A cut-out is flat, so seen from the side it is an invisible sliver. It is cut facing the scan point
@@ -461,5 +540,7 @@ export function clearRealFurniture() {
   window.walkin.clearRealFurniture = clearRealFurniture;
   window.walkin.labelRealFurniture = labelRealFurniture;
   window.walkin.swapRealFurniture = swapToModel;
+  window.walkin.meshFurniture = meshFurniture;
+  window.walkin.clearMeshFurniture = clearMeshFurniture;
   if (window.walkin.beforeRender) window.walkin.beforeRender.add(faceTheCamera);
 })();

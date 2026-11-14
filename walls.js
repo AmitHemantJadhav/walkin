@@ -143,9 +143,8 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
 
   clearWallMaterial(wall);
 
-  const texture = tex.clone();
-  texture.needsUpdate = true;
-  const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.FrontSide });
+  // the cached texture is used as-is: the repeat is baked into uv, so no per-wall clone (and nothing to leak)
+  const material = new THREE.MeshBasicMaterial({ map: tex, side: THREE.FrontSide });
   // the photo's own light and shade on this wall, as a light map over uv1
   const shade = await panoLuminance(rec, height, LIGHT_U, LIGHT_V, [nx, ny]);
   if (shade) {
@@ -180,6 +179,19 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
     say: `${(area).toFixed(1)} m2 of wall${room ? ` in the ${room.label.toLowerCase()}` : ''}, repeating every ${tile} m` };
 }
 
+/** Free one wall's geometry, its material and the light map made for it (the texture itself is cached). */
+function dispose(mesh) {
+  const seen = new Set();
+  mesh.traverse((o) => {
+    if (!o.isMesh) return;
+    o.geometry.dispose();
+    if (seen.has(o.material)) return;            // one material is shared by all the panels of a wall
+    seen.add(o.material);
+    if (o.material.lightMap) o.material.lightMap.dispose();
+    o.material.dispose();
+  });
+}
+
 /** Take the material off one wall. */
 export function clearWallMaterial(wall) {
   if (!wall) return 0;
@@ -189,7 +201,7 @@ export function clearWallMaterial(wall) {
   const rec = applied.get(k);
   if (!rec) return 0;
   group.remove(rec.mesh);
-  rec.mesh.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+  dispose(rec.mesh);
   applied.delete(k);
   return 1;
 }
@@ -199,7 +211,7 @@ export function clearAllWallMaterials() {
   const n = applied.size;
   for (const rec of applied.values()) {
     group.remove(rec.mesh);
-    rec.mesh.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    dispose(rec.mesh);
   }
   applied.clear();
   return n;
@@ -226,6 +238,7 @@ async function refreshShading() {
     const height = Math.min(3.2, Math.max(2.2, ceiling)) - TOP_GAP;
     const shade = await panoLuminance(found.wall, height, LIGHT_U, LIGHT_V, facingNormal(found.wall, from));
     for (const m of mats) {
+      if (m.lightMap) m.lightMap.dispose();      // the old map is replaced, not kept
       m.lightMap = shade || null;
       m.lightMapIntensity = shade ? (shade.userData.scale || 1) : 1;
       m.needsUpdate = true;

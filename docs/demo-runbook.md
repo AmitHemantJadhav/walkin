@@ -43,6 +43,9 @@ Open `…/?m=zvKHR9DHNjJ`, **stand inside a room**, and run one line in the cons
 await walkin.preflight()
 ```
 
+**On a phone there is no console**, so add `&preflight` to the URL instead — it runs once the house
+is up and puts the same nine lines on the screen. Tap to dismiss.
+
 Nine ✓ or ✗ with the number behind each: the house, whether John answers, staging, whether this
 house even has a door the sofa beat works at, physics, the wallpaper fallback tiles, whether a layout
 from an earlier session is waiting to come back, the hand hooks and the frame rate. It saves whatever is in the room first and puts it back, so it costs you nothing
@@ -171,10 +174,16 @@ He reads the light at that spot from the photo and the window positions, and pla
 
 > *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
 
-The plant depends on the reading: a fern out of the sun, a plant in indirect light, a tall cactus in
-a bright window. Standing in the living room this morning it answered *"A plant — that spot is medium
-light, 3.3 m from the nearest window, and it does well in indirect light."* — so don't promise a fern
-before you've heard it.
+The plant depends on the reading, so don't promise a fern before you've heard it. All three, measured
+at La Mirada:
+
+> *"A tall cactus — that spot is bright light, 0.5 m from the nearest window, and it takes direct sun."*
+> *"A tall potted plant — that spot is medium light, 3.3 m from the nearest window, and it does well in indirect light."*
+> *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
+
+**It never names a compass direction**, and that is deliberate: the scan is not aligned to north, so
+`light_here` says so and tells the model not to claim one. If anyone asks how it knows, the answer is
+the windows' size and how far the spot is from them, both measured in the scan — not the sun.
 
 If the model doesn't chain the two steps, `walkin.suggestPlant()` does the whole thing in one call
 and always lands.
@@ -258,7 +267,7 @@ whether #51 landed before assuming something is broken.
 | furniture won't move | `walkin.physics.enabled = false` |
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
-| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again **then hard-reload** (⌘⇧R) — `/data/` is cached for a day, so without that you keep seeing the old file (#59); or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all — the whole run works there now, beat 5 included, because its doorway is 1.15 m like the real one. If you have opened that fixture before, write it somewhere new (`python3 tools/fake_house.py data/fixture2`, then `?m=fixture2`) rather than fighting the cache |
+| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again and reload — since #75 a re-prepped house shows up at once; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all and does the whole run, beat 5 included |
 
 ## Console equivalents for every beat
 

@@ -412,8 +412,9 @@ canvas.addEventListener('pointerdown', (e) => {
   const item = hitFurniture();
   if (item) {
     select(item);
-    const f = hitFloor();
-    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2() };
+    const f = hitFloor(), P = phys();
+    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2(),
+      phys: P && P.grab(item, 'mouse') ? P : null };
   } else {
     drag = { mode: 'look', x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, yaw: view.yaw, pitch: view.pitch };
   }
@@ -423,7 +424,11 @@ canvas.addEventListener('pointermove', (e) => {
   if (drag.mode === 'item') {
     setNDC(e.clientX, e.clientY);
     const f = hitFloor();
-    if (f) { drag.item.position.x = f.x + drag.off.x; drag.item.position.y = f.y + drag.off.y; checkFit(); }
+    if (f) {
+      const x = f.x + drag.off.x, y = f.y + drag.off.y;
+      if (drag.phys) drag.phys.moveTarget('mouse', [x, y]); else { drag.item.position.x = x; drag.item.position.y = y; }
+      checkFit();
+    }
   } else if (!gyro.on) {
     const k = (camera.fov / 75) * 0.0045;
     view.yaw = drag.yaw + (e.clientX - drag.x) * k;
@@ -437,6 +442,7 @@ canvas.addEventListener('pointerup', (e) => {
     if (h) goTo(h.object.userData.pano);
     else { selected = null; checkFit(); }
   }
+  if (drag?.phys) drag.phys.release('mouse'); // mouse sets pieces down where they are: no fling
   drag = null;
 });
 canvas.addEventListener('dblclick', (e) => {
@@ -507,7 +513,51 @@ const skinMat = new THREE.MeshStandardMaterial({ color: 0xf0c3a2, roughness: 0.5
 const pinchMat = new THREE.MeshStandardMaterial({ color: 0xffc400, emissive: 0x664400, roughness: 0.4 });
 const jointGeo = new THREE.SphereGeometry(1, 12, 10);
 const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
-const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
+const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {}, aims = {};
+// A2: a pinch grabs the nearest piece within 0.4 m of the pinch point (no need to hit it exactly), and teleports
+// only after the hand has pointed at the same puck for 300 ms (the cursor turns green), so a missed grab never jumps.
+const GRAB_RADIUS = 0.4, PUCK_RADIUS = 0.45, PUCK_DWELL_MS = 300;
+// A2 step 3: with Shaurya's physics.js loaded (walkin.physics, #44) hands and mouse give it a *target* instead of
+// setting the position, so a piece stops at walls, lags by its mass and slides if you let go while moving.
+// Without it (or with ?physics=off) we set the position directly, as before.
+const FLING_MIN = 0.5; // m/s: let go slower than this and the piece is just set down
+const phys = () => { const p = window.walkin?.physics; return p && p.enabled ? p : null; };
+function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants the piece, for the fling on release
+  const t = performance.now(), dt = g.last ? (t - g.last.t) / 1000 : 0;
+  if (g.last && dt < 0.005) return;
+  if (g.last) {
+    const a = Math.min(1, dt / 0.08);
+    g.vel[0] += ((x - g.last.x) / dt - g.vel[0]) * a;
+    g.vel[1] += ((y - g.last.y) / dt - g.vel[1]) * a;
+  }
+  g.last = { x, y, t };
+}
+// A2: push it away, pull it back. While carrying, moving the hand toward / away from the camera (metric depth from
+// hands.js) slides the piece along the pointing direction, DEPTH_GAIN metres per metre of hand travel, after a small
+// dead zone so depth noise doesn't wobble it. Front camera (handheld): toward the phone = away from you; back camera
+// (headset): away from the phone = away. ?dgain=0 turns it off.
+const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015;
+function carryPoint(f, cam, d0, depth, sign, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
+  if (!gain || d0 == null || depth == null) return [f.x, f.y];
+  const dx = f.x - cam.x, dy = f.y - cam.y, r = Math.hypot(dx, dy);
+  if (r < 0.05) return [f.x, f.y]; // pointing at your feet: no direction to push along
+  const raw = (depth - d0) * sign, push = Math.sign(raw) * Math.max(0, Math.abs(raw) - DEPTH_DEAD);
+  const r2 = Math.min(Math.max(r + gain * push, Math.min(r, 0.4)), Math.max(r, 12)); // not behind you, not miles off
+  return [cam.x + (dx / r) * r2, cam.y + (dy / r) * r2];
+}
+const depthSign = () => (handCam === 'user' ? -1 : 1);
+function letGo(side, fling) {
+  const g = grabs[side];
+  if (!g) return;
+  if (g.phys) g.phys.release(side, fling && Math.hypot(g.vel[0], g.vel[1]) > FLING_MIN ? g.vel : null);
+  delete grabs[side];
+}
+function moveHeld(g, side, x, y, yaw) {
+  trackVel(g, x, y);
+  if (g.phys) { g.phys.moveTarget(side, [x, y], yaw); return; }
+  g.item.position.x = x; g.item.position.y = y;
+  if (typeof yaw === 'number') g.item.rotation.z = yaw;
+}
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
@@ -550,8 +600,8 @@ function drawHands() {
     seen.add(h.side);
     const g = handViz[h.side] || (handViz[h.side] = makeHandViz());
     g.visible = true;
-    // bigger in the camera image = closer; about an arm's length when relaxed
-    const d = THREE.MathUtils.clamp(0.42 * (0.2 / h.size), 0.22, 0.8);
+    // metric distance to the camera from hands.js (world landmarks); else bigger in the image = closer
+    const d = THREE.MathUtils.clamp(h.depth ?? 0.42 * (0.2 / h.size), 0.22, 0.8);
     const P = h.pts.map((p, i) => screenToWorld(p.x, p.y, d * (1 + p.z * 1.2), g.userData.joints[i].position));
     for (const i of [4, 8]) g.userData.joints[i].material = h.pinch ? pinchMat : skinMat;
     BONES.forEach(([a, b], k) => {
@@ -566,6 +616,19 @@ function drawHands() {
   for (const [side, g] of Object.entries(handViz)) if (!seen.has(side)) g.visible = false;
 }
 
+const _gbox = new THREE.Box3();
+function nearestFurniture(f) { // the piece whose footprint is closest to floor point f, if within GRAB_RADIUS
+  let best = null, bestD = GRAB_RADIUS;
+  for (const o of furniture.children) {
+    if (!o.userData?.kind || o.visible === false) continue;
+    _gbox.setFromObject(o);
+    const d = Math.hypot(Math.max(_gbox.min.x - f.x, 0, f.x - _gbox.max.x), Math.max(_gbox.min.y - f.y, 0, f.y - _gbox.max.y));
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+function puckAt(f) { return f ? pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < PUCK_RADIUS) || null : null; }
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -573,8 +636,9 @@ function onHands(list, cam) {
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
-  for (const side of Object.keys(grabs)) if (!present.has(side)) delete grabs[side];
+  for (const side of Object.keys(grabs)) if (!present.has(side)) letGo(side, false); // lost hand: no fling
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
+  for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
 
   const act = list.find((h) => h.pinch) || list[0];
   if (act) {
@@ -591,22 +655,29 @@ function onHands(list, cam) {
     const cur = handCursors[h.side] || (handCursors[h.side] = makeCursor());
     cur.visible = !!f;
     if (f) cur.position.set(f.x, f.y, f.z + 0.02);
-    cur.material.color.set(h.pinch ? 0xffc400 : 0x00e5ff);
+    const near = puckAt(f), now = performance.now();
+    if (aims[h.side]?.puck !== near) aims[h.side] = { puck: near, since: now };
+    const puckReady = !!near && now - aims[h.side].since >= PUCK_DWELL_MS;
+    cur.material.color.set(h.pinch ? 0xffc400 : puckReady ? 0x3dff8a : 0x00e5ff);
     cur.scale.setScalar(h.pinch ? 0.7 : 1);
 
     if (h.pinch && !prevPinch[h.side]) {
-      // pinch started: grab furniture you point at (or the selected piece if it's close); otherwise jump to a puck
+      // pinch started: grab the piece you point at; a held aim at a puck (300 ms) means teleport; otherwise grab
+      // the nearest piece within 0.4 m, or the selected piece if it's close
       let item = hitFurniture();
-      if (!item && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
+      if (!item && !puckReady && f) item = nearestFurniture(f);
+      if (!item && !puckReady && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
       if (item && f) {
         select(item);
-        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) };
-      } else if (f) {
-        const near = pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < 0.45);
-        if (near) goTo(near.userData.pano);
+        const P = phys();
+        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null, d0: h.depth ?? null };
+      } else if (puckReady) {
+        aims[h.side] = null;
+        goTo(near.userData.pano);
       }
     } else if (!h.pinch) {
-      delete grabs[h.side];
+      letGo(h.side, true);
     }
     prevPinch[h.side] = h.pinch;
   }
@@ -620,18 +691,27 @@ function onHands(list, cam) {
     if (!twist || twist.item !== ga.item) {
       twist = { item: ga.item, a0: angle, r0: ga.item.rotation.z, off: new THREE.Vector2(ga.item.position.x - mid.x, ga.item.position.y - mid.y) };
     }
-    ga.item.rotation.z = twist.r0 + (angle - twist.a0);
-    ga.item.position.x = mid.x + twist.off.x;
-    ga.item.position.y = mid.y + twist.off.y;
+    const x = mid.x + twist.off.x, y = mid.y + twist.off.y, yaw = twist.r0 + (angle - twist.a0);
+    moveHeld(ga, ha.side, x, y, yaw);
+    moveHeld(gb, hb.side, x, y, yaw);
     checkFit();
     return;
   }
-  twist = null;
+  if (twist) { // two-hand hold just ended: re-anchor the hand still holding to where the piece is, so it doesn't jump
+    for (const h of list) {
+      const g = grabs[h.side];
+      if (g && g.item === twist.item && h.floor) {
+        g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
+        g.d0 = h.depth ?? null; // push / pull starts again from where the hand is now
+      }
+    }
+    twist = null;
+  }
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      g.item.position.x = h.floor.x + g.off.x;
-      g.item.position.y = h.floor.y + g.off.y;
+      const [cx, cy] = carryPoint(h.floor, camera.position, g.d0, h.depth ?? null, depthSign());
+      moveHeld(g, h.side, cx + g.off.x, cy + g.off.y);
       checkFit();
     }
   }
@@ -654,6 +734,7 @@ async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
+    for (const side of Object.keys(grabs)) letGo(side, false); // else physics keeps the piece held by a ghost hand
     realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
@@ -769,8 +850,8 @@ function tickPerf() {
   if (!show) return;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
-    + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
-      + `${handsList.length} seen` : 'off'} · `
+    + `hands ${handsApi ? `${handsApi.stats?.src ?? ''} ${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
+      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }
@@ -796,8 +877,14 @@ if (!house.panos.some((p) => p.imgEmpty)) { showEmpty = false; $('bEmpty').textC
 
 // ------------------------------------------------------------------ main loop
 const _dir = new THREE.Vector3(), _fwd = new THREE.Vector3();
+// walkin.beforeRender: add (dt) => {} to run every frame after all input (mouse, hands) and right before the draw,
+// e.g. physics.js constraining pieces. A callback that throws is dropped so it can't stop the render loop.
+const beforeRender = new Set();
+let lastFrameT = performance.now();
 function frame() {
   requestAnimationFrame(frame);
+  const now = performance.now(), dt = Math.min(0.05, (now - lastFrameT) / 1000);
+  lastFrameT = now;
   camera.position.copy(camPos);
   if (gyro.on && gyro.have) {
     if (gyro.offset === null) {
@@ -814,6 +901,9 @@ function frame() {
   sphere.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
+  for (const fn of beforeRender) {
+    try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
+  }
   if (selected && selBox.visible) selBox.box.setFromObject(selected);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
   tickPerf();
@@ -830,10 +920,21 @@ await goTo(start.id, true);
 $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
+  renderer, // for env maps / tone mapping (#29); don't resize it or change its pixel ratio, app.js owns that
+  beforeRender, // Set of (dt) => {} run every frame after input, before the draw (physics.js, #44)
   get current() { return current; }, get selected() { return selected; },
   get handRay() { return handRay; },
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },
+  // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
+  // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
+  // Add depth (metres from the camera) to try push / pull: with the front camera a smaller depth pushes the piece away.
+  simHands(list = []) {
+    onHands(list.map((h) => ({ side: 'Right', pinch: false, size: 0.2, ...h,
+      pts: h.pts || Array.from({ length: 21 }, () => ({ x: h.x, y: h.y, z: 0 })) })), null);
+    return handsList.map((h) => ({ side: h.side, floor: h.floor ? [h.floor.x, h.floor.y] : null,
+      holding: grabs[h.side]?.item?.userData.kind ?? null }));
+  },
 }; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

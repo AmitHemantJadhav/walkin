@@ -1,7 +1,7 @@
 # Walk-In — Devpost draft
 
-> Draft. Lines marked **[check]** describe features that are planned for Saturday and must be confirmed on `main`
-> before submitting. Cut anything that isn't working in the demo.
+> Draft. Lines marked **[check]** still need confirming on a real device before submitting; everything else was
+> verified on `main` (with a real model through OpenRouter). Cut anything that isn't working in the demo.
 >
 > **Numbers:** only quote figures from [`pitch-facts.md`](pitch-facts.md) (each one says how it was measured,
 > and "Things to say carefully" lists what hasn't been tested yet). The beats and fallbacks are in
@@ -25,19 +25,25 @@ Put your phone in a cheap headset and you are standing in a real home that Matte
 
 - **Walk it.** Look around with your head, pinch a floor marker to move to the next scan point.
 - **Furnish it with your bare hands.** Real-size furniture appears in front of you. Pinch to grab, carry it, twist
-  with two hands to rotate. It tells you at once whether it fits in the room.
-- **Talk to it.** "How big is this room?" "Take me to the kitchen." "Add a queen bed." The agent answers out loud
-  from the scan's real measurements. **[check]**
-- **Point and change it.** "Put red-brick wallpaper on this wall" generates a seamless tile and puts it on the wall
-  you are pointing at. **[check]**
-- **Ask for advice.** "What plant should go here?" The agent works out the light from the size of the room's windows and how far
-  the spot is from them (measured in the scan), suggests a plant, and places it. It doesn't claim a compass
-  direction: the scan isn't aligned to north. **[check]**
-- **Stage a room in one sentence.** "Stage this as a modern bedroom" places a full set that fits and keeps the
-  doorways clear. **[check]**
+  with two hands to rotate. It has weight: it stops at walls and shoves lighter pieces aside, and it tells you at once
+  whether it fits in the room.
+- **Ask the question everyone asks: "will my sofa fit through that door?"** Carry the sofa at the front door
+  sideways and it stops, and John says why: *"the sofa is 2.10 m across the way you're holding it and that door is
+  1.15 m — turn it and it goes through."* Turn it and it does. A king bed never does, at any angle.
+- **Talk to it.** Say *"Hey John, …"* and the command appears as live captions while you speak **[check: real
+  microphone]**. *"How big is this room?"* is answered from the scan's own measurements (*"5.04 by 5.7 metres,
+  28.9 square metres"*), and John's replies are spoken and captioned, in both eyes in the headset.
+- **Stage a room in one sentence.** *"Stage this as a cosy living room"* places a full set (sofa, rug, coffee table,
+  armchair, tv stand, television, plant) that fits and keeps the doorways clear. *"Furnish the whole house"* does
+  six rooms, 32 pieces, in under three seconds.
+- **Point and change it.** *"Put red-brick wallpaper on this wall"* generates a seamless tile and lays it at real
+  scale on the wall you are pointing at, cut around its doors and windows.
+- **Ask for advice.** *"What plant should go here?"* John works out the light from the size of the room's windows and
+  how far the spot is from them (measured in the scan), suggests a plant, and places it. He doesn't claim a compass
+  direction: the scan isn't aligned to north.
 
 Everything you place stays where you put it and looks right from every scan point, because it lives in the house's
-model space (metres), not in one photo.
+model space (metres), not in one photo. Numbers here are from `docs/pitch-facts.md`; each one says how it was measured.
 
 ## How we built it
 - **Data:** Matterport model API — 360 panoramas for every scan point, the defurnished view, the wall graph with
@@ -54,7 +60,13 @@ model space (metres), not in one photo.
 - **Agent:** Gemini with function calling. The tools are the viewer's own functions (add furniture, stage a room,
   set a wall material, place an object, go to a room) plus `describe_house`, which hands the model the rooms, sizes,
   what is placed and what the user is pointing at. When you say "this", it also gets the current view as an image.
-- **Voice:** speech-to-text in the browser, spoken replies from ElevenLabs. **[check]**
+- **Voice:** a hands-free wake phrase ("Hey John") and live captions from the browser's speech recognition; replies
+  are spoken by ElevenLabs when a key is set, otherwise by the browser's own voice, and captioned either way. The
+  microphone is paused while John talks, so he never hears himself.
+- **Stage-safe AI:** a relay with per-minute limits, a disk cache, an OpenRouter fallback when Gemini is missing or
+  failing, an instant spoken filler, a 25 s cut-off, friendly error lines, and bundled wallpaper tiles and plant
+  pictures for when image generation is slow. Three.js and MediaPipe are vendored, so the demo runs without venue
+  Wi-Fi.
 - **Keys:** a small relay in our Python server calls Gemini and ElevenLabs, so no key ever reaches the phone.
 
 ## Challenges we ran into
@@ -86,7 +98,7 @@ model space (metres), not in one photo.
 - Search inside homes: "show me houses where a king bed and two nightstands fit in the main bedroom."
 
 ## Built with
-three.js · MediaPipe · Matterport model API · CoStar listing data · Gemini API · ElevenLabs · Python · JavaScript ·
+three.js · MediaPipe · Matterport model API · CoStar listing data · Gemini API · OpenRouter · ElevenLabs · Web Speech API · Python · JavaScript ·
 cloudflared
 
 ## Before submitting

@@ -133,6 +133,24 @@ function hitsWall(poly, walls) {
   return false;
 }
 
+/**
+ * Is the straight path from where the piece is to (nx, ny, rot) clear of walls the whole way?
+ *
+ * Both back-off manoeuvres below set a position outright after testing only where they land. That is
+ * how a piece gets through a wall: the two ends are clear and the wall is in the middle. It needs a
+ * move longer than the piece is wide, which the lining-up back-off can be — up to 0.75 m back plus
+ * however far off the centre line it was. Sampled every 8 cm, which is thinner than any wall here.
+ */
+function clearPath(item, st, nx, ny, rot, walls) {
+  const dist = Math.hypot(nx - st.x, ny - st.y);
+  const steps = Math.ceil(dist / 0.08);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    if (hitsWall(fp(item, st.x + (nx - st.x) * t, st.y + (ny - st.y) * t, rot), walls)) return false;
+  }
+  return true;
+}
+
 /** Is this footprint clear of walls and of other pieces? Returns null, or what it hit. */
 function blockedBy(poly, item, walls) {
   for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
@@ -168,6 +186,7 @@ function step(item, st, tx, ty, trot, walls) {
       for (const back of [0.08, 0.16, 0.26]) {
         const nx2 = st.x + bx * back, ny2 = st.y + by * back;
         if (blockedBy(fp(item, nx2, ny2, trot), item, walls)) continue;
+        if (!clearPath(item, st, nx2, ny2, trot, walls)) continue;
         st.x = nx2; st.y = ny2; st.rot = trot; turned = true;
         break;
       }
@@ -329,6 +348,7 @@ function assistThroughDoor(item, st, walls, dt, dx, dy, wantRot) {
         const lat = near.off * frac;
         const nx2 = st.x + bx * back + d.dx * lat, ny2 = st.y + by * back + d.dy * lat;
         if (blockedBy(fp(item, nx2, ny2, wantRot), item, walls)) continue;
+        if (!clearPath(item, st, nx2, ny2, wantRot, walls)) continue;
         st.x = nx2; st.y = ny2; st.rot = wantRot;
         return true;
       }

@@ -29,7 +29,12 @@ export const FURNITURE = {
   plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', against: 'small' },
   plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
   plantsucculent: { name: 'Succulent', w: 0.22, d: 0.2, h: 0.33, model: 'plantSmall3.glb', against: 'small' },
+  cactus: { name: 'Cactus', w: 0.3, d: 0.3, h: 0.5, model: 'cactus_short.glb', against: 'small' },
+  cactustall: { name: 'Tall cactus', w: 0.35, d: 0.3, h: 0.75, model: 'cactus_tall.glb', against: 'small' },
 };
+
+/** The six plants, for "what plant should go here" (R5). */
+export const PLANTS = ['plant', 'plantsmall', 'plantfern', 'plantsucculent', 'cactus', 'cactustall'];
 
 // Resolved against this module, not the page, so models/preview.html loads the same files as index.html.
 const MODEL_DIR = new URL('models/', import.meta.url).href;

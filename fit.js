@@ -201,8 +201,10 @@ export function fitReport(opts = {}) {
   }
 
   // other pieces on the same floor, in the same room
+  // `ignore` is for a piece this one is standing on: a lamp on a table doesn't overlap the table
+  const ignore = opts.ignore || [];
   const others = (w.furniture ? w.furniture.children : []).filter((o) =>
-    o !== item && o.userData.kind && (floor === undefined || o.userData.floor === floor));
+    o !== item && !ignore.includes(o) && o.userData.kind && (floor === undefined || o.userData.floor === floor));
   for (const o of others) {
     const ok = o.userData.kind;
     if (isFlat(kind) || isFlat(ok)) continue;                     // you can stand furniture on a rug

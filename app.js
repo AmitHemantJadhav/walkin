@@ -536,12 +536,24 @@ function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants 
 // hands.js) slides the piece along the pointing direction, DEPTH_GAIN metres per metre of hand travel, after a small
 // dead zone so depth noise doesn't wobble it. Front camera (handheld): toward the phone = away from you; back camera
 // (headset): away from the phone = away. ?dgain=0 turns it off.
-const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015;
-function carryPoint(f, cam, d0, depth, sign, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
-  if (!gain || d0 == null || depth == null) return [f.x, f.y];
+// Drift: a single camera's depth wanders a few cm while the hand is held still, and at 6× gain that would walk the
+// piece away. So once the hand has been still (within DEPTH_DEAD) for DEPTH_STILL_MS, whatever it has pushed so far
+// is kept and the anchor moves to where the hand is now: anything slower than ~DEPTH_DEAD / DEPTH_STILL_MS (3 cm/s)
+// never moves the piece, a real push (20+ cm/s) does.
+const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015, DEPTH_STILL_MS = 500;
+const deadZone = (v) => Math.sign(v) * Math.max(0, Math.abs(v) - DEPTH_DEAD);
+function anchorDepth(g, depth, now) { g.d0 = depth; g.ref = depth; g.refT = now; g.base = 0; }
+function handPush(g, depth, sign, now) { // metres of hand travel away from you since the grab, drift folded out
+  if (g.d0 == null && depth != null) anchorDepth(g, depth, now); // grabbed before depth came in: start from here
+  if (g.d0 == null || depth == null) return (g.base || 0) * sign;
+  if (Math.abs(depth - g.ref) > DEPTH_DEAD) { g.ref = depth; g.refT = now; } // moving: restart the stillness clock
+  else if (now - g.refT >= DEPTH_STILL_MS) { g.base += deadZone(depth - g.d0); g.d0 = depth; g.refT = now; }
+  return (g.base + deadZone(depth - g.d0)) * sign;
+}
+function carryPoint(f, cam, push, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
+  if (!gain || !push) return [f.x, f.y];
   const dx = f.x - cam.x, dy = f.y - cam.y, r = Math.hypot(dx, dy);
   if (r < 0.05) return [f.x, f.y]; // pointing at your feet: no direction to push along
-  const raw = (depth - d0) * sign, push = Math.sign(raw) * Math.max(0, Math.abs(raw) - DEPTH_DEAD);
   const r2 = Math.min(Math.max(r + gain * push, Math.min(r, 0.4)), Math.max(r, 12)); // not behind you, not miles off
   return [cam.x + (dx / r) * r2, cam.y + (dy / r) * r2];
 }
@@ -671,7 +683,8 @@ function onHands(list, cam) {
         select(item);
         const P = phys();
         grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
-          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null, d0: h.depth ?? null };
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };
+        anchorDepth(grabs[h.side], h.depth ?? null, now);
       } else if (puckReady) {
         aims[h.side] = null;
         goTo(near.userData.pano);
@@ -702,7 +715,7 @@ function onHands(list, cam) {
       const g = grabs[h.side];
       if (g && g.item === twist.item && h.floor) {
         g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
-        g.d0 = h.depth ?? null; // push / pull starts again from where the hand is now
+        anchorDepth(g, h.depth ?? null, performance.now()); // push / pull starts again from where the hand is now
       }
     }
     twist = null;
@@ -710,7 +723,8 @@ function onHands(list, cam) {
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      const [cx, cy] = carryPoint(h.floor, camera.position, g.d0, h.depth ?? null, depthSign());
+      g.push = handPush(g, h.depth ?? null, depthSign(), performance.now());
+      const [cx, cy] = carryPoint(h.floor, camera.position, g.push);
       moveHeld(g, h.side, cx + g.off.x, cy + g.off.y);
       checkFit();
     }
@@ -851,7 +865,8 @@ function tickPerf() {
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
     + `hands ${handsApi ? `${handsApi.stats?.src ?? ''} ${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
-      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}` : 'off'} · `
+      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}`
+      + `${Object.values(grabs).map((g) => (g.push ? ` · pushed ${(g.push * DEPTH_GAIN).toFixed(2)} m` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }

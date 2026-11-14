@@ -101,7 +101,8 @@ function placedItems() {
     const room = w.roomAt(o.position.x, o.position.y, o.userData.floor);
     const out = { kind: o.userData.kind, room: room ? room.label : null };
     if (typeof w.fitReport === 'function') {
-      const r = w.fitReport({ item: o });
+      const on = o.userData.on && w.furniture.children.find((s) => s.uuid === o.userData.on); // a plant on a table
+      const r = w.fitReport({ item: o, ignore: on ? [on] : [] });
       out.fits = r.ok;
       if (!r.ok || (r.warnings && r.warnings.length)) out.problems = [...r.reasons, ...(r.warnings || [])];
     }
@@ -282,10 +283,10 @@ const RUN = {
       w.addFurniture(kind);
       return { ok: true, placed: kind, where: 'in front of the user (exact pointing placement is not built yet)' };
     }
-    const pt = w.pointer && w.pointer.point, u = userPos();
-    const x = pt ? pt[0] : u.x + Math.cos(w.view.yaw) * 1.5, y = pt ? pt[1] : u.y + Math.sin(w.view.yaw) * 1.5;
-    return { ok: true, placed: kind, where: pt ? 'where the user points' : 'in front of the user',
-      result: (await w.placeObject(kind, x, y)) ?? null };
+    // no coordinates: S5 uses walkin.pointer when it points into a room, else 2 m ahead, and snaps onto tables
+    const res = (await w.placeObject(kind)) || {};
+    return { ok: !!res.fits, placed: res.fits ? kind : null, on: res.on || null, room: res.room || null,  // plain facts only
+      why: res.why || null, say: res.say || null };
   },
 
   light_here: () => lightHere(),

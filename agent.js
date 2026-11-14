@@ -201,10 +201,26 @@ function roomWindows(room) {
   return out;
 }
 
+// "Here" for advice is a spot on the floor. A wall or furniture hit sits on (or past) the room outline, which made
+// "what plant should go here?" while looking at a wall answer "not inside a room": step 0.4 m back toward the user,
+// and if that is still outside every room, fall back to where the user stands.
+function herePoint() {
+  const w = W(), p = w.pointer, u = userPos();
+  if (p && p.point) {
+    let x = p.point[0], y = p.point[1];
+    if (p.type !== 'floor' && u) {
+      const dx = u.x - x, dy = u.y - y, d = Math.hypot(dx, dy) || 1, s = Math.min(0.4, d);
+      x += (dx / d) * s; y += (dy / d) * s;
+    }
+    if (w.roomAt(x, y, (u && u.floor) || undefined)) return { x, y, spot: 'where the user points' };
+  }
+  return u ? { x: u.x, y: u.y, spot: 'where the user stands' } : null;
+}
+
 function lightHere() {
-  const w = W(), pt = w.pointer && w.pointer.point, u = userPos();
-  const x = pt ? pt[0] : u && u.x, y = pt ? pt[1] : u && u.y;
-  if (x == null) return { ok: false, reason: 'No position yet.' };
+  const w = W(), u = userPos(), here = herePoint();
+  if (!here) return { ok: false, reason: 'No position yet.' };
+  const { x, y } = here;
   const room = w.roomAt(x, y, (u && u.floor) || undefined);
   if (!room) return { ok: false, reason: 'That spot is not inside a room.' };
   const north = typeof w.house.north === 'number' ? w.house.north : null;
@@ -222,7 +238,7 @@ function lightHere() {
   const level = !windows.length ? 'low (no windows in this room)' : score > 0.6 ? 'bright' : score > 0.2 ? 'medium' : 'low';
   const lat = listingFacts && listingFacts.lat;
   return {
-    ok: true, room: room.label, spot: pt ? 'where the user points' : 'where the user stands', light: level,
+    ok: true, room: room.label, spot: here.spot, light: level,
     windows, window_count: windows.length,
     compass: north == null ? 'unknown: the scan is not north-aligned, so do not name a direction' : 'known',
     latitude: lat ? round(lat, 1) : null,

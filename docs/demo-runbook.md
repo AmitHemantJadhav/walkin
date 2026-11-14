@@ -164,4 +164,9 @@ walkin.suggestPlant()                       // reads the light here, picks a pla
 walkin.stageHouse('modern')                 // the whole house: 6 rooms, 28 pieces, ~0.2 s
 walkin.setStyle('cozy')                     // restyle everything already placed
 walkin.clearLayout()
+walkin.doorsFor('sofa')                     // every doorway, and whether a sofa gets through it
 ```
+
+`doorsFor` is how the door above was found, and it is the first thing to run on a house you have not
+rehearsed on. 314 Gale St, for instance, has exactly one: the 1.50 m living/dining doorway, 0.31 m
+from scan point 5.

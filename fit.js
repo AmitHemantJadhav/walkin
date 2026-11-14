@@ -293,6 +293,50 @@ export function checkRoom(room) {
     reasons: [...new Set(reports.flatMap((r) => r.reasons))] };
 }
 
+/**
+ * Every doorway in the house, and whether a given piece gets through it: `'as held'` if it fits at
+ * any angle, `'turned'` if only the narrow way round, `'never'` if it doesn't fit at all.
+ *
+ * Which is the question beat 5 of the demo asks, and the answer is not obvious: of La Mirada's
+ * twenty-two doorways exactly one is in the interesting middle for a sofa. Point this at a new house
+ * before rehearsing on it.
+ *
+ *   walkin.doorsFor('sofa').filter(d => d.fits === 'turned')
+ */
+export function doorsFor(kind = 'sofa') {
+  const w = window.walkin;
+  const spec = FURNITURE[kind];
+  if (!w || !spec) return [];
+  const narrow = Math.min(spec.w, spec.d), wide = Math.max(spec.w, spec.d);
+  const out = [];
+  for (const f of w.house.floors || []) {
+    for (const wl of f.walls || []) {
+      const [ax, ay] = wl.a, [bx, by] = wl.b;
+      const len = Math.hypot(bx - ax, by - ay);
+      if (len < 0.05) continue;
+      const dx = (bx - ax) / len, dy = (by - ay) / len, nx = -dy, ny = dx;
+      for (const o of wl.openings || []) {
+        if (o.at == null || (o.type && /window/i.test(o.type)) || (o.bottom || 0) >= 0.3) continue;
+        const width = o.width || 0.9;
+        const x = ax + dx * o.at * len, y = ay + dy * o.at * len;
+        const side = (s) => (w.roomAt(x + nx * s * 0.6, y + ny * s * 0.6, f.id) || {}).label || null;
+        const near = (w.house.panos || [])
+          .map((p) => ({ label: p.label, d: Math.hypot(p.pos[0] - x, p.pos[1] - y) }))
+          .sort((a, b) => a.d - b.d)[0];
+        out.push({
+          width: +width.toFixed(2),
+          fits: wide <= width - 0.02 ? 'as held' : narrow <= width - 0.02 ? 'turned' : 'never',
+          x: +x.toFixed(2), y: +y.toFixed(2),
+          between: [side(1), side(-1)],
+          scanPoint: near ? near.label : null,
+          metresAway: near ? +near.d.toFixed(2) : null,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => b.width - a.width);
+}
+
 // ------------------------------------------------------------------ show it in the viewer
 // app.js writes the room-outline result into #fit; this adds the rest on the line below it.
 (function start(tries = 0) {
@@ -303,6 +347,7 @@ export function checkRoom(room) {
   window.walkin.fitReport = fitReport;
   window.walkin.checkRoom = checkRoom;
   window.walkin.fitLine = fitLine;
+  window.walkin.doorsFor = doorsFor;
 
   const host = document.getElementById('fit');
   if (!host) return;

@@ -9,6 +9,26 @@ const SAVE_MS = 700;                         // how long to wait after the last 
 const key = (model) => `walkin.layout.${model}`;
 const r2 = (v) => Math.round(v * 1000) / 1000;
 
+/**
+ * The pieces, and what each one stands on. The link has to be an index into this list: uuids are new
+ * every reload, so a stored uuid means nothing afterwards. Without it a restored television and its
+ * stand each report the other as a collision and neither can be picked up.
+ */
+function items(w) {
+  const kids = w.furniture.children.filter((o) => o.userData.kind);
+  const at = new Map(kids.map((o, i) => [o.uuid, i]));
+  return kids.map((o) => {
+    const row = {
+      kind: o.userData.kind,
+      p: [r2(o.position.x), r2(o.position.y), r2(o.position.z)],
+      rot: r2(o.rotation.z),
+      floor: o.userData.floor || null,
+    };
+    if (o.userData.on && at.has(o.userData.on)) row.on = at.get(o.userData.on);
+    return row;
+  });
+}
+
 /** Everything in the scene, as a plain object you can JSON.stringify. */
 export function saveLayout() {
   const w = window.walkin;
@@ -17,12 +37,7 @@ export function saveLayout() {
     v: VERSION,
     model: w.house.model,
     saved: new Date().toISOString(),
-    items: w.furniture.children.filter((o) => o.userData.kind).map((o) => ({
-      kind: o.userData.kind,
-      p: [r2(o.position.x), r2(o.position.y), r2(o.position.z)],
-      rot: r2(o.rotation.z),
-      floor: o.userData.floor || null,
-    })),
+    items: items(w),
     // wall materials (A4). Only ones with a plain URL: a generated tile is usually a blob: or data:
     // URL that means nothing after a reload, and a huge data: URL would blow the localStorage quota.
     walls: (typeof w.wallMaterials === 'function' ? w.wallMaterials() : [])
@@ -49,11 +64,13 @@ export function loadLayout(data, { replace = true } = {}) {
   if (replace) for (const o of [...w.furniture.children]) w.furniture.remove(o);
 
   const skipped = [];
+  const made = [];                             // same order as doc.items, null where one was skipped
   let added = 0;
   for (const it of doc.items) {
-    if (!FURNITURE[it.kind]) { skipped.push({ kind: it.kind, why: 'not in the catalog' }); continue; }
+    if (!FURNITURE[it.kind]) { skipped.push({ kind: it.kind, why: 'not in the catalog' }); made.push(null); continue; }
     if (!Array.isArray(it.p) || it.p.length < 3 || it.p.some((v) => typeof v !== 'number' || !isFinite(v))) {
       skipped.push({ kind: it.kind, why: 'bad position' });
+      made.push(null);
       continue;
     }
     w.addFurniture(it.kind);
@@ -61,8 +78,23 @@ export function loadLayout(data, { replace = true } = {}) {
     obj.position.set(it.p[0], it.p[1], it.p[2]);
     obj.rotation.z = typeof it.rot === 'number' ? it.rot : 0;
     obj.userData.floor = it.floor || (w.current && w.current.floor);
+    made.push(obj);
     added++;
   }
+  // Put the support links back. A saved index is exact; a layout saved before we stored them (or one
+  // whose support was skipped) falls back to working it out from the geometry.
+  doc.items.forEach((it, i) => {
+    const obj = made[i];
+    if (!obj) return;
+    const by = typeof it.on === 'number' ? made[it.on] : null;
+    obj.userData.on = by ? by.uuid
+      : (typeof w.supportUnder === 'function' ? ((w.supportUnder(obj) || {}).uuid || null) : null);
+    // where it drops to if whatever it is standing on is deleted: the floor its support stands on,
+    // or its own height if it is already on the floor
+    const sup = by || (obj.userData.on
+      ? w.furniture.children.find((o) => o.uuid === obj.userData.on) : null);
+    obj.userData.z0 = sup ? sup.position.z : obj.position.z;
+  });
   if (w.select) w.select(null);
 
   let walls = 0;

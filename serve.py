@@ -201,7 +201,9 @@ def mock_gemini(req, model):
     rules = [(r"wallpaper|brick|paint|wall", ("set_wall_material", {"description": "red brick with light grey mortar", "tile_metres": 0.9})),
              (r"plant", ("light_here", {})),
              (r"whole house|entire house|every room|all (the )?rooms", ("stage_house", {})),
-             (r"stage|furnish", ("stage_room", {"style": "modern bedroom"})),
+             # pass the user's own words through as the style: staging parses a palette and a room type
+             # out of free text, so "cosy living room" stages a living room and not a fixed bedroom
+             (r"stage|furnish", ("stage_room", {"style": words.strip()[:60] or "modern"})),
              (r"take me|go to|walk to", ("go_to", {"room": "kitchen"})),
              (r"sofa|couch", ("add_furniture", {"kind": "sofa"})),
              (r"bed\b", ("add_furniture", {"kind": "queen"}))]

@@ -150,7 +150,25 @@ function step(item, st, tx, ty, trot, walls) {
   const sub = Math.max(0.03, Math.min(spec.w, spec.d) * 0.3);   // never step more than a third of the piece
   const n = Math.max(1, Math.ceil(dist / sub));
 
-  /** Walk along (ax, ay) in n sub-steps, stopping before the first one that is blocked. */
+  // A piece that is already overlapping something - a layout saved before any of this existed, or a
+  // placement a centimetre inside a wall - must not be frozen there. Let it move, preferring any step
+  // that gets it out.
+  if (blockedBy(fp(item, st.x, st.y, st.rot), item, walls)) {
+    for (const f of [1, 0.5, 0.25]) {
+      if (!blockedBy(fp(item, st.x + dx * f, st.y + dy * f, st.rot), item, walls)) {
+        st.x += dx * f; st.y += dy * f;
+        return hit;
+      }
+    }
+    st.x += dx; st.y += dy;                                     // still stuck: go where it was asked
+    return { kind: 'overlapping' };
+  }
+
+  /**
+   * Walk along (ax, ay) in `steps` sub-steps, stopping before the first blocked one, then halving the
+   * remaining sub-step a few times so a piece can come to rest touching a wall rather than a sub-step
+   * short of it.
+   */
   function sweep(ax, ay, steps) {
     const sx = ax / steps, sy = ay / steps;
     let moved = 0, blocked = null;
@@ -161,6 +179,13 @@ function step(item, st, tx, ty, trot, walls) {
       st.y += sy;
       moved++;
     }
+    if (blocked) {                                        // close the last gap
+      let hx = sx / 2, hy = sy / 2;
+      for (let i = 0; i < 3; i++) {
+        if (!blockedBy(fp(item, st.x + hx, st.y + hy, st.rot), item, walls)) { st.x += hx; st.y += hy; }
+        hx /= 2; hy /= 2;
+      }
+    }
     return { moved, blocked };
   }
 
@@ -168,12 +193,20 @@ function step(item, st, tx, ty, trot, walls) {
   if (!first.blocked) return hit;
   hit = first.blocked;
 
-  // slide what is left of the move along whatever stopped it
-  const left = 1 - first.moved / n;
-  if (left > 0.01 && first.blocked.kind === 'wall') {
-    const [ux, uy] = first.blocked.dir;
-    const along = (dx * ux + dy * uy) * left;
-    if (Math.abs(along) > 1e-4) sweep(ux * along, uy * along, Math.max(1, Math.ceil(Math.abs(along) / sub)));
+  // slide what is left of the move along whatever stopped it: a wall has a direction of its own, and for
+  // another piece the tangent at the contact is the nearest thing to one
+  const left = Math.max(0.15, 1 - first.moved / n);
+  let ux = 0, uy = 0;
+  if (first.blocked.kind === 'wall') {
+    [ux, uy] = first.blocked.dir;
+  } else if (first.blocked.item) {
+    const nx2 = st.x - first.blocked.item.position.x, ny2 = st.y - first.blocked.item.position.y;
+    const len2 = Math.hypot(nx2, ny2) || 1;
+    ux = -ny2 / len2; uy = nx2 / len2;                    // perpendicular to the line between centres
+  }
+  const along = (dx * ux + dy * uy) * left;
+  if (Math.abs(along) > 1e-4) {
+    sweep(ux * along, uy * along, Math.max(1, Math.ceil(Math.abs(along) / sub)));
   }
   return hit;
 }
@@ -229,6 +262,7 @@ export function grab(item, handId = 'hand', worldPoint = null) {
     yaw: item.rotation.z });
   const st = ensure(item);
   st.sliding = false;
+  st.pushT = performance.now();   // held means carried: never treat the hand running ahead as a placement
   return true;
 }
 
@@ -238,6 +272,8 @@ export function moveTarget(handId, point, yaw) {
   if (!h || !point) return false;
   h.target = [point[0], point[1]];
   if (typeof yaw === 'number') h.yaw = yaw;
+  const st = state.get(h.item);
+  if (st) st.pushT = performance.now();
   return true;
 }
 
@@ -317,7 +353,7 @@ function frame() {
     let trot = held && typeof held.yaw === 'number' ? held.yaw : item.rotation.z;
 
     const jump = Math.hypot(tx - st.x, ty - st.y);
-    const pushing = now - (st.pushT || 0) < SETTLED;
+    const pushing = !!held || now - (st.pushT || 0) < SETTLED;
     if (jump > TELEPORT && !pushing) {                    // a placement, not a push: take it as given
       stats.teleports++;
       st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;

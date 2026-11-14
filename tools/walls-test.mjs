@@ -63,7 +63,6 @@ window.walkin = { house, scene, roomAt: () => null, occluderMesh: obj,
 
 const walls = await load('walls.js');
 const off = await load('walls.js', '?wallfit=off');
-const H = 2.7 - 0.04;   // walls.js height with roomAt() unknown
 
 let fails = 0, faces = 0, moved = 0, maxDiff = 0, returns = 0;
 const bad = (what) => { fails++; if (fails <= 8) console.log('FAIL', what); };
@@ -78,7 +77,8 @@ for (const [index, w] of f.walls.entries()) {
     const r = await walls.setWallMaterial({ floor: f.id, index, normal }, 'tile.png', 1);
     if (!r.ok) { if (r.why !== 'that wall is all doorway') bad(`#${index}: ${r.why}`); continue; }
     faces++;
-    const want = wallOffset(ref, w, normal, floorZ, H).offset;
+    const want = wallOffset(ref, w, normal, floorZ, r.height).offset;   // paint gaps: the height is the scanned ceiling now
+    if (r.height < 2.2 || r.height > 4) bad(`#${index}: paper height ${r.height}`);
     maxDiff = Math.max(maxDiff, Math.abs(r.fit.offset - want));
     if (Math.abs(r.fit.offset - want) > 0.001) bad(`#${index} side ${s}: offset ${r.fit.offset}, wallfit.js says ${want}`);
     if (r.fit.offset < 0.08 - 1e-9 || r.fit.offset > 0.25 + 1e-9) bad(`#${index}: offset ${r.fit.offset} outside 8-25 cm`);

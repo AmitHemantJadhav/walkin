@@ -52,6 +52,11 @@ const isFlat = (kind) => !!(FURNITURE[kind] || {}).flat;     // a rug is walked 
  * inside the room, plus the opening's width.
  */
 export function doorways(room, house) {
+  return openings(room, house).filter((o) => o.kind === 'door');
+}
+
+/** Every opening (doors and windows) on a wall bordering the room, with the floor it opens onto. */
+export function openings(room, house) {
   const out = [];
   for (const f of house.floors || []) {
     if (room.floor && f.id && f.id !== room.floor) continue;
@@ -62,8 +67,8 @@ export function doorways(room, house) {
       const dx = (bx - ax) / len, dy = (by - ay) / len;
       const nx = -dy, ny = dx;
       for (const o of w.openings || []) {
-        if (o.type && /window/i.test(o.type)) continue;          // you don't walk through a window
         if (o.at == null) continue;
+        const kind = o.type && /window/i.test(o.type) ? 'window' : 'door';
         const cx = ax + dx * o.at * len, cy = ay + dy * o.at * len;
         const width = o.width || 0.9;
         for (const s of [1, -1]) {                               // the side that is inside this room
@@ -77,7 +82,7 @@ export function doorways(room, house) {
             [cx + dx * hw + ix * DOOR_CLEAR, cy + dy * hw + iy * DOOR_CLEAR],
             [cx - dx * hw + ix * DOOR_CLEAR, cy - dy * hw + iy * DOOR_CLEAR],
           ];
-          out.push({ x: px, y: py, width, wall: w, zone, inward: [ix, iy] });
+          out.push({ kind, x: px, y: py, width, wall: w, zone, inward: [ix, iy] });
         }
       }
     }

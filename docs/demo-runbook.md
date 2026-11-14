@@ -105,6 +105,10 @@ Six rooms, 28 pieces, about a fifth of a second. Then walk through it.
   go. `walkin.physics.enabled = false` in the console turns it off if it ever gets in the way.
 - **Don't demo on a room with no polygon.** Three rooms in La Mirada have none from the API
   (`Room`, 0.1 m²); staging politely refuses them rather than guessing.
+- **Paint walls in the Empty view, not "As scanned".** The quad sits 8 cm into the room, so over the
+  as-scanned photo it covers whatever was standing against that wall — the owner's sofa back, a
+  lamp. It still works and still re-shades, it just looks like wallpaper over furniture. Empty is
+  the default, so this only bites if you've toggled.
 - **A wall painted with a *generated* tile does not survive a reload.** The tile is a `data:` URL
   and we deliberately don't put megabytes of base64 in localStorage. A tile from
   `models/textures/` does survive.

@@ -18,8 +18,8 @@ Each one is explained where it belongs below; this is the list to read on the wa
    through a coffee table: dragged straight at the door it travels 24 cm and stops.
 4. **Beat 5 is silent unless #54 is merged.** `physics.js` computes the sentence; the only thing that
    speaks it is eleven lines in `agent.js` on that PR.
-5. **Beat 7 works by voice again** — *"furnish the whole house"* does the house, not the room you
-   are in. `walkin.stageHouse('modern')` is the fallback if the voice path misbehaves.
+5. **Beat 7 needs #60 merged** to be a real tool call; without it there is a safety net that works
+   in mock mode. `walkin.stageHouse('modern')` always does the house.
 6. **Don't stand at scan point 38 or 16.** They are inside rooms the scan gives no outline, so
    staging refuses — and 38 is 0.63 m from the doorway beat 5 needs.
 
@@ -186,18 +186,18 @@ Six rooms, 32 pieces, and John reads it back:
 
 Then walk through it.
 
-**Why this works, and when it might not.** John still has no `stage_house` tool (#56); his only
-staging tool is `stage_room`, so the request arrives at `stageRoom` with the sentence as the style,
-and `staging.js` honours what was asked — *whole house*, *entire home*, *every room*, *all the rooms*
-— instead of furnishing whichever room you happen to be standing in. ("Stage this room like the rest
-of the house" is not that, and stages one room.)
+**Check #60 is merged.** It gives John a real `stage_house` tool, which is the version of this beat
+that doesn't depend on the model's mood. With it, *"furnish the whole house"* is one tool call.
 
-That depends on the sentence surviving the trip. **In mock mode it does**, verified: 6 rooms, 32
-pieces. **With a real Gemini key it depends on the model** — if it tidies the style down to
-`"modern"` before calling the tool, the words are gone and you get one room. It may also just call
-`stage_room` six times, which also works and is slower. Try it once on the day with the real key; if
-it gives you one room, say the line and press **`walkin.stageHouse('modern')`**, which always does
-the house. The real fix is the tool in #56.
+Without it there is still a safety net in `staging.js`: `stage_room` is then John's only staging
+tool, so the sentence arrives as the *style*, and staging honours what was asked — *whole house*,
+*entire home*, *every room*, *all the rooms* — instead of furnishing whichever room you happen to be
+standing in. ("Stage this room like the rest of the house" is not that, and stages one room.) That
+works in mock mode, verified at 6 rooms and 32 pieces, but **with a real key it depends on the model
+passing your words through**: tidy the style down to `"modern"` and the words are gone.
+
+Either way, **`walkin.stageHouse('modern')`** always does the house, and is the thing to press if the
+spoken line gives you one room.
 
 Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
 halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass

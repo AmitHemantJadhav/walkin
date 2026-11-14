@@ -30,7 +30,9 @@ while true; do
   printf '\n===== %s (exit %s) =====\n%s\n' "$START" "$CODE" "$OUT" | tail -c 30000 >> "$LOG"
   echo "[$START] $(echo "$OUT" | tail -n 1 | cut -c1-160)"
 
-  if echo "$OUT" | grep -qiE "usage limit|limit reached|limit will reset|out of (extra )?usage|rate.?limit"; then
+  # Only the CLI's own limit notice counts. It is the whole (short) reply, so check the last line only (a normal cycle ends with its GOAL line):
+  # grepping the full reply fired a false 5-hour hand-off whenever an agent merely wrote about API "rate limits".
+  if echo "$OUT" | tail -n 1 | grep -qiE "usage limit|limit reached|hit your (usage )?limit|limit will reset|resets (at|in) |out of (extra )?usage"; then
     if [ "$LIMITED" = 0 ]; then scripts/handoff.sh "$WHO"; LIMITED=1; fi
     sleep 1800                                   # check again every 30 min until the limit resets
     continue

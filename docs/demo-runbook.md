@@ -140,11 +140,25 @@ on its − face and only 8% on its +. Once #61 lands these all improve, so this 
 
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 
-**Move the coffee table first.** Beat 2 just put one directly in front of the sofa, because that is
-what a living room looks like, and a sofa cannot pass through a coffee table: dragged straight at the
-door it travels **24 cm** and stops. Grab the coffee table and pull it aside — one grab, it is light
-and it moves easily — or run this beat on a room you haven't staged. (Why the sofa doesn't just shove
-it out of the way: #57.)
+**Clear the path first — and it is three pieces, not one.** Beat 2 fills the living room, and the
+staged sofa cannot reach the front door through it. Dragged straight at the door it travels **24 cm**
+and stops. Taking the obstacles out one at a time, against `main`, from the position beat 2 leaves the
+sofa in (4.88 m from the door):
+
+| cleared | the sofa travels | and stops |
+|---|---|---|
+| nothing | **0.24 m** | 4.64 m from the door |
+| coffee table | 1.38 m | 3.58 m from the door |
+| + armchair | 2.85 m | 2.28 m from the door |
+| **+ tv stand and television** | **4.31 m** | **1.40 m — a clear run at the door** |
+
+In the same room with *only* the sofa in it, the identical drag travels 4.27 m, so this is the
+furniture and not the physics. **The coffee table alone is not enough**, which is what this page used
+to say: pull the **coffee table, the armchair and the tv stand** aside, or run beat 5 on a room you
+haven't staged. The rug makes no difference — rugs are `flat`, and the solver ignores them.
+
+Easiest on stage: **do beat 5 before beat 2**, in the empty living room, where the sofa has a clear
+run from the start. (Why the sofa doesn't just shove the coffee table out of the way: #57.)
 
 **Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
 La Mirada has three out of twenty-two: the 2.50 m opening between the living and dining rooms (too

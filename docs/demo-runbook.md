@@ -162,9 +162,18 @@ halls and closets have no set, and a garage or a basement is never furnished by 
 even when it is big enough — a sofa in the garage is worse than an empty garage. Ask for one by
 name — *"stage this as a living room"* — and it will try anyway.
 
-Other houses, measured the same way: **10319 Dunvegan Way** 19 pieces across 4 rooms (its 31 m²
-kitchen is open-plan, so it gets the living set, television and all), **314 Gale St** 26 across 4.
 Both La Mirada living rooms have a television, each one squarely facing its sofa.
+
+Other houses, measured the same way — and the numbers depend on whether **#51** is merged, because
+that is what lets a big open-plan kitchen take the living set:
+
+| | with #51 | without |
+|---|---|---|
+| 10319 Dunvegan Way | 19 pieces, 4 rooms (its 31 m² kitchen gets the living set, television and all) | 12 pieces, 3 rooms |
+| 314 Gale St | 26 pieces, 4 rooms | 19 pieces, 4 rooms |
+
+La Mirada is 32 either way. If the counts come out low on the day, that is the reason — check
+whether #51 landed before assuming something is broken.
 
 ---
 
@@ -173,8 +182,14 @@ Both La Mirada living rooms have a television, each one squarely facing its sofa
 - **Don't reload** without `&layout=none` unless you want last night's furniture back.
 - **Don't drag a piece into a corner it can't leave.** Physics is honest: if it won't fit, it won't
   go. `walkin.physics.enabled = false` in the console turns it off if it ever gets in the way.
-- **Don't demo on a room with no polygon.** Three rooms in La Mirada have none from the API
-  (`Room`, 0.1 m²); staging politely refuses them rather than guessing.
+- **Two scan points in La Mirada are in no room at all: 38 and 16.** Three of its seventeen rooms come
+  back from the API with a label of `Room` and no boundary — 12.9 m², 8.6 m² and 0.1 m² — so standing
+  in one, *"stage this"* answers *"not in a room"* and the button flashes `⌂ not in a room`. It is
+  refusing rather than guessing, which is right, but it looks broken from the audience.
+
+  **38 is the one to watch**: it is 0.63 m from the 1.15 m doorway beat 5 uses, so it is easy to land
+  on by accident. Stand at **37** instead — it is 0.47 m from the same door and is in the living room.
+  The other thirty-seven scan points are all inside a room.
 - **Paint walls in the Empty view, not "As scanned".** The quad sits 8 cm into the room, so over the
   as-scanned photo it covers whatever was standing against that wall — the owner's sofa back, a
   lamp. It still works and still re-shades, it just looks like wallpaper over furniture. Empty is

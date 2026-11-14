@@ -20,7 +20,8 @@ Rules:
 - "this wall", "here", "this room" mean what the user points at or the room they stand in: see pointer and current_room in describe_house.
 - Act first, then confirm briefly what you did and whether it fits. If a tool says a feature is unavailable, say so plainly.
 - Plant questions ("what plant should go here?"): call light_here, pick one plant that suits that light, call plant_preview,
-  then place_object with the matching kind. Give the reason in a few words (e.g. "bright light from the big window").
+  then place_object with the closest catalog kind (plant for a tall floor plant; plantsmall, plantfern or plantsucculent
+  for small ones). Give the reason in a few words (e.g. "bright light from the big window").
   Only name a compass direction if light_here gives one.`;
 
 const TOOLS = [{
@@ -48,7 +49,7 @@ const TOOLS = [{
     { name: 'place_object',
       description: 'Place a small object (plant, lamp, rug) where the user points, or 1.5 m in front of them.',
       parameters: { type: 'object', properties: {
-        kind: { type: 'string', description: 'Object key, e.g. plant-monstera, plant-snake, lamp, rug.' } },
+        kind: { type: 'string', description: 'Catalog key from describe_house, e.g. plant (tall floor plant), plantsmall, plantfern, plantsucculent, floorlamp, rug.' } },
         required: ['kind'] } },
     { name: 'light_here',
       description: 'How much daylight reaches the spot the user points at (or stands on): the windows of that room with sizes, distance and which way they face, the house latitude, and a light level.',
@@ -258,10 +259,18 @@ const RUN = {
 
   async place_object({ kind }) {
     const w = W();
-    if (typeof w.placeObject !== 'function') return unavailable('placeObject', 'shaurya');
+    if (!w.FURNITURE[kind]) {
+      const small = Object.keys(w.FURNITURE).filter((k) => /plant|lamp|rug|succulent|fern/.test(k));
+      return { ok: false, reason: `Unknown kind. Small objects in the catalog: ${small.join(', ') || 'none yet'}.` };
+    }
+    if (typeof w.placeObject !== 'function') { // until S5 lands: same piece, 2 m in front of the user
+      w.addFurniture(kind);
+      return { ok: true, placed: kind, where: 'in front of the user (exact pointing placement is not built yet)' };
+    }
     const pt = w.pointer && w.pointer.point, u = userPos();
     const x = pt ? pt[0] : u.x + Math.cos(w.view.yaw) * 1.5, y = pt ? pt[1] : u.y + Math.sin(w.view.yaw) * 1.5;
-    return { ok: true, placed: kind, result: (await w.placeObject(kind, x, y)) ?? null };
+    return { ok: true, placed: kind, where: pt ? 'where the user points' : 'in front of the user',
+      result: (await w.placeObject(kind, x, y)) ?? null };
   },
 
   light_here: () => lightHere(),

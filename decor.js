@@ -1021,10 +1021,38 @@ async function paintFace(face, url, tile) {
   return r;
 }
 
-/** decorate_room: a themed makeover of the room the user is in, in one call, all procedural first. */
-export async function decorateRoom({ theme, palette, poster_ideas } = {}) {
+/** renovate_house: furnish the whole house in a style, then give every living space the themed makeover. */
+const LIVING_ROOMS = /living|family|dining|bed|office|study|den|kitchen|nursery|kid|play/i;
+export async function renovateHouse({ theme = 'cosy', palette, poster_ideas } = {}) {
   const w = W(), t0 = performance.now();
-  const room = currentRoom();
+  const floor = w.current && w.current.floor;
+  const rooms = (w.house.rooms || []).filter((r) => (!floor || !r.floor || r.floor === floor) && LIVING_ROOMS.test(r.label || ''));
+  if (!rooms.length) return { ok: false, reason: 'No living rooms, bedrooms or kitchen found on this floor.' };
+  let staged = null;
+  if (typeof w.stageHouse === 'function') {
+    try { staged = await w.stageHouse(resolveTheme(theme, palette, poster_ideas).style || theme); } catch (e) { console.warn('[decor] stageHouse failed', e); }
+  }
+  const here = currentRoom(), did = [];
+  // the room they stand in first (it gets the full gallery); the others one picture each, so the image
+  // generator isn't asked for a dozen posters at once
+  const order = [...rooms].sort((a, b) => (b === here) - (a === here));
+  for (const room of order) {
+    try {
+      const r = await decorateRoom({ theme, palette, poster_ideas, room, maxPosters: room === here ? 3 : 1 });
+      if (r && r.ok) did.push(room.label);
+    } catch (e) { console.warn('[decor] room failed', room.label, e); }
+  }
+  const pieces = w.furniture.children.filter((o) => o.userData.kind).length;
+  return { ok: did.length > 0, theme, rooms: did, furniture_pieces: pieces, staged: staged && (staged.say || staged.placed),
+    seconds: +((performance.now() - t0) / 1000).toFixed(1),
+    say: `Renovated ${did.length} rooms (${[...new Set(did)].join(', ')}) in a ${theme} style: furnished, painted, with rugs, plants and pictures.` };
+}
+
+/** decorate_room: a themed makeover of the room the user is in, in one call, all procedural first. */
+export async function decorateRoom({ theme, palette, poster_ideas, room: forRoom = null, maxPosters = 3 } = {}) {
+  const w = W(), t0 = performance.now();
+  const here = currentRoom();
+  const room = forRoom || here;
   if (!room) return { ok: false, reason: 'Stand inside a room first (the user is between rooms).' };
   const T = resolveTheme(theme, palette, poster_ideas);
   const faces = roomFaces(room);
@@ -1035,8 +1063,9 @@ export async function decorateRoom({ theme, palette, poster_ideas } = {}) {
   const done = [];
 
   // 1. walls: the one they face is the accent (else the longest, emptiest); soft colour on the rest
-  const pw = w.pointer && w.pointer.type === 'wall' && w.pointer.wall;
-  const ahead = pw ? { index: pw.index } : wallInDirection(0);
+  // the wall they face only means something in the room they stand in; elsewhere the longest, emptiest wall
+  const pw = room === here && w.pointer && w.pointer.type === 'wall' && w.pointer.wall;
+  const ahead = room !== here ? null : pw ? { index: pw.index } : wallInDirection(0);
   const holeLen = (f) => f.holes.reduce((s, h) => s + (h.u1 - h.u0), 0);
   let accent = ahead && faces.find((f) => f.index === ahead.index);
   if (!accent || accent.len - holeLen(accent) < 1.5) accent = [...faces].sort((a, b) => (b.len - holeLen(b)) - (a.len - holeLen(a)))[0];
@@ -1064,7 +1093,15 @@ export async function decorateRoom({ theme, palette, poster_ideas } = {}) {
     if (!kinds().some((k) => k === 'rug' || k === 'ruground')) {
       try { if (centre) w.placeObject('rug', centre[0], centre[1], { onFloor: true }); } catch (e) { /* no room for a rug */ }
     }
-    if (!kinds().some((k) => /plant|cactus/.test(k))) { try { w.placeObject('plant'); } catch (e) { /* fine */ } }
+    if (!kinds().some((k) => /plant|cactus/.test(k))) {
+      try {
+        // in another room: towards its first corner (placeObject with no spot uses where the user points)
+        if (room !== here && centre && room.poly && room.poly.length) {
+          const c0 = room.poly[0];
+          w.placeObject('plant', centre[0] + (c0[0] - centre[0]) * 0.7, centre[1] + (c0[1] - centre[1]) * 0.7);
+        } else w.placeObject('plant');
+      } catch (e) { /* fine */ }
+    }
   }
   for (const o of w.furniture.children) if (!before.has(o)) added.push(o);
   const recoloured = [];
@@ -1080,7 +1117,7 @@ export async function decorateRoom({ theme, palette, poster_ideas } = {}) {
   // 3. pictures: a gallery of three on the accent wall (big one in the middle), else wherever there is room
   const hung = [];
   if (accent) {
-    const posters = T.posters.slice(0, 3);
+    const posters = T.posters.slice(0, Math.max(0, Math.min(3, maxPosters)));
     const sizes = [[0.6, 0.85], [0.42, 0.6], [0.42, 0.6]];
     const mid = accent.len / 2;
     const bed = anchorAbove('bed');
@@ -1204,6 +1241,13 @@ const declarations = [
       palette: { type: 'array', items: { type: 'string' }, description: 'Optional for themes not listed above: 2-3 colours (#hex or names), main colour first.' },
       poster_ideas: { type: 'array', items: { type: 'string' }, description: 'Optional for themes not listed above: up to 3 short picture descriptions (no real faces).' } },
       required: ['theme'] } },
+  { name: 'renovate_house',
+    description: 'Renovate or redecorate the WHOLE house in one go for a style or a household: furnishes every room, then paints, recolours, adds rugs, plants and pictures in every living room, bedroom, dining room and kitchen. Use it for "renovate the whole house …", "make the house cosy for a family", "do up every room as …".',
+    parameters: { type: 'object', properties: {
+      theme: { type: 'string', description: 'Style or household in the user\'s words, e.g. "cosy family home", "Scandinavian", "beach house".' },
+      palette: { type: 'array', items: { type: 'string' }, description: 'Optional: 2-3 colours, main first.' },
+      poster_ideas: { type: 'array', items: { type: 'string' }, description: 'Optional: picture ideas (no real faces).' } },
+      required: ['theme'] } },
   { name: 'remove_decor',
     description: 'Take decor back off: the pictures/posters, the wall paint and wallpaper, the furniture colours, or all of it (the whole themed makeover).',
     parameters: { type: 'object', properties: {
@@ -1214,7 +1258,8 @@ const declarations = [
 const rules = `- Paint or wallpaper on a wall ("paint this wall sage green", "striped navy wallpaper") -> set_wall_material once, with pattern and colors when the user names them.
 - "Decorate this room as / for / like a …", a theme or a fan room ("as if I'm a Ronaldo fan") -> decorate_room with that theme, once, nothing else; then say its summary in one or two sentences.
 - "Put up / hang a poster, frame, picture, print or photo" -> hang_picture. For a real person, describe a poster in their style (jersey, number, stadium, trophy) without their face. Never refuse a decor request.
-- "Remove / take down the pictures" -> remove_decor with what="pictures"; "undo the makeover" -> what="all".`;
+- "Remove / take down the pictures" -> remove_decor with what="pictures"; "undo the makeover" -> what="all".
+- The WHOLE house ("renovate the whole house", "make every room cosy for a family", "redo the house as …") -> renovate_house once with the theme, not stage_house; then say its summary.`;
 
 (window.walkinTools = window.walkinTools || []).push({
   declarations,
@@ -1222,6 +1267,7 @@ const rules = `- Paint or wallpaper on a wall ("paint this wall sage green", "st
     set_wall_material: (a) => setWallFinish(a || {}),
     hang_picture: (a) => hangPicture(a || {}),
     decorate_room: (a) => decorateRoom(a || {}),
+    renovate_house: (a) => renovateHouse(a || {}),
     remove_decor: (a) => removeDecor(a || {}),
   },
   rules,
@@ -1231,6 +1277,6 @@ const rules = `- Paint or wallpaper on a wall ("paint this wall sage green", "st
   const w = window.walkin;
   if (!w || !w.scene) { if (tries < 600) setTimeout(() => start(tries + 1), 200); return; }
   w.scene.add(decorGroup);
-  w.decor = { pictures, hangPicture, decorateRoom, removeDecor, patternTile, setWallFinish, generateImage, imageStats,
+  w.decor = { pictures, hangPicture, decorateRoom, renovateHouse, removeDecor, patternTile, setWallFinish, generateImage, imageStats,
     themes: () => THEMES.map((t) => t.name) };
 })();

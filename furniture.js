@@ -5,13 +5,30 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+// `against` says how a piece wants to be placed when staging a room:
+//   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb' },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb' },
-  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb' },
-  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb' },
-  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb' },
-  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb' },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', against: 'wall' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', against: 'free' },
+  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', against: 'wall' },
+  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', against: 'wall' },
+  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', against: 'free' },
+  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', against: 'wall' },
+  // pieces a staged room needs
+  chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', against: 'small' },
+  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small' },
+  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small' },
+  coffeetable: { name: 'Coffee table', w: 1.1, d: 0.6, h: 0.42, model: 'tableCoffee.glb', against: 'free' },
+  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall' },
+  tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
+  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall' },
+  floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', against: 'small' },
+  rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true },
+  ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true },
+  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', against: 'small' },
+  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', against: 'small' },
+  plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
+  plantsucculent: { name: 'Succulent', w: 0.22, d: 0.2, h: 0.33, model: 'plantSmall3.glb', against: 'small' },
 };
 
 // Resolved against this module, not the page, so models/preview.html loads the same files as index.html.
@@ -120,8 +137,9 @@ const BUILDERS = {
 export function buildBoxes(kind) {
   const spec = FURNITURE[kind];
   const g = new THREE.Group();
-  const builder = BUILDERS[kind] || BUILDERS[kind === 'queen' || kind === 'king' ? 'bed' : 'table'];
-  builder(g, spec);
+  const builder = BUILDERS[kind] || (kind === 'queen' || kind === 'king' ? BUILDERS.bed : null);
+  if (builder) builder(g, spec);
+  else box(g, spec.w, spec.d, spec.h, 0, 0, 0, spec.flat ? M.fabric : M.cushion); // plain block until the model lands
   return g;
 }
 

@@ -10,6 +10,7 @@
   #legend { position: fixed; top: 10px; left: 10px; background: rgba(18,18,22,.8); padding: 10px 12px;
     border-radius: 12px; backdrop-filter: blur(8px); }
   #legend h1 { margin: 0 0 6px; font-size: 14px; }
+  #legend { max-height: 70vh; overflow: auto; font-size: 12px; }
   #legend div { color: #a9a5a0; }
   #legend b { color: #f4f2ee; }
   #legend .red { color: #ff5a5f; }
@@ -60,8 +61,9 @@ grid.rotation.x = Math.PI / 2;
 scene.add(grid);
 
 const kinds = Object.keys(FURNITURE);
-const COLS = 3, GAP = 3.2;
-const cell = (i) => [(i % COLS - (COLS - 1) / 2) * GAP, -(Math.floor(i / COLS) - 0.5) * GAP];
+const COLS = 5, GAP = 2.8;
+const ROWS = () => Math.ceil(kinds.length / COLS);
+const cell = (i) => [(i % COLS - (COLS - 1) / 2) * GAP, -(Math.floor(i / COLS) - (ROWS() - 1) / 2) * GAP];
 
 const world = new THREE.Group();
 scene.add(world);
@@ -98,7 +100,8 @@ function layout(useBoxes) {
 $list();
 function $list() {
   document.getElementById('list').innerHTML = kinds
-    .map((k) => `<div><b>${FURNITURE[k].name}</b> ${FURNITURE[k].w} × ${FURNITURE[k].d} × ${FURNITURE[k].h} m`
+    .map((k, i) => `<div><span style="opacity:.5">${i + 1}.</span> <b>${FURNITURE[k].name}</b>`
+      + ` ${FURNITURE[k].w} × ${FURNITURE[k].d} × ${FURNITURE[k].h} m`
       + ` <span style="opacity:.6">${FURNITURE[k].model || 'boxes'}</span></div>`).join('');
 }
 
@@ -126,9 +129,9 @@ let t = 0;
 function frame() {
   requestAnimationFrame(frame);
   if (spin) { t += 0.0035; mode = 'spin'; }
-  if (mode === 'top') camera.position.set(0, -0.001, 13);
-  else if (mode === 'three') camera.position.set(6.5, -7.5, 5.5);
-  else if (mode === 'front') camera.position.set(0, -9.5, 2.6);
+  if (mode === 'top') camera.position.set(0, -0.001, 17);
+  else if (mode === 'three') camera.position.set(9, -11, 8);
+  else if (mode === 'front') camera.position.set(0, -13, 3.2);
   else camera.position.set(Math.sin(t) * 9.5, -Math.cos(t) * 9.5, 5.2);
   camera.lookAt(mode === 'top' ? new THREE.Vector3(0, 0, 0) : target);
   renderer.render(scene, camera);

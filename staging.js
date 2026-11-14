@@ -213,19 +213,29 @@ const PLANS = {
       { ...inFrontOf(placedSofa, 1.4, side * 0.8), rot: placedSofa.rotation.z - Math.PI / 2 },
       { ...inFrontOf(placedSofa, 1.4, -side * 0.8), rot: placedSofa.rotation.z + Math.PI / 2 },
     ], { optional: true });
-    // the television goes on the wall the sofa looks at
+    // The television goes on the wall the sofa looks at. Centre of the wall first, because that is
+    // where a television goes, but an off-centre spot beats no television.
     const opposite = edges.filter((e) => Math.cos(e.facing - placedSofa.rotation.z) < -0.5)
       .sort((a, b) => b.len - a.len);
+    let stand = null;
     for (const e of opposite) {
-      const stand = P.tryPlace('tvstand', alongWall(e, 'tvstand', [0]), { optional: true });
-      if (stand) {
-        // The television goes ON the stand, so it needs placeObject, which knows about surfaces.
-        // tryPlace puts everything on the floor, and a floor-level TV inside a floor-level stand
-        // fails its own overlap check - which is why no staged room has ever had a television.
-        const tv = placeObject('tv', stand.position.x, stand.position.y, { rot: stand.rotation.z });
-        if (tv.fits) P.placed.push({ kind: 'tv', name: FURNITURE.tv.name, x: tv.x, y: tv.y });
-        break;
-      }
+      stand = P.tryPlace('tvstand', alongWall(e, 'tvstand', [0, 0.5, -0.5, 1, -1, 1.5, -1.5]), { optional: true });
+      if (stand) break;
+    }
+    // No facing wall will take it — an L-shaped room, or every candidate wall has a door in the middle,
+    // which is the case in La Mirada's big living room. Put it in front of the sofa instead, furthest
+    // first, which is where it would have ended up anyway.
+    if (!stand) {
+      stand = P.tryPlace('tvstand', [3.4, 3.0, 2.6, 2.2].flatMap((d) => [
+        inFrontOf(placedSofa, d), inFrontOf(placedSofa, d, 0.6), inFrontOf(placedSofa, d, -0.6),
+      ]), { optional: true });
+    }
+    if (stand) {
+      // The television goes ON the stand, so it needs placeObject, which knows about surfaces.
+      // tryPlace puts everything on the floor, and a floor-level TV inside a floor-level stand
+      // fails its own overlap check - which is why no staged room has ever had a television.
+      const tv = placeObject('tv', stand.position.x, stand.position.y, { rot: stand.rotation.z });
+      if (tv.fits) P.placed.push({ kind: 'tv', name: FURNITURE.tv.name, x: tv.x, y: tv.y });
     }
     // a plant at the end of the sofa first - that is where a stager puts one - then the corners
     const beside = FURNITURE.sofa.w / 2 + FURNITURE.plant.w / 2 + 0.15;

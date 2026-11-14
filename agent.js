@@ -6,7 +6,7 @@
 // Hooks that are not in the viewer yet (pointer, setWallMaterial, stageRoom, placeObject) are stubbed: the call is
 // logged and the model is told the feature is not available, so it says so instead of pretending.
 
-const MAX_ROUNDS = 3;      // tool-call rounds per question (R10: fewer, smaller calls)
+const MAX_ROUNDS = 4;      // tool-call rounds per question (R10: fewer, smaller calls)
 const MAX_TURNS = 16;      // history entries kept
 const VIEW_WIDTH = 512;    // px, screenshot sent when the user says "this" / "here"
 const DEICTIC = /\b(this|that|here|there|these|those)\b|\bwhat (am i|are we) looking at\b/i;
@@ -318,7 +318,7 @@ const RUN = {
   },
 
   async set_wall_material({ description, tile_metres }) {
-    const w = W(), pointed = w.pointer && w.pointer.wall;
+    const w = W(), ww = w.wakeWall, pointed = (ww && performance.now() - ww.at < 20000 && ww.wall) || (w.pointer && w.pointer.wall);
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
     // the wall pointed at; else the one straight ahead (cursor or gaze on the floor or a sofa is the usual miss)
     const wall = pointed || (w.wallAhead && w.wallAhead());
@@ -715,7 +715,10 @@ async function ask(text) {
     }
     trimHistory();
     await filler;
-    return say('That took too many steps. Try asking for one thing at a time.');
+    // out of rounds, but the last tool usually did the job: say its own sentence instead of an error
+    const lastSay = [...history].reverse().flatMap((c) => c.parts).map((p) => p.functionResponse && p.functionResponse.response)
+      .find((r) => r && r.say);
+    return say(lastSay ? spoken(lastSay.say) : 'Done.');
   } catch (e) {
     console.error('[agent]', e);
     history.length = mark; // drop the failed turn so the next question starts clean
@@ -927,11 +930,14 @@ function buildUI() {
   // holding it and that door is 1.15 m — turn it and it goes through"). John says it out loud, captioned in the
   // headset, so the "will my sofa fit through that door?" beat needs no model call and no key. At most one line per
   // 6 s, and never over another line or while he is answering.
-  let blockedAt = 0;
+  let blockedAt = -Infinity;
   addEventListener('walkin:blocked', (e) => {
     const reason = e.detail && e.detail.reason, now = performance.now();
     if (!reason || busy || talking > 0 || now - blockedAt < 6000) return;
     blockedAt = now;
-    say(`${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`);
+    const line = `${reason.charAt(0).toUpperCase()}${reason.slice(1)}.`;
+    const live = window.walkin && window.walkin.live;
+    if (live && live.isActive && live.isActive() && live.sayExact(line)) { setStatus(line); return; } // one voice, John's
+    say(line);
   });
 })();

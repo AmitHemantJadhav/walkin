@@ -95,6 +95,7 @@ export async function preflight({ quiet = false } = {}) {
 
   // ---------------------------------------------------------------- staging, without losing the room
   const saved = typeof w.saveLayout === 'function' ? w.saveLayout() : null;
+  let mine = null;                                   // the pieces preflight itself put down
   try {
     const here = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
     if (typeof w.stageRoom !== 'function') rows.push(no('staging', 'staging.js never loaded'));
@@ -103,6 +104,7 @@ export async function preflight({ quiet = false } = {}) {
       const t0 = performance.now();
       const r = w.stageRoom(here, 'modern');
       const ms = Math.round(performance.now() - t0);
+      mine = w.furniture.children.filter((o) => o.userData.kind);
       rows.push(r.placed.length
         ? ok('staging', `${r.placed.length} pieces in the ${(here.label || '').toLowerCase()} in ${ms} ms, ${r.fits ? 'all of it fits' : 'SOME OF IT DOES NOT FIT'}`)
         : no('staging', r.say));
@@ -205,8 +207,22 @@ export async function preflight({ quiet = false } = {}) {
   }
 
   // ---------------------------------------------------------------- put the room back
-  if (saved && typeof w.loadLayout === 'function') w.loadLayout(saved);
-  else if (typeof w.clearLayout === 'function') w.clearLayout();
+  // Unless somebody has been furnishing while this ran. ?preflight starts a second after the house
+  // is up, and a presenter who says "stage this as a cosy living room" straight away would otherwise
+  // have it undone by a restore they never asked for. If the room is not as this left it, leave it.
+  // Compare the pieces themselves, not how many there are: staging the same room again gives the same
+  // count and different objects, which is exactly the case that matters.
+  const now = w.furniture.children.filter((o) => o.userData.kind);
+  const untouched = mine === null
+    || (now.length === mine.length && mine.every((o) => now.includes(o)));
+  if (!untouched) {
+    rows.push(ok('the room', `left alone — the furniture changed while this was running (${now.length} `
+      + `piece${now.length === 1 ? '' : 's'} there now), so it was not put back`));
+  } else if (saved && typeof w.loadLayout === 'function') {
+    w.loadLayout(saved);
+  } else if (typeof w.clearLayout === 'function') {
+    w.clearLayout();
+  }
 
   if (!quiet) print(rows);
   return rows;

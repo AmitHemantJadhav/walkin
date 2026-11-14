@@ -237,10 +237,11 @@ const PLANS = {
       const tv = placeObject('tv', stand.position.x, stand.position.y, { rot: stand.rotation.z });
       if (tv.fits) P.placed.push({ kind: 'tv', name: FURNITURE.tv.name, x: tv.x, y: tv.y });
     }
-    // a plant at the end of the sofa first - that is where a stager puts one - then the corners
-    const beside = FURNITURE.sofa.w / 2 + FURNITURE.plant.w / 2 + 0.15;
+    // a plant at the end of the sofa first - that is where a stager puts one - then the corners.
+    // (Not `beside`: that is a function in this module, and shadowing it here is asking for trouble.)
+    const endOfSofa = FURNITURE.sofa.w / 2 + FURNITURE.plant.w / 2 + 0.15;
     P.tryPlace('plant', [
-      beside2(placedSofa, beside), beside2(placedSofa, -beside),
+      beside2(placedSofa, endOfSofa), beside2(placedSofa, -endOfSofa),
       ...spotsFor(room, edges, 'plant', [placedSofa.position.x, placedSofa.position.y]),
     ], { optional: true });
   },

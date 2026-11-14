@@ -351,16 +351,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if openrouter.key():
                 return self._openrouter(kind, model, req, body)
             return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
-        fallback = (lambda: self._openrouter(kind, model, req, body)) if openrouter.key() else None
+        # the fallback is the same request answered another way: it must not take a second rate-limit token
+        # (it did, so every image cost two of the two-a-minute image tokens and the next one was refused)
+        fallback = (lambda: self._openrouter(kind, model, req, body, charge=False)) if openrouter.key() else None
         self._relay(kind, cache_key("gemini", model, body), GEMINI_URL.format(model=model), body,
                     {"Content-Type": "application/json", "x-goog-api-key": key}, fallback=fallback)
 
-    def _openrouter(self, kind, model, req, body):
+    def _openrouter(self, kind, model, req, body, charge=True):
         """Same cache and limits, via OpenRouter; its reply is translated back to Gemini's shape for agent.js."""
         slug = openrouter.model_for(model)
         payload = json.dumps(openrouter.to_openai(req, slug)).encode()
         self._relay(kind, cache_key("openrouter", slug, body), openrouter.URL, payload, openrouter.headers(),
-                    transform=lambda out: json.dumps(openrouter.to_gemini(json.loads(out))).encode())
+                    transform=lambda out: json.dumps(openrouter.to_gemini(json.loads(out))).encode(), charge=charge)
 
     def _tts(self, body):
         try:
@@ -392,7 +394,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _relay(self, kind, key, target, data, headers, fallback=None, transform=None):
+    def _relay(self, kind, key, target, data, headers, fallback=None, transform=None, charge=True):
         """Cache, then rate limit, then the upstream call (one polite retry on its 429).
         fallback(): answer another way when the upstream is rate limited, failing (5xx) or unreachable.
         transform(bytes) -> bytes: rewrite a 200 reply (e.g. OpenRouter JSON into Gemini's) before caching it.
@@ -400,8 +402,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         hit = cache_get(key)
         if hit:
             return self._send(200, hit[0], hit[1])
-        with LOCK:
-            ok, wait = BUCKETS[kind].take()
+        ok, wait = True, 0
+        if charge:
+            with LOCK:
+                ok, wait = BUCKETS[kind].take()
         if not ok:
             return self._busy(wait, f"local {kind} limit reached")
         for attempt in (1, 2):
@@ -421,7 +425,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 out, ctype = transform(out), "application/json"
             except (ValueError, KeyError, TypeError, IndexError) as e:
                 return self._json(502, {"error": f"unexpected upstream reply: {type(e).__name__}"})
-        if status == 200:
+        # an image request that came back without an image (a safety or recitation refusal) is not cached:
+        # otherwise the same wallpaper or poster prompt fails instantly for the rest of the day
+        if status == 200 and not (kind == "image" and b"inlineData" not in out and b'"data"' not in out):
             cache_put(key, ctype or "application/octet-stream", out)
         self._send(status, ctype or "application/octet-stream", out)
 

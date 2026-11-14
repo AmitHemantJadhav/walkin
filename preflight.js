@@ -124,9 +124,27 @@ export async function preflight({ quiet = false } = {}) {
       + 'from an earlier session will come back on a reload — open with &layout=none to start clean'));
 
   // ---------------------------------------------------------------- hands and the headset
-  rows.push(typeof w.hands === 'object' || typeof w.handRay === 'function'
-    ? ok('hands', 'hooks are there — this does NOT prove the camera works, press ✋ and look')
-    : no('hands', 'hands.js never loaded'));
+  // Two different questions, and only one of them is answerable from here. Whether the camera works
+  // needs a camera. Whether MediaPipe will load without the venue's Wi-Fi is a HEAD request, and it is
+  // the one that bites at a hackathon: the model is 7.8 MB off storage.googleapis.com unless the local
+  // copies are both present and used (#50).
+  if (typeof w.hands !== 'object' && typeof w.handRay !== 'function') {
+    rows.push(no('hands', 'hands.js never loaded'));
+  } else {
+    let local = false;
+    try {
+      const [lib, model] = await Promise.all([
+        fetch('vendor/mediapipe/tasks-vision@0.10.14/vision_bundle.mjs', { method: 'HEAD' }),
+        fetch('vendor/mediapipe/hand_landmarker.task', { method: 'HEAD' }),
+      ]);
+      local = lib.ok && model.ok;
+    } catch (e) { local = false; }
+    rows.push(local
+      ? ok('hands', 'hooks there and MediaPipe is on disk, so no venue Wi-Fi needed — this still does '
+        + 'NOT prove the camera works, press ✋ and look')
+      : no('hands', 'hooks are there, but vendor/mediapipe is missing — the hands will try to fetch '
+        + '7.8 MB from googleapis.com when you press ✋'));
+  }
 
   // ---------------------------------------------------------------- frame rate, as it stands now
   const rate = await fps(1200);

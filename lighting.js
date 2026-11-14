@@ -126,14 +126,14 @@ export async function relight(panoOverride) {
   if (hemi) {
     hemi.color.copy(sky.color);
     hemi.groundColor.copy(ground.color);
-    hemi.intensity = THREE.MathUtils.clamp(light.mean * 3.4, 0.55, 2.3);
+    hemi.intensity = THREE.MathUtils.clamp(light.mean * 2.7, 0.5, 1.9);
   }
   if (dir) {
     const d = light.local.clone().applyMatrix4(localToModel(pano, w.cal)).normalize();
     if (d.z < 0.08) { d.z = 0.08; d.normalize(); }     // never light a room from below the floor
     dir.position.copy(d).multiplyScalar(8);
     dir.color.copy(sun.color);
-    dir.intensity = THREE.MathUtils.clamp((light.bright - light.mean) * 3.0, 0.25, 1.6);
+    dir.intensity = THREE.MathUtils.clamp((light.bright - light.mean) * 4.2, 0.35, 2.0);
     dir.target.position.set(0, 0, 0);
   }
 

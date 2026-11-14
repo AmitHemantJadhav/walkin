@@ -6,13 +6,18 @@
 // Shading comes from the photo itself (see shade.js), so a wall in shadow stays in shadow.
 import * as THREE from 'three';
 import { panoLuminance } from './shade.js';
+import { wallOffset, FIT } from './wallfit.js';
 
 const WALL_H = 2.7;             // fallback when the API gives a room no height
 const TOP_GAP = 0.04;           // stop just below the ceiling, so the offset below can't ride over the cornice
-// How far in front of the wall face the quad sits. The wall graph is idealised and the empty-house mesh
-// (the occluder) is a few centimetres into the room from it, so 1 cm leaves the paper buried: measured on
+// How far in front of the wall's centre line the quad sits. The wall graph is idealised and the empty-house
+// mesh (the occluder) is a few centimetres into the room from it, so 1 cm leaves the paper buried: measured on
 // La Mirada, anything under ~4 cm is almost entirely hidden, and polygon offset isn't enough on its own.
-const OFFSET = 0.08;
+// #61: one fixed 8 cm ignores wall thickness, so the scan cut off 11-19% of the paper. Each wall is now
+// measured against the mesh when it is papered (wallfit.js); OFFSET is the floor, and `?wallfit=off` puts
+// every wall back on it.
+const OFFSET = FIT.floor;
+const WALLFIT = new URLSearchParams(location.search).get('wallfit') !== 'off';
 const LIGHT_U = 24, LIGHT_V = 16; // resolution of the luminance map sampled off the pano
 
 const group = new THREE.Group();
@@ -99,6 +104,44 @@ function panelGeometry(p, len, height, tile) {
   return g;
 }
 
+// The occluder mesh as one flat model-space triangle list, made once per house (~50k triangles, ~2 MB).
+let trisOf = { mesh: null, tris: null };
+function occluderTris() {
+  const mesh = window.walkin.occluderMesh;
+  if (!mesh) return null;
+  if (trisOf.mesh === mesh) return trisOf.tris;
+  const out = [];
+  const v = new THREE.Vector3();
+  mesh.updateMatrixWorld(true);
+  mesh.traverse((o) => {
+    if (!o.isMesh || !o.geometry.attributes.position) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index;
+    const n = idx ? idx.count : pos.count;
+    for (let i = 0; i < n; i++) {
+      v.fromBufferAttribute(pos, idx ? idx.getX(i) : i).applyMatrix4(o.matrixWorld);
+      out.push(v.x, v.y, v.z);
+    }
+  });
+  trisOf = { mesh, tris: Float32Array.from(out) };
+  return trisOf.tris;
+}
+
+/**
+ * How far from the centre line to put the paper on this face of `rec` (#61). Measured against the scan
+ * mesh when there is one; with the wall-box occluders (no mesh) the box face is at half the thickness,
+ * so stand just in front of that. `?wallfit=off` = the old fixed OFFSET everywhere.
+ */
+function paperOffset(rec, normal, floorZ, height) {
+  if (!WALLFIT) return { offset: OFFSET, how: 'fixed' };
+  const tris = occluderTris();
+  if (tris) {
+    const fit = wallOffset(tris, rec, normal, floorZ, height);
+    return { ...fit, how: fit.cut == null ? 'unscanned' : 'scan' };
+  }
+  const half = (rec.thickness || 0.12) / 2;
+  return { offset: +Math.min(FIT.cap, Math.max(OFFSET, half + FIT.margin)).toFixed(3), how: 'thickness' };
+}
+
 /** Which way the wall faces the person looking at it. */
 function facingNormal(wall, from) {
   const dx = wall.b[0] - wall.a[0], dy = wall.b[1] - wall.a[1];
@@ -140,6 +183,11 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
   const from = (wall.normal && [(rec.a[0] + rec.b[0]) / 2 + wall.normal[0], (rec.a[1] + rec.b[1]) / 2 + wall.normal[1]])
     || from0;
   const [nx, ny] = facingNormal(rec, from);
+  let fit;
+  try { fit = paperOffset(rec, [nx, ny], floorZ, height); } catch (e) {
+    console.warn('walls: wallfit failed, using the fixed offset', e);
+    fit = { offset: OFFSET, how: 'fixed' };
+  }
 
   clearWallMaterial(wall);
 
@@ -162,8 +210,8 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
   // local (u, v, 0) -> world: u along the wall, v up, pushed out along the normal
   mesh.matrixAutoUpdate = false;
   mesh.matrix.set(
-    dirx, 0, nx, rec.a[0] + nx * OFFSET,
-    diry, 0, ny, rec.a[1] + ny * OFFSET,
+    dirx, 0, nx, rec.a[0] + nx * fit.offset,
+    diry, 0, ny, rec.a[1] + ny * fit.offset,
     0, 1, 0, floorZ,
     0, 0, 0, 1,
   );
@@ -176,6 +224,8 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
   return { ok: true, wall: { floor: found.floor.id, index: wall.index, a: rec.a, b: rec.b },
     tileMetres: tile, panels: panels.length, length: +len.toFixed(2), height: +height.toFixed(2),
     area: +area.toFixed(1), room: room ? room.label : null,
+    // #61: where the paper went and how much of the scanned face is still in front of it (cut: 0..1, null = not measured)
+    fit: { offset: fit.offset, how: fit.how, samples: fit.samples || 0, cut: fit.cut ?? null },
     say: `${(area).toFixed(1)} m2 of wall${room ? ` in the ${room.label.toLowerCase()}` : ''}, repeating every ${tile} m` };
 }
 

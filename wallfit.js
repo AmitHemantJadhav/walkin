@@ -77,3 +77,33 @@ export function wallDepths(tris, wall, normal, floorZ, height, { step = 0.2, rea
   }
   return out;
 }
+
+export const FIT = {
+  floor: 0.08,      // never closer to the centre line than walls.js's old fixed offset
+  cap: 0.25,        // deeper than this is a thing (fireplace, cabinet), not the wall: the occluder should win
+  // stand in front of this share of the scanned face... 0.75 leaves 3-5% of samples cut (0.9: 1-2%) but
+  // keeps the paper nearer the wall, so a fireplace covering part of it still wins (node tools/wallfit-test.mjs)
+  pct: 0.75,
+  margin: 0.015,    // ...by this much
+};
+
+/**
+ * #61 step 2: how far from the centre line one face of a wall should be papered so the scan doesn't cut it.
+ * A percentile of the measured face plus a small margin, between FIT.floor and FIT.cap. On purpose, it
+ * does not chase the worst sample: a percentile plus a cap means a few samples (a bump, a skirting
+ * board, the edge of a fireplace) stay in front of the paper, the way a real fireplace would.
+ * Returns { offset, samples, cut } where cut = share of measured samples still in front of the paper.
+ * With under 4 mesh samples (a face the scanner never saw) it returns the floor and cut null.
+ */
+export function wallOffset(tris, wall, normal, floorZ, height, opts = {}) {
+  const o = { ...FIT, ...opts };
+  const d = wallDepths(tris, wall, normal, floorZ, height)
+    .map((x) => x.depth)
+    .filter((x) => x != null && x > -0.02 && x <= o.cap);
+  if (d.length < 4) return { offset: o.floor, samples: d.length, cut: null };
+  d.sort((a, b) => a - b);
+  const p = d[Math.min(d.length - 1, Math.floor(o.pct * d.length))];
+  const offset = Math.min(o.cap, Math.max(o.floor, p + o.margin));
+  const cut = d.filter((x) => x > offset + 0.01).length / d.length;
+  return { offset: +offset.toFixed(3), samples: d.length, cut: +cut.toFixed(3) };
+}

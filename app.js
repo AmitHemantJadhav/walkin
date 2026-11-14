@@ -1124,6 +1124,7 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   beforeRender, // Set of (dt) => {} run every frame after input, before the draw (physics.js, #44)
   get current() { return current; }, get selected() { return selected; },
   get handRay() { return handRay; },
+  get occluderMesh() { return meshOccluder; }, // the empty-house OBJ in model space, or null (walls.js #61); read-only
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },

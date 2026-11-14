@@ -149,14 +149,23 @@ If you ever need to see the event directly:
 addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door
 ```
 
-Turn it and walk it through — **square on**. Measured at that doorway: up to about **8 cm off the
-centre line it goes straight through**, which is the real clearance a 0.95 m sofa has in a 1.15 m
-door. Past that the assist does slide it towards the centre, but the hand is still pulling off to one
-side, so the sofa lines itself up with the doorway and stops in it rather than passing. It looks
-deliberate rather than broken — but if it stops, back off half a metre, square up and go again, and
-don't let anyone think it is meant to be forgiving. Fixing that properly needs the doorway to act as
-a rail for the whole traverse; four attempts at it this morning each made something else worse (#55),
-so it is written down rather than half-done.
+Turn it and walk it through — **square on**. Swept at that doorway against `main`, walking the sofa out
+of the living room on a straight line: **up to about 10 cm off the centre line it goes straight
+through**, which is the clearance a 0.95 m sofa really has in a 1.15 m door, and matches the 10 cm
+`physics.js` documents. It is not symmetric — 12 cm to one side still went through and 12 cm to the
+other stopped — so **10 cm is the figure to trust, not a boundary to lean on**. By 16 cm it lines
+itself up with the doorway and stops in it, 0.10 m short of crossing.
+
+Past that limit the assist does slide it towards the centre, but the hand is still pulling off to one
+side, so the sofa squares up to the gap and stops rather than passing. It looks deliberate rather
+than broken — if it stops, back off half a metre, square up and go again, and don't let anyone think
+it is meant to be forgiving. Fixing it properly needs the doorway to act as a rail for the whole
+traverse; four attempts at it each made something else worse (#55), so it is written down rather than
+half-done.
+
+How far off *square* you can be is a fair question and I don't have an honest number for it: turning
+the sofa in place a stride from the door makes the solver shove it, so every run I set up beyond a few
+degrees had already been pushed through the doorway before the walk started (#84). Go in square.
 
 A piece that genuinely doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it
 won't fit through at all"* instead.
@@ -262,11 +271,12 @@ Other houses, measured the same way on today's `main`:
 
 | symptom | do this |
 |---|---|
-| John doesn't answer | check `/api/health`; restart with `GEMINI_MOCK=1` |
+| John doesn't answer | run `await walkin.preflight()` — its John row makes a real call, so it says *why* rather than just that a key is set; then restart with `GEMINI_MOCK=1` |
 | no hands | reload, allow the camera, check it's the right camera with 📷 |
 | furniture won't move | `walkin.physics.enabled = false` |
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
+| the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move, the way it behaved before A6. `&a6=round` only swaps the wall proxy back and **still blinks** on long jumps, so `off` is the only full rollback |
 | the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again and reload — since #75 a re-prepped house shows up at once; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all and does the whole run, beat 5 included |
 
 ## Console equivalents for every beat

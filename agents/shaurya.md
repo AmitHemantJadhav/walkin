@@ -88,7 +88,7 @@ new.
 
 61 fps with 28 pieces, the same in headset (side-by-side) mode, **on a laptop**. Twenty full-house stagings in
 three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
-nothing leaks. La Mirada stages 28 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
+nothing leaks. La Mirada stages 32 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
 
 ### Still untested by anyone, as of this writing
 

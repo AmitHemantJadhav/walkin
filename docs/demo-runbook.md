@@ -120,7 +120,7 @@ and always lands.
 
 > **"Hey John — furnish the whole house."**
 
-Six rooms, 28 pieces, about a fifth of a second. Then walk through it.
+Six rooms, 32 pieces, about a fifth of a second. Then walk through it.
 
 Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
 halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass
@@ -129,6 +129,7 @@ name — *"stage this as a living room"* — and it will try anyway.
 
 Other houses, measured the same way: **10319 Dunvegan Way** 19 pieces across 4 rooms (its 31 m²
 kitchen is open-plan, so it gets the living set, television and all), **314 Gale St** 26 across 4.
+Both La Mirada living rooms have a television, each one squarely facing its sofa.
 
 ---
 
@@ -168,7 +169,7 @@ walkin.stageRoom(walkin.roomAt(walkin.current.pos[0], walkin.current.pos[1], wal
 walkin.setWallMaterial(walkin.pointer.wall, 'models/textures/brick_red.jpg', 0.9)
 walkin.placeObject('plant')
 walkin.suggestPlant()                       // reads the light here, picks a plant, places it
-walkin.stageHouse('modern')                 // the whole house: 6 rooms, 28 pieces, ~0.2 s
+walkin.stageHouse('modern')                 // the whole house: 6 rooms, 32 pieces, ~0.2 s
 walkin.setStyle('cozy')                     // restyle everything already placed
 walkin.clearLayout()
 walkin.doorsFor('sofa')                     // every doorway, and whether a sofa gets through it

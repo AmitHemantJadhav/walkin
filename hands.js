@@ -84,7 +84,8 @@ export function handDepth(L, W, vw, vh, hfovDeg = 63) {
 // maxHz caps how often detection runs: detectForVideo blocks the main thread (~10-20 ms on a phone), so on a
 // phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
 // aspect(): width / height of the view the hands are drawn in (one eye in the headset).
-export async function startHands({ video, facingMode = 'user', onHands, maxHz = 30, aspect = () => innerWidth / innerHeight }) {
+// onFrame(cam): called right before each detection, so realhands.js can copy the very image the landmarks come from.
+export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight }) {
   const lm = await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
@@ -106,10 +107,12 @@ export async function startHands({ video, facingMode = 'user', onHands, maxHz = 
     // schedule from the due time, not from now, so 25 Hz on a 60 Hz display averages 25 instead of rounding to 20
     nextRun = Math.max(nextRun + 1000 / stats.maxHz, t);
     last = video.currentTime;
-    const r = lm.detectForVideo(video, t);
-    stats.ms = stats.ms ? stats.ms * 0.9 + (performance.now() - t) * 0.1 : performance.now() - t;
     // how screen units map back to the video (realhands.js draws the same rectangle)
     const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight) };
+    onFrame?.(cam);
+    const t1 = performance.now(); // stats.ms is the detection alone
+    const r = lm.detectForVideo(video, t);
+    stats.ms = stats.ms ? stats.ms * 0.9 + (performance.now() - t1) * 0.1 : performance.now() - t1;
     const toScreen = (p) => ({ x: ((mirror ? 1 - p.x : p.x) - cam.cx) / cam.sx, y: (p.y - cam.cy) / cam.sy, z: p.z });
     const hands = (r.landmarks || []).map((L, i) => {
       // MediaPipe labels assume a mirrored (selfie) image; flip for the back camera

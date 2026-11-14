@@ -39,7 +39,7 @@ Why judges care: it attacks CoStar's own open problems (quickstart §9, workshop
 - **Furnish an empty room, consistently** (#6): edits live in model space (metres), so they are consistent across
   views by construction. Image-only edits are not. Say this in the pitch.
 - **Understand spaces / search inside panoramas** (#1, #4): the agent reasons over rooms, walls, doorways, windows.
-- Uses all three data layers: Matterport (panos, defurnished view, walls, mesh), CoStar listing, Vexcel / geolocation.
+- Uses all three data layers: Matterport (panos, defurnished view, walls, mesh); CoStar listing (price, beds, baths, Homes.com highlights from the kit); Vexcel (orthophoto, parcel and building footprint from `property/extract`). The last two come from `tools/prep_outside.py` and are shown by `outside.js`.
 
 ## 2. Status (Sat Nov 14, 01:30)
 Working on `main` and frozen on `demo`:

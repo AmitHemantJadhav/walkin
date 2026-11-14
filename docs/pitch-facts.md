@@ -14,6 +14,18 @@ Measured against `main` on Sat 14 Nov, La Mirada (`zvKHR9DHNjJ`) unless another 
   12 rooms) and **314 Gale St, Houston** (55 panos, 10 rooms). All 211 residential splat houses in
   the hackathon set have a defurnished view.
 
+## Inside, outside, on the market: all three layers on one house
+
+- CoStar's "Inside, outside, on the market" slide uses **our demo house**. The app opens on it from above
+  (`outside.js`, data from `tools/prep_outside.py`), then "Walk in" drops into the scan.
+- **Outside (Vexcel)**: the July 2026 orthophoto (~6 cm per pixel, LA urban-refresh), plus `property/extract`.
+  The parcel is 50 × 150 ft. The house footprint is **184 m²** with a gable shingle roof; there are 2
+  buildings on the lot, no pool, no solar and 17% tree cover.
+- **On the market (CoStar kit)**: the kit's own join, `MatterportModelId` → Homes.com listing 221139020. It
+  gives **$1,195,000**, 3 bd, 1.5 ba, 1,628 sq ft, built 1920, California Bungalow, and 11 highlights
+  ("Living Room with Fireplace", "Wood Flooring", …).
+- John gets the same facts through `describe_house`, so "does it have a fireplace?" is answered from the listing.
+
 ## The claim that matters: it is in the house's coordinates, not in the picture
 
 - Furniture is placed in the **model frame, in metres, Z up** — so walking to a different scan point

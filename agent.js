@@ -6,9 +6,9 @@
 // Hooks that are not in the viewer yet (pointer, setWallMaterial, stageRoom, placeObject) are stubbed: the call is
 // logged and the model is told the feature is not available, so it says so instead of pretending.
 
-const MAX_ROUNDS = 5;      // tool-call rounds per question
+const MAX_ROUNDS = 3;      // tool-call rounds per question (R10: fewer, smaller calls)
 const MAX_TURNS = 16;      // history entries kept
-const VIEW_WIDTH = 768;    // px, screenshot sent when the user says "this" / "here"
+const VIEW_WIDTH = 512;    // px, screenshot sent when the user says "this" / "here"
 const DEICTIC = /\b(this|that|here|there|these|those)\b|\bwhat (am i|are we) looking at\b/i;
 
 const SYSTEM = `You are Walk-In, a voice assistant inside a real home that was 3D-scanned by Matterport and digitally emptied.
@@ -99,7 +99,14 @@ function placedItems() {
   const w = W();
   return (w.furniture ? w.furniture.children : []).filter((o) => o.userData && o.userData.kind).map((o) => {
     const room = w.roomAt(o.position.x, o.position.y, o.userData.floor);
-    return { kind: o.userData.kind, room: room ? room.label : null };
+    const out = { kind: o.userData.kind, room: room ? room.label : null };
+    if (typeof w.fitReport === 'function') {
+      const on = o.userData.on && w.furniture.children.find((s) => s.uuid === o.userData.on); // a plant on a table
+      const r = w.fitReport({ item: o, ignore: on ? [on] : [] });
+      out.fits = r.ok;
+      if (!r.ok || (r.warnings && r.warnings.length)) out.problems = [...r.reasons, ...(r.warnings || [])];
+    }
+    return out;
   });
 }
 
@@ -236,6 +243,12 @@ const RUN = {
     const w = W();
     if (!w.FURNITURE[kind]) return { ok: false, reason: `Unknown kind. Use one of: ${Object.keys(w.FURNITURE).join(', ')}.` };
     w.addFurniture(kind);
+    const item = w.selected || w.furniture.children[w.furniture.children.length - 1];
+    if (typeof w.fitReport === 'function' && item) { // S4: real reasons ("blocks the bedroom door")
+      const r = w.fitReport({ item });
+      return { ok: true, placed: kind, fits: r.ok, fit: w.fitLine ? w.fitLine(r) : r.reasons.join(', '),
+        room: r.room ? r.room.label : null };
+    }
     const fit = document.getElementById('fit');
     return { ok: true, placed: kind, fit: fit ? fit.textContent : null };
   },
@@ -270,18 +283,24 @@ const RUN = {
       w.addFurniture(kind);
       return { ok: true, placed: kind, where: 'in front of the user (exact pointing placement is not built yet)' };
     }
-    const pt = w.pointer && w.pointer.point, u = userPos();
-    const x = pt ? pt[0] : u.x + Math.cos(w.view.yaw) * 1.5, y = pt ? pt[1] : u.y + Math.sin(w.view.yaw) * 1.5;
-    return { ok: true, placed: kind, where: pt ? 'where the user points' : 'in front of the user',
-      result: (await w.placeObject(kind, x, y)) ?? null };
+    // no coordinates: S5 uses walkin.pointer when it points into a room, else 2 m ahead, and snaps onto tables
+    const res = (await w.placeObject(kind)) || {};
+    return { ok: !!res.fits, placed: res.fits ? kind : null, on: res.on || null, room: res.room || null,  // plain facts only
+      why: res.why || null, say: res.say || null };
   },
 
   light_here: () => lightHere(),
 
   async plant_preview({ plant }) {
     setStatus('Drawing the plant…');
-    const url = await generateImage(`A photo of a healthy ${plant} houseplant in a simple matte ceramic pot, ` +
-      'standing on a plain light background, soft daylight, full plant visible, no text.');
+    let url = null;
+    try {
+      url = await generateImage(`A photo of a healthy ${plant} houseplant in a simple matte ceramic pot, ` +
+        'standing on a plain light background, soft daylight, full plant visible, no text.', IMAGE_WAIT_MS);
+    } catch (e) {
+      console.info('[agent] plant image failed, using the bundled picture:', e.message);
+    }
+    url = url || fallbackPlant(plant);
     showPreview(url, plant);
     return { ok: true, shown: plant };
   },
@@ -310,20 +329,39 @@ async function generateTile(description) {
   const prompt = `A seamless, tileable texture of ${description}, for covering an interior wall. ` +
     'Flat and straight-on, orthographic, evenly lit, no shadows, no perspective, no objects, no text, no border. ' +
     'The left edge must continue into the right edge and the top into the bottom. Square.';
-  const url = await squareTile(await generateImage(prompt));
+  let url;
+  try {
+    url = await squareTile(await generateImage(prompt, IMAGE_WAIT_MS));
+  } catch (e) {
+    url = fallbackTile(description); // R10: the wallpaper beat still lands without image generation
+    if (!url) throw e;
+    console.info('[agent] tile generation failed, using the bundled tile:', e.message);
+  }
   tileCache.set(key, url);
   return url;
 }
 
-/** One image from Gemini's image model, as a data URL. */
-async function generateImage(prompt) {
-  const res = await fetch(`/api/gemini?model=${encodeURIComponent(IMAGE_MODEL)}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseModalities: ['IMAGE'] } }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data.error && (data.error.message || data.error)) || `image relay returned ${res.status}`);
+// R10: bundled, pre-made assets for when generation fails or is slow (assets/).
+const IMAGE_WAIT_MS = 9000;
+const FALLBACK_TILES = [
+  [/brick/, 'assets/tiles/red-brick.png'],
+  [/subway|tile|ceramic|white/, 'assets/tiles/white-subway.png'],
+  [/wood|oak|panel|timber|plank/, 'assets/tiles/oak-panel.png'],
+];
+const FALLBACK_PLANTS = [
+  [/snake|sansevieria|zz|cactus|succulent|aloe/, 'assets/plants/snake-plant.svg'],
+  [/fern|pothos|ivy|calathea|maranta|spider/, 'assets/plants/fern.svg'],
+  [/./, 'assets/plants/monstera.svg'],
+];
+const fallbackTile = (d) => (FALLBACK_TILES.find(([re]) => re.test(String(d).toLowerCase())) || [])[1] || null;
+const fallbackPlant = (p) => FALLBACK_PLANTS.find(([re]) => re.test(String(p).toLowerCase()))[1];
+
+/** One image from Gemini's image model, as a data URL. Gives up after `waitMs`. */
+async function generateImage(prompt, waitMs = IMAGE_WAIT_MS) {
+  const res = await relay(`/api/gemini?model=${encodeURIComponent(IMAGE_MODEL)}`, {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['IMAGE'] },
+  }, waitMs);
+  const data = res.data;
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
   const img = parts.find((p) => p.inlineData && p.inlineData.data);
   if (!img) throw new Error('the image model returned no image');
@@ -375,19 +413,73 @@ function captureView() {
 // ------------------------------------------------------------------ Gemini
 const history = [];
 
+// ------------------------------------------------------------------ R10: every relay call has a deadline and a status
+class RelayError extends Error {
+  constructor(message, status, friendly) { super(message); this.status = status; this.friendly = friendly; }
+}
+let turnAbort = null; // aborts every request of the current turn (hard deadline)
+
+async function relay(url, body, waitMs) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), waitMs);
+  const onTurnAbort = () => ctl.abort();
+  if (turnAbort) turnAbort.signal.addEventListener('abort', onTurnAbort);
+  try {
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
+    } catch (e) {
+      throw new RelayError(e.name === 'AbortError' ? 'timed out' : `network: ${e.message}`, 0);
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = data.error || {};
+      throw new RelayError(err.message || String(err) || `relay returned ${res.status}`, res.status, err.friendly);
+    }
+    return { data };
+  } finally {
+    clearTimeout(timer);
+    if (turnAbort) turnAbort.signal.removeEventListener('abort', onTurnAbort);
+  }
+}
+
 async function gemini(contents) {
-  const res = await fetch('/api/gemini', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM }] }, contents, tools: TOOLS,
-      generationConfig: { temperature: 0.4, maxOutputTokens: 400 },
-    }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data.error && (data.error.message || data.error)) || `Gemini relay returned ${res.status}`);
-  const content = data.candidates && data.candidates[0] && data.candidates[0].content;
-  if (!content || !content.parts) throw new Error('Gemini returned no answer.');
+  const { data } = await relay('/api/gemini', {
+    systemInstruction: { parts: [{ text: SYSTEM }] }, contents, tools: TOOLS,
+    generationConfig: { temperature: 0.4, maxOutputTokens: 1024 }, // room for thinking tokens plus a short answer
+  }, HARD_DEADLINE_MS);
+  const cand = data.candidates && data.candidates[0];
+  const content = cand && cand.content;
+  if (!content || !content.parts) {
+    console.warn('[agent] no answer, finishReason:', cand && cand.finishReason);
+    throw new RelayError(`no answer (${(cand && cand.finishReason) || 'empty'})`, 200);
+  }
   return content;
+}
+
+// Three friendly lines; the raw error only goes to the console.
+const FRIENDLY = {
+  network: 'Sorry, I lost the connection for a moment. Try again?',
+  busy: "One moment, I'm a bit busy. Ask me again in a few seconds.",
+  other: "Sorry, I couldn't do that. Try saying it another way.",
+};
+function friendlyError(e) {
+  if (e && e.status === 429) return e.friendly || FRIENDLY.busy;
+  if (e && (e.status === 0 || e.status === 502 || e.status === 504)) return FRIENDLY.network;
+  if (e && e.status === 503) return "I'm not connected to my AI yet. The team needs to add the key.";
+  return FRIENDLY.other;
+}
+
+// An instant line within 300 ms, so there's never dead air while Gemini works.
+const SLOW_MS = 12000, HARD_DEADLINE_MS = 25000;
+function fillerFor(text) {
+  const t = text.toLowerCase();
+  if (/wall|wallpaper|brick|paint/.test(t)) return 'Sure, let me look at this wall.';
+  if (/plant/.test(t)) return 'Let me check the light here.';
+  if (/stage|furnish|set up/.test(t)) return 'Okay, setting up the room.';
+  if (/take me|go to|walk to/.test(t)) return 'On our way.';
+  if (/how big|size|area|measure|dimension/.test(t)) return 'Let me check the measurements.';
+  return 'Sure, one moment.';
 }
 
 function trimHistory() {
@@ -404,6 +496,10 @@ async function ask(text) {
   busy = true;
   setStatus('Thinking…');
   const mark = history.length;
+  turnAbort = new AbortController();
+  const filler = speak(fillerFor(text), { filler: true });
+  const slow = setTimeout(() => speak("Give me a second, that's taking longer than usual.", { filler: true }), SLOW_MS);
+  const hard = setTimeout(() => turnAbort && turnAbort.abort(), HARD_DEADLINE_MS);
   try {
     const parts = [{ text }];
     if (DEICTIC.test(text)) {
@@ -418,6 +514,7 @@ async function ask(text) {
       if (!calls.length) {
         const reply = content.parts.filter((p) => p.text && !p.thought).map((p) => p.text).join(' ').trim();
         trimHistory();
+        await filler;
         return say(reply || 'Done.');
       }
       const out = [];
@@ -429,13 +526,16 @@ async function ask(text) {
       history.push({ role: 'user', parts: out });
     }
     trimHistory();
+    await filler;
     return say('That took too many steps. Try asking for one thing at a time.');
   } catch (e) {
     console.error('[agent]', e);
     history.length = mark; // drop the failed turn so the next question starts clean
-    return say(/not set/.test(e.message) ? 'The agent has no Gemini key yet. Add GEMINI_API_KEY to .env and restart the server.'
-      : `Sorry, that didn't work: ${e.message}`);
+    return say(friendlyError(e));
   } finally {
+    clearTimeout(slow);
+    clearTimeout(hard);
+    turnAbort = null;
     busy = false;
   }
 }
@@ -460,14 +560,26 @@ function unlockAudio() { // iOS only plays audio that was started from a tap onc
   player.play().catch(() => {});
 }
 
-function browserSpeak(text) {
-  if (!window.speechSynthesis) return;
+function browserSpeak(text, capMs = 15000) {
+  if (!window.speechSynthesis) return Promise.resolve();
   speechSynthesis.cancel();
-  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  return new Promise((resolve) => {
+    const u = new SpeechSynthesisUtterance(text), cap = setTimeout(resolve, capMs);
+    u.onend = u.onerror = () => { clearTimeout(cap); resolve(); };
+    speechSynthesis.speak(u);
+  });
 }
 
-async function speak(text) {
-  const seq = ++speakSeq; // a newer reply replaces an older one
+/**
+ * Speak a line. Resolves when it has finished playing (at most `capMs`), so a reply can wait for the filler.
+ * A newer line replaces an older one. Fillers are fixed sentences, so the relay's disk cache makes them free.
+ */
+async function speak(text, { filler = false, capMs = filler ? 2500 : 15000 } = {}) {
+  const seq = ++speakSeq;
+  const ended = () => new Promise((resolve) => {
+    const cap = setTimeout(resolve, capMs);
+    player.onended = player.onerror = () => { clearTimeout(cap); resolve(); };
+  });
   try {
     const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
     if (!res.ok) throw new Error(`tts relay returned ${res.status}`);
@@ -475,10 +587,12 @@ async function speak(text) {
     if (seq !== speakSeq) return;
     if (player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
+    const done = ended();
     await player.play();
+    await done;
   } catch (e) {
     console.info('[agent] ElevenLabs voice unavailable, using the browser voice:', e.message);
-    if (seq === speakSeq) browserSpeak(text);
+    if (seq === speakSeq) await browserSpeak(text, capMs);
   }
 }
 

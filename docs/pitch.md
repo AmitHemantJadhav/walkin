@@ -2,6 +2,10 @@
 
 > Draft. Judges are CoStar / Matterport engineers: lead with the demo, name their open problem, be exact about
 > what the data gave us. Cut any beat whose feature isn't working on `main`.
+>
+> **Numbers:** only quote figures from [`pitch-facts.md`](pitch-facts.md) (each one says how it was measured,
+> and "Things to say carefully" lists what hasn't been tested yet). The beats and fallbacks are in
+> [`demo-card.md`](demo-card.md).
 
 **One line:** Homes.com gets you into the house. Walk-In lets you live in it.
 
@@ -31,9 +35,9 @@ picture follow. That's Walk-In. It runs on a phone in a headset. Let me show you
    scan, not from the model's imagination."
 4. **Point and talk (20 s).** Point at a wall: "Put red-brick wallpaper on this wall." The wall changes. Move to
    another scan point. "Same wall, from the other side of the room."
-5. **Advice (20 s).** Point at a corner: "What plant should go here?" → "This corner gets soft morning light from
-   the east window, so a monstera would do well." The plant appears. "It knows where the windows are and which way
-   the wall faces, because the scan and the listing's location tell it."
+5. **Advice (20 s).** Point at a corner: "What plant should go here?" → "This corner gets bright light from the big
+   window two metres away, so a monstera would do well." The plant appears. "It knows where the windows are, how big
+   they are and how far this spot is from them, because the scan measured them."
 
 *If time is short, drop step 5 first, then step 3.*
 

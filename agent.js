@@ -40,6 +40,10 @@ const TOOLS = [{
         room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
         style: { type: 'string', description: 'For example: modern bedroom, cosy living room, home office.' } },
         required: ['style'] } },
+    { name: 'stage_house',
+      description: 'Furnish every room in the house that has a set (living rooms, bedrooms, dining rooms, offices) in one go. Use for "furnish the whole house", "stage every room".',
+      parameters: { type: 'object', properties: {
+        style: { type: 'string', description: 'Optional palette: modern, cozy or scandi.' } } } },
     { name: 'set_wall_material',
       description: 'Cover the wall the user points at with a material (wallpaper, brick, tiles, wood panels, paint). A seamless tile is generated from the description and placed at real scale.',
       parameters: { type: 'object', properties: {
@@ -277,6 +281,16 @@ const RUN = {
     return { ok: !!(res.placed && res.placed.length), room: r.label, style,         // plain facts only: no geometry
       placed: (res.placed || []).map((p) => p.name), skipped: (res.skipped || []).map((s) => `${s.name}: ${s.why}`),
       cleared: res.cleared || [], fits: !!res.fits, say: res.say || null };
+  },
+
+  async stage_house({ style }) {
+    const w = W();
+    if (typeof w.stageHouse !== 'function') return unavailable('stageHouse', 'shaurya');
+    setStatus('Furnishing the house…');
+    const res = (await w.stageHouse(style || undefined)) || {};
+    const rooms = res.rooms || [];
+    return { ok: (res.placed || 0) > 0, rooms: rooms.length, pieces: res.placed || 0,   // plain facts only
+      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null };
   },
 
   async set_wall_material({ description, tile_metres }) {

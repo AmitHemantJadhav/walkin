@@ -299,7 +299,80 @@ def atlas_uv(uv, crops_by_face, fi, sheet):
     return (px / sw, 1 - py / sh)
 
 
-def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12):
+
+FLAP_FOLD = 40      # degrees: above this the surface is not continuing, it is folding over
+
+
+def drop_flaps(Vf, Ff, idx, lab, n, fold_deg, frac, floor_m2=0.0010):
+    """Remove the torn flaps photogrammetry leaves hanging off a piece.
+
+    Strip the texture off the living room sofa and its geometry is visibly ragged - shards and thin
+    flaps standing proud of the arms and the front edge. Textured, they catch the light as pale
+    streaks lying across the upholstery, which was the most visible defect left on any piece.
+
+    They defeat per-triangle tests, because a flap is a *cluster*, not one bad triangle: cutting on
+    edge length gutted the piano's front, and cutting on sliver aspect punched holes in that sofa.
+    So segment each piece instead - join neighbouring triangles only where the surface stays smooth
+    - and drop whole patches too small to be real.
+
+    The threshold has to be a fraction of the piece, not an absolute area. At a flat 200 cm2 this
+    took 34% of La Mirada's triangles and improved it, but 43% of Gale Street's, whose mesh is
+    sparser, and left its sofa and armchairs full of holes. A share of the piece's own surface
+    adapts; the floor just stops it running away on a tiny piece.
+
+    OFF BY DEFAULT, and that is a deliberate call rather than laziness. At 0.3% it is a clear,
+    visible win on La Mirada - the sofa's torn front edge and arm flaps go and the piano keeps its
+    front - and it is still a regression on Gale Street's sofa at the same setting. Three different
+    geometry filters have now helped one house and hurt another, so this one does not get to run
+    unasked. Pass flap_frac to turn it on for a house somebody has actually looked at.
+    """
+    from collections import defaultdict
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    out = np.zeros(len(Ff), bool)
+    dropped = 0
+    kept = 0
+    for i in range(n):
+        tri = idx[lab == i]
+        F = Ff[tri]
+        T = Vf[F]
+        nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        ln = np.linalg.norm(nrm, axis=1)
+        ok = ln > 1e-12
+        nrm = nrm / np.maximum(ln, 1e-12)[:, None]
+        area = ln / 2
+        total = float(area.sum())
+
+        emap = defaultdict(list)
+        for k, f in enumerate(F):
+            for a in range(3):
+                e = (min(f[a], f[(a + 1) % 3]), max(f[a], f[(a + 1) % 3]))
+                emap[e].append(k)
+        cth = np.cos(np.radians(fold_deg))
+        rows, cols = [], []
+        for fs in emap.values():
+            if len(fs) == 2 and ok[fs[0]] and ok[fs[1]] and float(np.dot(nrm[fs[0]], nrm[fs[1]])) >= cth:
+                rows.append(fs[0])
+                cols.append(fs[1])
+        if rows:
+            m = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(F), len(F)))
+            ncomp, cl = connected_components(m, directed=False)
+            sizes = np.zeros(ncomp)
+            np.add.at(sizes, cl, area)
+            limit = max(frac * total, floor_m2)
+            bad = np.isin(cl, np.where(sizes < limit)[0])
+        else:
+            bad = np.zeros(len(F), bool)
+        out[tri[~bad]] = True
+        dropped += int(bad.sum())
+        kept += len(tri)
+    print(f'dropped {dropped:,} triangles in flaps under {frac*100:.1f}% of their own piece '
+          f'({100*dropped/max(kept,1):.1f}% of kept)')
+    return out
+
+
+def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12, flap_frac=0.0):
     full, empty = paths(model)
     t0 = time.time()
     Vf, Ff, Tf, Ftf, Fmat, mats = load_obj(full, want_uv=True)
@@ -343,6 +416,9 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12
               f'({100*(before-int(keep.sum()))/max(before,1):.1f}%)')
 
     idx, lab, n = components(Ff, keep)
+    if flap_frac:
+        keep = drop_flaps(Vf, Ff, idx, lab, n, FLAP_FOLD, flap_frac)
+        idx, lab, n = components(Ff, keep)
     print(f'{n} connected components')
 
     house = json.load(open(os.path.join('data', model, 'house.json')))

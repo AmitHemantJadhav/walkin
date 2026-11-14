@@ -479,10 +479,20 @@ async function relay(url, body, waitMs) {
 }
 
 async function gemini(contents) {
-  const { data } = await relay('/api/gemini', {
+  const body = {
     systemInstruction: { parts: [{ text: SYSTEM }] }, contents, tools: TOOLS,
     generationConfig: { temperature: 0.4, maxOutputTokens: 1024 }, // room for thinking tokens plus a short answer
-  }, HARD_DEADLINE_MS);
+  };
+  let data;
+  try {
+    ({ data } = await relay('/api/gemini', body, HARD_DEADLINE_MS));
+  } catch (e) {
+    // a provider hiccup (502/503/504, not a missing key) usually clears in a second: try once more
+    if (!(e && e.status >= 502 && e.status <= 504 && !/not set/i.test(e.message || ''))) throw e;
+    console.info('[agent] upstream', e.status, '- retrying once');
+    await new Promise((r) => setTimeout(r, 700));
+    ({ data } = await relay('/api/gemini', body, HARD_DEADLINE_MS));
+  }
   const cand = data.candidates && data.candidates[0];
   const content = cand && cand.content;
   if (!content || !content.parts) {
@@ -517,7 +527,8 @@ const FRIENDLY = {
 function friendlyError(e) {
   if (e && e.status === 429) return e.friendly || FRIENDLY.busy;
   if (e && (e.status === 0 || e.status === 502 || e.status === 504)) return FRIENDLY.network;
-  if (e && e.status === 503) return "I can't reach my brain right now.";
+  if (e && e.status === 503 && /not set/i.test(e.message || '')) return "I can't reach my brain right now.";
+  if (e && e.status >= 500) return FRIENDLY.busy;   // the provider is overloaded, not missing
   return FRIENDLY.other;
 }
 
@@ -614,13 +625,36 @@ function unlockAudio() { // iOS only plays audio that was started from a tap onc
   audioUnlocked = true;
   player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
   player.play().catch(() => {});
+  // iOS Safari only lets speechSynthesis talk after one utterance started inside a tap: say nothing, now
+  if (window.speechSynthesis) {
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) { /* no voice */ }
+  }
 }
 
-function browserSpeak(text, capMs = 15000) {
-  if (!window.speechSynthesis) return Promise.resolve();
-  speechSynthesis.cancel();
+// A natural English voice if the device has one (the default is often robotic or the wrong language).
+let pickedVoice = null;
+function voiceFor() {
+  if (pickedVoice || !window.speechSynthesis) return pickedVoice;
+  const vs = speechSynthesis.getVoices().filter((v) => /^en(-|_|$)/i.test(v.lang));
+  const prefer = [/Samantha/i, /Ava/i, /Google US English/i, /Microsoft (Aria|Jenny|Guy)/i, /Natural/i, /en-US/i];
+  for (const re of prefer) { const v = vs.find((x) => re.test(x.name) || re.test(x.lang)); if (v) return (pickedVoice = v); }
+  return (pickedVoice = vs[0] || null);
+}
+
+async function browserSpeak(text, capMs = 15000) {
+  if (!window.speechSynthesis) return;
+  // Chrome silently drops an utterance spoken in the same tick as cancel(): only cancel when something is
+  // actually playing, and then give the engine a moment before the next line.
+  if (speechSynthesis.speaking || speechSynthesis.pending) {
+    speechSynthesis.cancel();
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  speechSynthesis.resume();                    // Chrome can be left paused after a cancel
   return new Promise((resolve) => {
     const u = new SpeechSynthesisUtterance(text), cap = setTimeout(resolve, capMs);
+    const v = voiceFor();
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = 'en-US';
+    u.rate = 1.03;
     u.onend = u.onerror = () => { clearTimeout(cap); resolve(); };
     speechSynthesis.speak(u);
   });

@@ -7,6 +7,7 @@ import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
 import { createRealHands } from './realhands.js';
 import { createRadial } from './radial.js';
+import { liftOff, setDown } from './tabletop.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -550,6 +551,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const item = hitFurniture();
   if (item) {
     select(item);
+    liftOff(item); // #58: a plant on a table comes off it into your hand
     const f = hitFloor(), P = phys();
     drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2(),
       phys: P && P.grab(item, 'mouse') ? P : null };
@@ -564,6 +566,7 @@ canvas.addEventListener('pointermove', (e) => {
     const f = hitFloor();
     if (f) {
       const x = f.x + drag.off.x, y = f.y + drag.off.y;
+      drag.tx = x; drag.ty = y;
       if (drag.phys) drag.phys.moveTarget('mouse', [x, y]); else { drag.item.position.x = x; drag.item.position.y = y; }
       checkFit();
     }
@@ -581,6 +584,7 @@ canvas.addEventListener('pointerup', (e) => {
     else { selected = null; checkFit(); }
   }
   if (drag?.phys) drag.phys.release('mouse'); // mouse sets pieces down where they are: no fling
+  if (drag?.mode === 'item' && setDown(drag.item, drag.tx ?? drag.item.position.x, drag.ty ?? drag.item.position.y)) checkFit();
   drag = null;
 });
 canvas.addEventListener('dblclick', (e) => {
@@ -707,11 +711,16 @@ const depthSign = () => (handCam === 'user' ? -1 : 1);
 function letGo(side, fling) {
   const g = grabs[side];
   if (!g) return;
-  if (g.phys) g.phys.release(side, fling && Math.hypot(g.vel[0], g.vel[1]) > FLING_MIN ? g.vel : null);
+  const thrown = fling && Math.hypot(g.vel[0], g.vel[1]) > FLING_MIN;
+  if (g.phys) g.phys.release(side, thrown ? g.vel : null);
   delete grabs[side];
+  // #58: let go over a table and it stands on the table. Not while the other hand still holds it, and not a throw.
+  if (!Object.values(grabs).some((o) => o.item === g.item)
+    && setDown(g.item, thrown ? null : g.tx ?? g.item.position.x, g.ty ?? g.item.position.y)) checkFit();
 }
 function moveHeld(g, side, x, y, yaw) {
   trackVel(g, x, y);
+  g.tx = x; g.ty = y; // where the hand wants it: a plant stopped beside a table still has the hand over it (#58)
   if (g.phys) { g.phys.moveTarget(side, [x, y], yaw); return; }
   g.item.position.x = x; g.item.position.y = y;
   if (typeof yaw === 'number') g.item.rotation.z = yaw;
@@ -859,6 +868,7 @@ function onHands(list, cam) {
       if (!item && !puckReady && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
       if (item && f) {
         select(item);
+        liftOff(item); // #58
         const P = phys();
         grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
           phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };

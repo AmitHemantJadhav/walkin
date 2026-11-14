@@ -20,8 +20,11 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 
 1. **Move the coffee table out of the way first** — one grab, it's light. A sofa can't pass through it.
 2. Stand at **scan point 37**. The doorway you want is the **1.15 m** one, 0.47 m away.
-3. Carry the sofa at it **broadside**. It stops dead:
+3. Carry the sofa at it **broadside**. It stops dead, and John says:
    > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
+   >
+   > **Only if #54 is merged.** It is the only thing that listens for the sentence. Without it the sofa
+   > stops at the door in silence and you have to say the line yourself — check before you go on.
 4. Turn it and walk it through **square on**. If it stops in the doorway, back off half a metre, square up, go again.
 5. If anyone asks: a king bed gets *"it won't fit through at all"* at every angle, and never goes through.
 

@@ -115,6 +115,12 @@ function neighbours(item) {
     && o.userData.floor === item.userData.floor);
 }
 
+/** Just the walls: being stuck in another piece is recoverable, being pushed into a wall never is. */
+function hitsWall(poly, walls) {
+  for (const s of walls.segs) if (overlaps(poly, s.poly)) return true;
+  return false;
+}
+
 /** Is this footprint clear of walls and of other pieces? Returns null, or what it hit. */
 function blockedBy(poly, item, walls) {
   for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
@@ -161,11 +167,13 @@ function step(item, st, tx, ty, trot, walls) {
         return hit;
       }
     }
-    // Still stuck: creep, don't jump. Amit's catch on #44 - letting it take the whole step here means a
-    // piece overlapping another one can be dragged clean through a wall until the two separate.
+    // Still stuck: creep, don't jump, and never into a wall. Crawling freely was how a sofa that
+    // started overlapping another piece walked 4.8 m through the living room wall in a demo rehearsal.
     const crawl = Math.min(1, ESCAPE / (dist || 1));
-    st.x += dx * crawl;
-    st.y += dy * crawl;
+    const cx = st.x + dx * crawl, cy = st.y + dy * crawl;
+    if (hitsWall(fp(item, cx, cy, st.rot), walls)) return { kind: 'wall', dir: [0, 0] };  // say why, as usual
+    st.x = cx;
+    st.y = cy;
     return { kind: 'overlapping' };
   }
 
@@ -379,7 +387,7 @@ function frame() {
       st.vx = (st.x - before[0]) / dt;
       st.vy = (st.y - before[1]) / dt;
       st.sliding = false;
-      if (hit && hit.kind === 'wall') {
+      if (hit && (hit.kind === 'wall' || hit.kind === 'overlapping')) {   // say why either way
         const door = doorReason(item, st, walls);
         if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
       }

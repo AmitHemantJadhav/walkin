@@ -159,6 +159,25 @@ function shadow(w, d) {
   return m;
 }
 
+const heroMats = new Set();            // hero materials, so the metalness clamp can be lifted later
+let envReady = false;
+
+/**
+ * Whether the scene has an environment map. lighting.js calls this once it has built one from the photo.
+ * Hero models ship metalness maps that drive parts of them to fully metallic; with nothing to reflect
+ * those parts render black, so they are clamped until there is something. This flips them back.
+ */
+export function setEnvironmentReady(on) {
+  if (envReady === !!on) return;
+  envReady = !!on;
+  for (const m of heroMats) {
+    const authored = m.userData.authoredMetalness;
+    if (typeof authored !== 'number') continue;
+    m.metalness = envReady ? authored : Math.min(authored, 0.12);
+    m.needsUpdate = true;
+  }
+}
+
 /** How dark the contact shadows are (lighting.js calls this with the room's brightness). */
 export function setContactShadow({ opacity }) {
   if (opacity == null) return;
@@ -267,11 +286,16 @@ function fitToSpec(src, spec, flipped, style, hero) {
     o.renderOrder = 2;          // after the depth-only occluders
     o.castShadow = o.receiveShadow = false;
     if (hero) {
-      // The packed AO/roughness/metalness maps drive metalness to 1 on parts of these models, and a
-      // fully metallic surface with nothing to reflect renders black. Until the scene has an
-      // environment map (needs the renderer; asked Amit for walkin.renderer), keep metal near zero.
+      // These models ship real PBR maps — colour, roughness, metalness and normal — and the packed map
+      // drives metalness to 1 on parts of them. A fully metallic surface with nothing to reflect renders
+      // black, so while the scene had no environment this was clamped to 0.12 and the models were lit as
+      // if they were made of paper. lighting.js now builds an environment from the photo, so the clamp
+      // is lifted when there is one and the maps are used as the model's author intended. Without an
+      // environment (?env=off, or before the first relight) the old clamp still applies.
       o.material = o.material.clone();
-      o.material.metalness = Math.min(o.material.metalness, 0.12);
+      o.material.userData.authoredMetalness = o.material.metalness;   // so the clamp can be undone
+      heroMats.add(o.material);
+      if (!envReady) o.material.metalness = Math.min(o.material.metalness, 0.12);
       o.material.envMapIntensity = 1;
       // CoffeeTable_01 ships a baked COLOR_0 attribute that multiplies its texture to black.
       // The textures already carry the look, so vertex colours are never wanted here.

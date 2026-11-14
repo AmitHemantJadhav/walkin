@@ -84,9 +84,10 @@ function tagItem(item, price) {
   const old = tags.get(item); if (old) disposeTag(old);
   const spec = (W().FURNITURE || {})[item.userData.kind] || {};
   const s = makeTag(`${spec.name || item.userData.kind} · ${usd(price)}`);
-  const sx = item.scale && item.scale.z ? item.scale.z : 1;
-  s.position.set(0, 0, ((spec.flat ? 0.35 : (spec.h || 0.8) + 0.22)) / sx); // a child: it follows a drag, goes with a delete
-  item.add(s);
+  // In the scene, not a child of the piece: Box3.setFromObject counts children, and app.js uses that box for the
+  // hand grab and the selection box. hook() moves the tag onto its piece every frame (follows a drag, goes on delete).
+  s.userData.lift = spec.flat ? 0.35 : (spec.h || 0.8) + 0.22;
+  W().scene.add(s);
   item.userData.price = price;
   tags.set(item, s);
 }
@@ -94,12 +95,11 @@ function tagItem(item, price) {
 function hook() {
   if (hooked || !W().beforeRender) return;
   hooked = true;
-  const cam = new THREE.Vector3(), fwd = new THREE.Vector3(), p = new THREE.Vector3(), ps = new THREE.Vector3();
-  // same apparent size past 2.2 m, and undo the piece's own scale (a scaled-down GLB would shrink its tag)
+  const cam = new THREE.Vector3(), fwd = new THREE.Vector3(), p = new THREE.Vector3();
+  // same apparent size past 2.2 m (tags sit in the scene, so this is their world size)
   const fit = (s, d) => {
     const k = Math.max(1, d / 2.2), [sw, sh] = s.userData.size;
-    if (s.parent) s.parent.getWorldScale(ps); else ps.set(1, 1, 1);
-    s.scale.set((sw * k) / (ps.x || 1), (sh * k) / (ps.y || 1), 1);
+    s.scale.set(sw * k, sh * k, 1);
   };
   W().beforeRender.add(() => {
     const w = W(), cur = w.current;
@@ -109,12 +109,12 @@ function hook() {
     const near = [];
     for (const [item, s] of tags) {
       if (!item.parent) { disposeTag(s); tags.delete(item); continue; }   // deleted piece
-      s.getWorldPosition(p);
+      item.getWorldPosition(p); p.z += s.userData.lift; s.position.copy(p);
       const inRoom = w.roomAt(item.position.x, item.position.y, item.userData.floor) === here;
       const d = p.distanceTo(cam), ahead = p.clone().sub(cam).dot(fwd) > 0;
       s.visible = false;
       fit(s, d);
-      if (shown && inRoom && d < 7) near.push([d + (ahead ? 0 : 100), s]);   // pieces in view win the 8 slots
+      if (shown && inRoom && item.visible && d < 7) near.push([d + (ahead ? 0 : 100), s]);   // pieces in view win the 8 slots
     }
     near.sort((a, b) => a[0] - b[0]).slice(0, 8).forEach(([, s]) => { s.visible = true; });   // max 8: no clutter
     if (totalTag) { totalTag.visible = shown && totalRoom === here; fit(totalTag, totalTag.getWorldPosition(p).distanceTo(cam)); }
@@ -171,8 +171,9 @@ export async function suggestRoom({ room, tier, budget } = {}) {
   if (!TIERS.includes(tier)) tier = Number(listing.price) >= 1500000 ? 'premium' : 'mid';
 
   const res = (await w.stageRoom(r.id, pick.palette)) || {};
-  let items = itemsIn(r);
-  if (!items.length) return { ok: false, room: r.label, reason: res.say || 'nothing fits in this room' };
+  // only priced set pieces: a room with no set (kitchen, bath) keeps the home's own scanned pieces, which aren't for sale
+  let items = itemsIn(r).filter((it) => priceOf(it.userData.kind) != null);
+  if (!items.length) return { ok: false, room: r.label, reason: res.say || 'nothing to furnish in this room', say: res.say || undefined };
 
   const sum = (t) => items.reduce((s, it) => s + (priceOf(it.userData.kind, t) || 0), 0);
   const dropped = [];

@@ -26,3 +26,44 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 - Sizes are metres, Z up, front faces −y (see `furniture.js`).
 - Exposing a function: `window.walkin.stageRoom = stageRoom` from your module, and add your `<script type="module">`
   line to `index.html` (small additive edit; mention it in the PR).
+
+---
+
+## State of this lane (updated Sat 05:40 ET by the overnight agent)
+
+**All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
+
+| file | what it does | hooks |
+|---|---|---|
+| `furniture.js` | 22-kind catalog at real metres, CC0 glTF models, three style palettes applied part by part, contact shadows | `FURNITURE`, `PLANTS`, `buildFurniture`, `setStyle`, `applyStyle`, `STYLES` |
+| `models/` | Kenney Furniture Kit (CC0) + two photoreal Poly Haven pieces in `hero/`, loaded after the kit model so nothing waits. `models/CREDITS.md` has provenance and two traps. `models/preview.html` renders every item in its real-size box | |
+| `lighting.js` | ambient tint, key-light direction and contact-shadow strength read off the current pano | `walkin.relight()` |
+| `fit.js` | room outline, piece overlaps, doorway zones from the API's `openings`, 0.6 m walkways by raster + flood fill. `{quick: true}` skips the raster (162× cheaper) for use while dragging | `fitReport`, `fitLine`, `checkRoom` |
+| `staging.js` | `stageRoom` / `stageHouse` / `placeObject`, every placement validated, clear of wall faces | `stageRoom`, `stageHouse`, `placeObject`, `describeRoom`, `plants`, `styles`, `setStyle` |
+| `walls.js` + `shade.js` | A4: a material on one real wall, split around doorways and windows, at real scale, multiplied by a light map sampled from the photo | `setWallMaterial`, `clearWallMaterial`, `wallMaterials` |
+| `physics.js` | a constraint layer, not an engine: walls with doorways open, swept sub-steps, mass lag, friction slide | `walkin.physics.{grab,moveTarget,release,shove,probe,enabled}`, `walkin:blocked` event |
+| `layout.js` | save / load / clear, localStorage autosave per house, `?layout=none` | `saveLayout`, `loadLayout`, `clearLayout` |
+| `tools/fake_house.py` | a synthetic house into the git-ignored `data/fixture` so the viewer runs with **no Matterport keys** | `?m=fixture` |
+| `tools/make_tiles.py` | four seamless 1 m wall tiles so the wallpaper beat survives a missing Gemini key | |
+| `docs/demo-runbook.md` | the 3-minute run, rehearsed against `main` | |
+
+### Things worth knowing before you change any of this
+
+- **Room polygons from the API follow wall CENTRE LINES.** A piece placed against the polygon edge is half inside
+  the wall. `alongWall` clears `thickness / 2` and `clearOfWalls` rejects anything overlapping a wall band.
+- **A wall midpoint belongs to no room**: `roomAt` on it returns null. Look a step inside along the normal.
+- **Model geometry and materials are shared.** A piece is `clone(true)` of one cached glTF; style materials are
+  cached per (style, source material); every contact shadow uses one `CanvasTexture`. **Never dispose any of it
+  when removing a piece** — it blanks the next one of that kind. `walls.js` is the exception: each wall owns its
+  material and light map, and those are disposed.
+- **Telling "carrying" from "placing" by distance alone is wrong** and bit three times: being stuck is exactly when
+  the distance grows. `physics.js` uses time, contact and whether a hand holds it.
+- The empty-house mesh sits a few centimetres into the room from the idealised wall graph, so `walls.js` offsets
+  **8 cm**, not the 1 cm the issue suggested. Less and the wallpaper is buried.
+
+### Still untested by anyone, as of this writing
+
+- **Hands with a real camera** (#41, #50) — no webcam on this machine.
+- **Anything on a phone or in the headset**, including fps with hands on.
+- **The agent against a real Gemini key** — there is none in `.env` here; everything was verified with
+  `GEMINI_MOCK=1`, which works well enough to demo on.

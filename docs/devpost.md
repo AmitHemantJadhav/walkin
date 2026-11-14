@@ -2,6 +2,10 @@
 
 > Draft. Lines marked **[check]** describe features that are planned for Saturday and must be confirmed on `main`
 > before submitting. Cut anything that isn't working in the demo.
+>
+> **Numbers:** only quote figures from [`pitch-facts.md`](pitch-facts.md) (each one says how it was measured,
+> and "Things to say carefully" lists what hasn't been tested yet). The beats and fallbacks are in
+> [`demo-card.md`](demo-card.md).
 
 **Tagline:** Homes.com gets you into the house. Walk-In lets you live in it.
 
@@ -26,8 +30,9 @@ Put your phone in a cheap headset and you are standing in a real home that Matte
   from the scan's real measurements. **[check]**
 - **Point and change it.** "Put red-brick wallpaper on this wall" generates a seamless tile and puts it on the wall
   you are pointing at. **[check]**
-- **Ask for advice.** "What plant should go here?" The agent works out the light from the window positions and the
-  wall's compass orientation, suggests a plant, and places it. **[check]**
+- **Ask for advice.** "What plant should go here?" The agent works out the light from the size of the room's windows and how far
+  the spot is from them (measured in the scan), suggests a plant, and places it. It doesn't claim a compass
+  direction: the scan isn't aligned to north. **[check]**
 - **Stage a room in one sentence.** "Stage this as a modern bedroom" places a full set that fits and keeps the
   doorways clear. **[check]**
 

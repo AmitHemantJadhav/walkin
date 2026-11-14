@@ -26,3 +26,116 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 - Sizes are metres, Z up, front faces −y (see `furniture.js`).
 - Exposing a function: `window.walkin.stageRoom = stageRoom` from your module, and add your `<script type="module">`
   line to `index.html` (small additive edit; mention it in the PR).
+
+---
+
+## State of this lane (updated Sat 08:10 ET by the overnight agent)
+
+**All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
+
+| file | what it does | hooks |
+|---|---|---|
+| `furniture.js` | 22-kind catalog at real metres, CC0 glTF models, three style palettes applied part by part, contact shadows | `FURNITURE`, `PLANTS`, `buildFurniture`, `setStyle`, `applyStyle`, `STYLES` |
+| `models/` | Kenney Furniture Kit (CC0) + two photoreal Poly Haven pieces in `hero/`, loaded after the kit model so nothing waits. `models/CREDITS.md` has provenance and two traps. `models/preview.html` renders every item in its real-size box | |
+| `lighting.js` | ambient tint, key-light direction and contact-shadow strength read off the current pano | `walkin.relight()` |
+| `fit.js` | room outline, piece overlaps, doorway zones from the API's `openings`, 0.6 m walkways by raster + flood fill. `{quick: true}` skips the raster (162× cheaper) for use while dragging | `fitReport`, `fitLine`, `checkRoom`, `doorsFor` |
+| `staging.js` | `stageRoom` / `stageHouse` / `placeObject`, every placement validated, clear of wall faces | `stageRoom`, `stageHouse`, `placeObject`, `describeRoom`, `plants`, `styles`, `setStyle` |
+| `walls.js` + `shade.js` | A4: a material on one real wall, split around doorways and windows, at real scale, multiplied by a light map sampled from the photo | `setWallMaterial`, `clearWallMaterial`, `wallMaterials` |
+| `physics.js` | a constraint layer, not an engine: walls with doorways open, swept sub-steps, mass lag, friction slide | `walkin.physics.{grab,moveTarget,release,shove,probe,enabled}`, `walkin:blocked` event |
+| `layout.js` | save / load / clear, localStorage autosave per house, `?layout=none`, and what each piece stands on | `saveLayout`, `loadLayout`, `clearLayout` |
+| `tools/fake_house.py` | a synthetic house into the git-ignored `data/fixture` so the viewer runs with **no Matterport keys** | `?m=fixture` |
+| `tools/make_tiles.py` | four seamless 1 m wall tiles so the wallpaper beat survives a missing Gemini key | |
+| `preflight.js` | `await walkin.preflight()` — nine pass/fail lines before you present, saves the room and puts it back | `preflight` |
+| `docs/demo-runbook.md` | the 3-minute run, rehearsed against `main`, opening with the six things that will bite you | |
+
+### Things worth knowing before you change any of this
+
+- **Room polygons from the API follow wall CENTRE LINES.** A piece placed against the polygon edge is half inside
+  the wall. `alongWall` clears `thickness / 2` and `clearOfWalls` rejects anything overlapping a wall band.
+- **A wall midpoint belongs to no room**: `roomAt` on it returns null. Look a step inside along the normal.
+- **Model geometry and materials are shared.** A piece is `clone(true)` of one cached glTF; style materials are
+  cached per (style, source material); every contact shadow uses one `CanvasTexture`. **Never dispose any of it
+  when removing a piece** — it blanks the next one of that kind. `walls.js` is the exception: each wall owns its
+  material and light map, and those are disposed.
+- **Telling "carrying" from "placing" by distance alone is wrong** and bit three times: being stuck is exactly when
+  the distance grows. `physics.js` uses time, contact and whether a hand holds it.
+- The empty-house mesh sits a few centimetres into the room from the idealised wall graph, so `walls.js` offsets
+  **8 cm**, not the 1 cm the issue suggested. Less and the wallpaper is buried.
+- **An opening is `{type, width, height, bottom, at}`** after `prep_house.py` normalises it — *not* the API's
+  `lowerElevation` / `relativeCenter`. Use `at` (0–1 along the wall). I spent twenty minutes this morning chasing a
+  critical bug that was my own test reading `relativeCenter`, getting `undefined`, and falling back to the wall
+  midpoint, which is nowhere near the door.
+- **`tryPlace` puts everything on the floor.** Anything that goes on top of something else has to go through
+  `placeObject`, which knows about surfaces. A floor-level television inside a floor-level stand fails its own
+  overlap check, which is why no staged room had a television until this morning.
+- **A piece standing on another records `userData.on = <uuid>`, and uuids are new every reload.** `layout.js`
+  stores the link as an index into the saved list and puts it back; `walkin.supportUnder(item)` works it out from
+  the geometry for anything saved before that. Without it a restored television and its stand each read the other
+  as a collision and neither can be picked up.
+- **`userData.on` is written when a piece is placed and almost nothing else looks at it.** That one fact
+  produced three separate bugs in one morning: a restored television and its stand reading each other as a
+  collision, a television left hanging in the air when its stand was deleted, and a television left behind
+  when its stand was dragged. If you add anything that moves, removes or reloads a piece, ask what happens
+  to whatever is standing on it. `carry()` and the dangling-support drop in `physics.js` cover the loop;
+  `layout.js` covers save and load.
+- **The previous position of a piece has to come from `st`, not from the item.** A mouse drag and the ⟳
+  button write `item.position` / `item.rotation` themselves, so inside the frame loop those already hold
+  the new value and any difference you compute against them is zero. `st.x`, `st.y`, `st.rot` still hold
+  last frame's. This cost twenty minutes: riders followed a hand drag perfectly and ignored the ⟳ button.
+- **"The nearest door" is not "the door you are pushing at".** La Mirada's 1.15 m doorway has a 0.77 m one
+  a metre and a half away, and `doorReason` quoting the nearest produced a confident, specific, wrong
+  sentence a second before the sofa went through the other door. Choose by direction, as `doorAhead` does.
+- **Big and unlabelled is not the same as living space.** `PLANS.living` refuses garages, basements, laundries and
+  the rest unless the style string asks for a living room by name. A sofa in the garage is worse than an empty
+  garage, because John says it out loud.
+
+### `stageRoom` answers "the whole house" with the whole house
+
+John has no `stage_house` tool (#56) — his only staging tool is `stage_room`, so beat 7 arrives here
+with the whole sentence as the style. `WHOLE_HOUSE` catches *whole house / entire home / every room /
+all the rooms* and delegates to `stageHouse`, returning a `stageRoom`-shaped result so `agent.js` and the
+mock need no change. **Strip the phrase before delegating** — `stageHouse` calls `stageRoom` for every
+room, and leaving it in made each of those ask for the whole house again: the recursion came back with
+nothing placed and no error anyone could see. Take this out the day a real tool lands.
+
+### Beat 5 only works at one door, and this is the thing most likely to flatten the demo
+
+For a 2.10 × 0.95 m sofa, La Mirada's 22 doorways are: **19 too narrow at any angle** ("it won't fit through at
+all"), one 2.50 m opening it just walks through, and **exactly one** — 1.15 m, off the living room, model
+`(2.81, 0.02)`, 0.47 m from **scan point 37** — where the answer is "turn it and it goes through". Both halves
+verified at that door against `main`, king bed included. `walkin.doorsFor('sofa')` answers this for any house;
+314 Gale St has one usable door, the 1.50 m living/dining one at scan point 5. Run it before rehearsing anywhere
+new.
+
+### Run `await walkin.preflight()` before anything else
+
+Eight checks with the number behind each — the house, John, staging, whether this house even has a door the
+sofa beat works at, physics, the wallpaper tiles, the hand hooks, the frame rate. It saves the room first and
+puts it back. It is also the fastest way to find out whether a change broke something: 8/8 on La Mirada
+standing in the living room.
+
+### Measured, so nobody has to guess
+
+61 fps with 28 pieces, the same in headset (side-by-side) mode, **on a laptop**. Twenty full-house stagings in
+three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
+nothing leaks. La Mirada stages 32 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
+
+### If there is time after the demo
+
+`scripts/smoke.sh` checks syntax, that no key or `data/` is tracked, and that `index.html` doesn't
+load a file that isn't there. **It would have caught none of the eight bugs found this morning** —
+the television never being placed, the rotate button doing nothing since S8, a deleted stand leaving
+its television in the air, the wrong door being quoted. All behaviour, none of it syntax.
+
+`walkin.preflight()` is the browser-side version of the same idea and it already catches most of
+that class: staging placing nothing, a piece stuck in something, no wall segments, the wallpaper
+tiles missing. @sshruti115 has a headless Chrome setup (she tested #60 with it) — **running
+`preflight()` headlessly in `smoke.sh` and failing on a red row** is the cheapest real test suite
+this repo could have. `scripts/` is the humans' to change, so this is a note, not a commit.
+
+### Still untested by anyone, as of this writing
+
+- **Hands with a real camera** (#41, #50) — no webcam on this machine.
+- **Anything on a phone or in the headset**, including fps with hands on. Everything above is a laptop at 60 Hz.
+- **The agent against a real Gemini key** — there is none in `.env` here; everything was verified with
+  `GEMINI_MOCK=1`, which works well enough to demo on.

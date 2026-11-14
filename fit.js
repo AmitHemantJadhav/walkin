@@ -194,6 +194,9 @@ const lower = (s) => (s || 'room').toLowerCase();
  *   { ok, room, reasons: ['blocks the bedroom door'], warnings: [...] }
  * Pass `{ item }` for a piece already in the scene, or `{ kind, x, y, rot, floor }` for a trial position.
  * `{ on: <the piece it stands on> }` and `{ ignore: [...] }` both drop pieces from the overlap test.
+ * `{ quick: true }` skips the walkway raster, which is ~1.8 ms in a 29 m2 room on a laptop and several
+ * times that on a phone. Everything else - the room, overlaps, the doorway zones - is microseconds, so
+ * the viewer runs quick checks while you drag and the full one once you stop.
  */
 export function fitReport(opts = {}) {
   const w = window.walkin;
@@ -234,8 +237,13 @@ export function fitReport(opts = {}) {
     if (overlaps(poly, itemPoly(o))) reasons.push(`overlaps the ${lower(FURNITURE[ok].name)}`);
   }
 
-  // doorways and walkways, with this piece in place
-  if (!isFlat(kind)) {
+  // standing in a doorway is cheap to test and always worth saying, so it runs even in a quick check
+  if (!isFlat(kind) && opts.quick) {
+    const doors = doorways(room, w.house);
+    if (doors.some((d) => overlaps(poly, d.zone))) reasons.push(`blocks the ${lower(room.label)} door`);
+  }
+
+  if (!isFlat(kind) && !opts.quick) {
     const blockers = others.filter((o) => !isFlat(o.userData.kind) && !isOnSomething(o)
       && w.roomAt(o.position.x, o.position.y, floor) === room)
       .map((o) => itemPoly(o));
@@ -285,6 +293,50 @@ export function checkRoom(room) {
     reasons: [...new Set(reports.flatMap((r) => r.reasons))] };
 }
 
+/**
+ * Every doorway in the house, and whether a given piece gets through it: `'as held'` if it fits at
+ * any angle, `'turned'` if only the narrow way round, `'never'` if it doesn't fit at all.
+ *
+ * Which is the question beat 5 of the demo asks, and the answer is not obvious: of La Mirada's
+ * twenty-two doorways exactly one is in the interesting middle for a sofa. Point this at a new house
+ * before rehearsing on it.
+ *
+ *   walkin.doorsFor('sofa').filter(d => d.fits === 'turned')
+ */
+export function doorsFor(kind = 'sofa') {
+  const w = window.walkin;
+  const spec = FURNITURE[kind];
+  if (!w || !spec) return [];
+  const narrow = Math.min(spec.w, spec.d), wide = Math.max(spec.w, spec.d);
+  const out = [];
+  for (const f of w.house.floors || []) {
+    for (const wl of f.walls || []) {
+      const [ax, ay] = wl.a, [bx, by] = wl.b;
+      const len = Math.hypot(bx - ax, by - ay);
+      if (len < 0.05) continue;
+      const dx = (bx - ax) / len, dy = (by - ay) / len, nx = -dy, ny = dx;
+      for (const o of wl.openings || []) {
+        if (o.at == null || (o.type && /window/i.test(o.type)) || (o.bottom || 0) >= 0.3) continue;
+        const width = o.width || 0.9;
+        const x = ax + dx * o.at * len, y = ay + dy * o.at * len;
+        const side = (s) => (w.roomAt(x + nx * s * 0.6, y + ny * s * 0.6, f.id) || {}).label || null;
+        const near = (w.house.panos || [])
+          .map((p) => ({ label: p.label, d: Math.hypot(p.pos[0] - x, p.pos[1] - y) }))
+          .sort((a, b) => a.d - b.d)[0];
+        out.push({
+          width: +width.toFixed(2),
+          fits: wide <= width - 0.02 ? 'as held' : narrow <= width - 0.02 ? 'turned' : 'never',
+          x: +x.toFixed(2), y: +y.toFixed(2),
+          between: [side(1), side(-1)],
+          scanPoint: near ? near.label : null,
+          metresAway: near ? +near.d.toFixed(2) : null,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) => b.width - a.width);
+}
+
 // ------------------------------------------------------------------ show it in the viewer
 // app.js writes the room-outline result into #fit; this adds the rest on the line below it.
 (function start(tries = 0) {
@@ -295,6 +347,7 @@ export function checkRoom(room) {
   window.walkin.fitReport = fitReport;
   window.walkin.checkRoom = checkRoom;
   window.walkin.fitLine = fitLine;
+  window.walkin.doorsFor = doorsFor;
 
   const host = document.getElementById('fit');
   if (!host) return;
@@ -303,21 +356,49 @@ export function checkRoom(room) {
   extra.style.cssText = 'margin-top:2px;font-size:12px;color:#ffb199';
   host.after(extra);
 
-  // the walkway test rasterises the room, so recompute at most ~7 times a second, not every frame
-  let lastKey = '', lastRun = 0;
+  // Put the doorway answer on the screen. physics.js works out "the sofa is 2.10 m across the way
+  // you're holding it and that door is 1.15 m - turn it and it goes through" and fires it as
+  // walkin:blocked; John says it out loud once #54 is merged, and until then nothing in the repo
+  // listens at all, so the beat the runbook says to land hardest happens in silence. This is the
+  // written half, which costs nothing and doesn't depend on a key, a voice or a merge. The headset
+  // hides this panel, so there is no double when John has it too.
+  //
+  // It holds the line for four seconds against the fit checks that run while you drag, and after that
+  // the next thing that actually changes replaces it - so a piece sitting still at a door keeps its
+  // answer on screen to be read rather than blinking out on a timer.
+  let blockedUntil = 0;
+  addEventListener('walkin:blocked', (e) => {
+    const reason = e.detail && e.detail.reason;
+    if (!reason) return;
+    extra.textContent = reason;
+    blockedUntil = performance.now() + 4000;
+  });
+
+  // While a piece is moving, run the cheap checks (room, overlaps, doorways) at ~7 Hz; the walkway
+  // raster only runs once it has been still for a moment, so dragging on a phone stays smooth.
+  const show = (r) => {
+    if (performance.now() < blockedUntil) return;   // don't write over the doorway answer
+    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
+    extra.textContent = say.join(' · ');   // app.js already says "outside a room" on the line above
+  };
+  let lastKey = '', lastRun = 0, settleTimer = null;
   (function tick() {
     requestAnimationFrame(tick);
     const sel = window.walkin.selected;
-    if (!sel) { if (lastKey) { extra.textContent = ''; lastKey = ''; } return; }
+    if (!sel) {
+      if (lastKey && performance.now() >= blockedUntil) { extra.textContent = ''; lastKey = ''; clearTimeout(settleTimer); }
+      return;
+    }
     const key = `${sel.id}|${sel.position.x.toFixed(2)}|${sel.position.y.toFixed(2)}|${sel.rotation.z.toFixed(2)}`
       + `|${window.walkin.furniture.children.length}`;
     const now = performance.now();
     if (key === lastKey || now - lastRun < 140) return;
     lastKey = key;
     lastRun = now;
-    const r = fitReport({ item: sel });
-    // app.js already says "outside a room" on the line above; don't say it twice
-    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
-    extra.textContent = say.join(' · ');
+    show(fitReport({ item: sel, quick: true }));
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      if (window.walkin.selected === sel) show(fitReport({ item: sel }));
+    }, 300);
   })();
 })();

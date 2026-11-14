@@ -6,6 +6,7 @@ import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
 import { createRealHands } from './realhands.js';
+import { createRadial } from './radial.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -114,19 +115,41 @@ const panoMat = new THREE.ShaderMaterial({
   uniforms: {
     texA: { value: null }, texB: { value: null }, invA: { value: new THREE.Matrix3() }, invB: { value: new THREE.Matrix3() },
     mixAB: { value: 0 },
+    // A6: depth-aware move. depthAB = 1 while walking between two panos on the same floor: camP is the moving camera,
+    // posA / posB where the two photos were taken, proxy = (floor z, ceiling z, wall radius, -), mid = centre of the walls.
+    depthAB: { value: 0 }, camP: { value: new THREE.Vector3() }, posA: { value: new THREE.Vector3() },
+    posB: { value: new THREE.Vector3() }, proxy: { value: new THREE.Vector4(0, 2.6, 3, 0) }, mid: { value: new THREE.Vector2() },
   },
   vertexShader: `varying vec3 vDir;
     void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB; varying vec3 vDir;
+  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB, depthAB;
+    uniform vec3 camP, posA, posB; uniform vec4 proxy; uniform vec2 mid; varying vec3 vDir;
     vec4 pano(sampler2D t, mat3 inv, vec3 d) {
       vec3 l = normalize(inv * d);
       float lon = atan(l.x, l.z);
       float lat = asin(clamp(l.y, -1.0, 1.0));
       return texture2D(t, vec2(lon / 6.28318530718 + 0.5, 0.5 + lat / 3.14159265359));
     }
+    // Where this pixel's ray from the moving camera meets a simple room: floor and ceiling planes and a round wall
+    // around the path. Each photo is then read from where it was taken, so the floor slides under you like walking.
+    vec3 hitRoom(vec3 d) {
+      float t = 1000.0;
+      if (d.z < -0.0001) t = (proxy.x - camP.z) / d.z;
+      else if (d.z > 0.0001) t = (proxy.y - camP.z) / d.z;
+      vec2 o = camP.xy - mid, h = d.xy;
+      float a = dot(h, h);
+      if (a > 0.000001) {
+        float b = dot(h, o), c = dot(o, o) - proxy.z * proxy.z;
+        t = min(t, (-b + sqrt(max(b * b - a * c, 0.0))) / a);
+      }
+      return camP + d * max(t, 0.01);
+    }
     void main() {
-      vec4 a = pano(texA, invA, vDir);
-      gl_FragColor = mixAB > 0.001 ? mix(a, pano(texB, invB, vDir), mixAB) : a;
+      vec3 dA = vDir, dB = vDir;
+      if (depthAB > 0.5) { vec3 P = hitRoom(normalize(vDir)); dA = P - posA; dB = P - posB; }
+      if (mixAB <= 0.001) gl_FragColor = pano(texA, invA, dA);
+      else if (mixAB >= 0.999) gl_FragColor = pano(texB, invB, dB);
+      else gl_FragColor = mix(pano(texA, invA, dA), pano(texB, invB, dB), mixAB);
     }`,
   side: THREE.BackSide, depthTest: false, depthWrite: false,
 });
@@ -300,18 +323,33 @@ async function moveTo(p, instant) {
     panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
     camPos.copy(to);
   } else {
-    panoMat.uniforms.texB.value = tex; panoMat.uniforms.invB.value = inv;
-    const t0 = performance.now(), dur = 550;
+    const U = panoMat.uniforms;
+    U.texB.value = tex; U.invB.value = inv;
+    // A6: on the same floor, walk through a simple room (floor, ceiling, walls around the path) instead of
+    // cross-fading two flat photos, and take longer for a longer step. Stairs and ?a6=off keep the plain fade.
+    const dist = from.distanceTo(to), deep = !floorChanged && dist > 0.05 && dist < 10 && params.get('a6') !== 'off';
+    if (deep) {
+      const room = roomAt(to.x, to.y, p.floor) || roomAt(from.x, from.y, p.floor), d = room?.dims || {};
+      const ceil = Math.max(p.floorZ + (d.height > 1.8 && d.height < 6 ? d.height : 2.6), Math.max(from.z, to.z) + 0.3);
+      const wallR = THREE.MathUtils.clamp(d.width && d.depth ? Math.hypot(d.width, d.depth) / 2 : 3, 2.5, 8);
+      U.proxy.value.set(p.floorZ, ceil, Math.max(wallR, dist / 2 + 1), 0);
+      U.mid.value.set((from.x + to.x) / 2, (from.y + to.y) / 2);
+      U.posA.value.copy(from); U.posB.value.copy(to); U.camP.value.copy(from);
+    }
+    U.depthAB.value = deep ? 1 : 0;
+    const t0 = performance.now(), dur = THREE.MathUtils.clamp(420 + 160 * dist, 550, 950);
     await new Promise((done) => {
       const step = () => {
         const k = Math.min(1, (performance.now() - t0) / dur), e = k * k * (3 - 2 * k);
         camPos.lerpVectors(from, to, e);
-        panoMat.uniforms.mixAB.value = e;
+        U.camP.value.copy(camPos);
+        // with the photos lined up on the room, hold each one longer and swap in the middle (less ghosting)
+        U.mixAB.value = deep ? THREE.MathUtils.smoothstep(e, 0.2, 0.8) : e;
         if (k < 1) requestAnimationFrame(step); else done();
       };
       step();
     });
-    panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
+    U.texA.value = tex; U.invA.value = inv; U.mixAB.value = 0; U.depthAB.value = 0;
   }
   current = p;
   buildPucks(p);
@@ -536,12 +574,32 @@ function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants 
 // hands.js) slides the piece along the pointing direction, DEPTH_GAIN metres per metre of hand travel, after a small
 // dead zone so depth noise doesn't wobble it. Front camera (handheld): toward the phone = away from you; back camera
 // (headset): away from the phone = away. ?dgain=0 turns it off.
-const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015;
-function carryPoint(f, cam, d0, depth, sign, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
-  if (!gain || d0 == null || depth == null) return [f.x, f.y];
+// Drift: a single camera's depth wanders a few cm while the hand is held still, and at 6× gain that would walk the
+// piece away. So once the hand has been still (within DEPTH_DEAD) for DEPTH_STILL_MS, whatever it has pushed so far
+// is kept and the anchor moves to where the hand is now: anything slower than ~DEPTH_DEAD / DEPTH_STILL_MS (3 cm/s)
+// never moves the piece, a real push (20+ cm/s) does.
+// Drift that never stops (just over 3 cm/s, so the hand is never "still"): each DEPTH_DEAD step is timed, and once
+// the hand is already moving, a step slower than DEPTH_SLOW_MS (under ~6 cm/s) right after another slow step is
+// folded out like drift. The first step after a still spell always counts (its time includes the still spell), and
+// so does one slow step after fast ones (the smoothed depth settling at the end of a real push or pull).
+const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015, DEPTH_STILL_MS = 500;
+const DEPTH_SLOW_MS = 250;
+const deadZone = (v) => Math.sign(v) * Math.max(0, Math.abs(v) - DEPTH_DEAD);
+function anchorDepth(g, depth, now) { g.d0 = depth; g.ref = depth; g.refT = now; g.base = 0; g.moving = false; }
+function handPush(g, depth, sign, now) { // metres of hand travel away from you since the grab, drift folded out
+  if (g.d0 == null && depth != null) anchorDepth(g, depth, now); // grabbed before depth came in: start from here
+  if (g.d0 == null || depth == null) return (g.base || 0) * sign;
+  if (Math.abs(depth - g.ref) > DEPTH_DEAD) { // moving: one more step, restart the stillness clock
+    const slow = now - g.refT > DEPTH_SLOW_MS;
+    if (g.moving && slow && g.slow) g.d0 += depth - g.ref; // two slow steps in a row: drift, not a push
+    g.ref = depth; g.refT = now; g.moving = true; g.slow = slow;
+  } else if (now - g.refT >= DEPTH_STILL_MS) { g.base += deadZone(depth - g.d0); g.d0 = depth; g.refT = now; g.moving = false; }
+  return (g.base + deadZone(depth - g.d0)) * sign;
+}
+function carryPoint(f, cam, push, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
+  if (!gain || !push) return [f.x, f.y];
   const dx = f.x - cam.x, dy = f.y - cam.y, r = Math.hypot(dx, dy);
   if (r < 0.05) return [f.x, f.y]; // pointing at your feet: no direction to push along
-  const raw = (depth - d0) * sign, push = Math.sign(raw) * Math.max(0, Math.abs(raw) - DEPTH_DEAD);
   const r2 = Math.min(Math.max(r + gain * push, Math.min(r, 0.4)), Math.max(r, 12)); // not behind you, not miles off
   return [cam.x + (dx / r) * r2, cam.y + (dy / r) * r2];
 }
@@ -629,6 +687,36 @@ function nearestFurniture(f) { // the piece whose footprint is closest to floor 
 }
 function puckAt(f) { return f ? pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < PUCK_RADIUS) || null : null; }
 
+// A5: pinch and hold still (HOLD_SLOP of the screen) for HOLD_MS where there is nothing to grab and no puck ->
+// radial menu (radial.js). Move toward an option and let go to pick it; let go in the middle to cancel.
+const HOLD_MS = 600, HOLD_SLOP = 0.04;
+const holds = {};
+const placeHere = (kind) => (f) => { // where you pinched, fit-checked by staging.js; else 2 m ahead like the buttons
+  const r = f && window.walkin?.placeObject?.(kind, f.x, f.y);
+  if (!r || !r.fits) addFurniture(kind);
+};
+const radial = createRadial({ scene, camera, toWorld: screenToWorld,
+  aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight,
+  items: [
+    { icon: '🛋️', label: 'Sofa', run: placeHere('sofa') },
+    { icon: '🛏️', label: 'Bed', run: placeHere('queen') },
+    { icon: '🍽️', label: 'Table', run: placeHere('table') },
+    { icon: '🪴', label: 'Plant', run: placeHere('plant') },
+    { icon: '🏠', label: () => (showEmpty ? 'Scanned' : 'Empty'), run: () => $('bEmpty').click() },
+    { icon: '🎙️', label: 'Talk', run: () => window.walkin?.onTalk?.() },
+  ] });
+function holdMenu(h, now) {
+  const hd = holds[h.side];
+  if (!hd) return;
+  if (radial.side === h.side) { radial.point(h.x, h.y); return; }
+  if (radial.side) { hd.t0 = now; hd.x = h.x; hd.y = h.y; return; } // the other hand has it: this hold starts later
+  if (Math.hypot(h.x - hd.x, h.y - hd.y) > HOLD_SLOP) delete holds[h.side]; // it moved: not a hold
+  else if (now - hd.t0 >= HOLD_MS) {
+    for (const s of Object.keys(holds)) if (s !== h.side) delete holds[s]; // so it doesn't pop open again for the other hand
+    radial.open(h.side, hd.x, hd.y, hd.floor);
+  }
+}
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -639,6 +727,8 @@ function onHands(list, cam) {
   for (const side of Object.keys(grabs)) if (!present.has(side)) letGo(side, false); // lost hand: no fling
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
   for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
+  for (const side of Object.keys(holds)) if (!present.has(side)) delete holds[side];
+  if (radial.side && !present.has(radial.side)) radial.cancel(); // lost the hand: never pick by accident
 
   const act = list.find((h) => h.pinch) || list[0];
   if (act) {
@@ -671,14 +761,18 @@ function onHands(list, cam) {
         select(item);
         const P = phys();
         grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
-          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null, d0: h.depth ?? null };
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };
+        anchorDepth(grabs[h.side], h.depth ?? null, now);
       } else if (puckReady) {
         aims[h.side] = null;
         goTo(near.userData.pano);
-      }
+      } else holds[h.side] = { t0: now, x: h.x, y: h.y, floor: f }; // empty space: maybe a pinch-hold (A5)
     } else if (!h.pinch) {
       letGo(h.side, true);
+      delete holds[h.side];
+      if (radial.side === h.side) radial.release();
     }
+    if (h.pinch) holdMenu(h, now);
     prevPinch[h.side] = h.pinch;
   }
 
@@ -702,7 +796,7 @@ function onHands(list, cam) {
       const g = grabs[h.side];
       if (g && g.item === twist.item && h.floor) {
         g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
-        g.d0 = h.depth ?? null; // push / pull starts again from where the hand is now
+        anchorDepth(g, h.depth ?? null, performance.now()); // push / pull starts again from where the hand is now
       }
     }
     twist = null;
@@ -710,7 +804,8 @@ function onHands(list, cam) {
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      const [cx, cy] = carryPoint(h.floor, camera.position, g.d0, h.depth ?? null, depthSign());
+      g.push = handPush(g, h.depth ?? null, depthSign(), performance.now());
+      const [cx, cy] = carryPoint(h.floor, camera.position, g.push);
       moveHeld(g, h.side, cx + g.off.x, cy + g.off.y);
       checkFit();
     }
@@ -735,6 +830,8 @@ async function toggleHands() {
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
     for (const side of Object.keys(grabs)) letGo(side, false); // else physics keeps the piece held by a ghost hand
+    radial.cancel();
+    for (const side of Object.keys(holds)) delete holds[side];
     realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
@@ -851,7 +948,8 @@ function tickPerf() {
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
     + `hands ${handsApi ? `${handsApi.stats?.src ?? ''} ${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
-      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}` : 'off'} · `
+      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}`
+      + `${Object.values(grabs).map((g) => (g.push ? ` · pushed ${(g.push * DEPTH_GAIN).toFixed(2)} m` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }
@@ -901,6 +999,7 @@ function frame() {
   sphere.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
+  radial.layout(); // A5: keep an open menu where you pinched while the head turns
   for (const fn of beforeRender) {
     try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
   }
@@ -927,6 +1026,7 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },
+  get radial() { return radial.state; }, // A5: {side, hot, label} while the pinch-hold menu is open, else null
   // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
   // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
   // Add depth (metres from the camera) to try push / pull: with the front camera a smaller depth pushes the piece away.

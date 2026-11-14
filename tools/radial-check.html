@@ -1,0 +1,64 @@
+<!doctype html><meta charset="utf-8">
+<!-- A5 check, no webcam needed: http://localhost:8000/tools/radial-check.html (?m=<model> for another house).
+     Drives the real pinch-hold gesture code in app.js through walkin.simHands and prints pass / fail. ~5 s. -->
+<pre id="out">RESULT</pre>
+<iframe id="f" width="1280" height="720"></iframe>
+<script>
+document.getElementById('f').src = `../index.html?m=${new URLSearchParams(location.search).get('m') || 'zvKHR9DHNjJ'}&physics=off`;
+const out = document.getElementById('out');
+let fails = 0;
+const log = (s) => { out.textContent += '\n' + s; };
+const eq = (a, b, what) => { const ok = JSON.stringify(a) === JSON.stringify(b); if (!ok) fails++; log(`${ok ? 'ok  ' : 'FAIL'} ${what}${ok ? '' : ` got ${JSON.stringify(a)} want ${JSON.stringify(b)}`}`); };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+(async () => {
+  const f = document.getElementById('f');
+  for (let i = 0; i < 300 && !f.contentWindow.walkin?.placeObject; i++) await sleep(100);
+  const w = f.contentWindow.walkin;
+  if (!w) { log('FAIL viewer never got ready'); return; }
+  try {
+    w.view.pitch = -0.6; await sleep(200);
+    let talked = 0; w.onTalk = () => { talked++; };
+    const H = (x, y, pinch) => w.simHands([{ x, y, pinch }]);
+    const hold = async (x, y) => { H(x, y, true); await sleep(350); H(x, y, true); await sleep(350); H(x, y, true); };
+    const n = () => w.furniture.children.length;
+
+    // 1. hold still 0.7 s in empty space -> menu; up -> Sofa; let go -> a sofa where you pinched
+    const n0 = n();
+    const r1 = H(0.5, 0.78, true); log('pinch floor ' + JSON.stringify(r1));
+    await sleep(350); H(0.5, 0.78, true); eq(w.radial, null, 'not open at 0.35 s');
+    await sleep(350); H(0.5, 0.78, true); eq(w.radial && w.radial.hot, null, 'open at 0.7 s, nothing hot');
+    H(0.5, 0.68, true); eq(w.radial && w.radial.label, 'Sofa', 'hand up = Sofa');
+    H(0.5, 0.68, false); eq(w.radial, null, 'closed on release');
+    eq([n() - n0, w.selected && w.selected.userData.kind], [1, 'sofa'], 'one sofa added and selected');
+    const s = w.selected.position, fl = r1[0].floor;
+    log(`sofa at ${s.x.toFixed(2)},${s.y.toFixed(2)}; pinched floor ${fl && fl.map((v) => v.toFixed(2))}; ${fl ? Math.hypot(s.x - fl[0], s.y - fl[1]).toFixed(2) + ' m apart' : ''}`);
+    H(0.5, 0.78, false); w.simHands([]);
+
+    // 2. a pinch that moves is a drag, not a hold
+    const n1 = n();
+    H(0.2, 0.8, true); await sleep(200); H(0.27, 0.8, true); await sleep(500); H(0.27, 0.8, true);
+    eq(w.radial, null, 'moving pinch never opens the menu'); H(0.27, 0.8, false); w.simHands([]);
+
+    // 3. let go in the middle = cancel; losing the hand = cancel
+    await hold(0.2, 0.85); eq(!!w.radial, true, 'open again');
+    H(0.2, 0.75, true); H(0.2, 0.85, true); eq(w.radial.hot, null, 'back to the middle: nothing hot');
+    H(0.2, 0.85, false); eq(n(), n1, 'cancel adds nothing'); w.simHands([]);
+    await hold(0.2, 0.85); H(0.2, 0.75, true); w.simHands([]); eq([w.radial, n()], [null, n1], 'hand lost: closed, nothing added');
+
+    // 4. Talk (up-left) and the Empty/Scanned toggle (down-left)
+    await hold(0.2, 0.85); H(0.14, 0.80, true); eq(w.radial.label, 'Talk', 'up-left = Talk'); H(0.14, 0.80, false);
+    eq(talked, 1, 'Talk called walkin.onTalk'); w.simHands([]);
+    const b = f.contentDocument.getElementById('bEmpty'), before = b.textContent;
+    await hold(0.2, 0.85); H(0.14, 0.9, true); eq(w.radial.label, before === 'Empty' ? 'Scanned' : 'Empty', 'down-left = the other view');
+    H(0.14, 0.9, false); await sleep(300); eq(b.textContent !== before, true, `toggled ${before} -> ${b.textContent}`); w.simHands([]);
+
+    // 5. grabbing still wins: a pinch on the sofa grabs it, no menu
+    const sp = w.selected.position.clone().project(w.camera);
+    const sx = (sp.x + 1) / 2, sy = (1 - sp.y) / 2;
+    const g = w.simHands([{ x: sx, y: sy, pinch: true }]); await sleep(700); w.simHands([{ x: sx, y: sy, pinch: true }]);
+    eq([g[0].holding, w.radial], ['sofa', null], 'pinch on the sofa grabs it, no menu');
+    w.simHands([{ x: sx, y: sy, pinch: false }]); w.simHands([]);
+  } catch (e) { fails++; log('FAIL threw ' + e.stack); }
+  log(fails ? `${fails} FAILED` : 'ALL PASSED');
+})();
+</script>

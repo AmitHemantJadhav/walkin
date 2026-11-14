@@ -59,7 +59,8 @@ function carry(item, x, y, opts = {}) {
   physics.release('h');
   const on = setDown(item, opts.thrown ? null : x, y);
   tick(60);
-  return { short: +short.toFixed(2), on: on ? on.userData.kind : null };
+  const support = on && w.furniture.children.find((o) => o.uuid === on);
+  return { short: +short.toFixed(2), on: support ? support.userData.kind : null };
 }
 
 // a dining room, living room or kitchen on the ground floor (some rooms have no outline in the scan)

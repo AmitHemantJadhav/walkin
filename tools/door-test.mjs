@@ -46,7 +46,9 @@ const tick = () => { T += 1000 / 60; raf(); };
 // Which side of the wall is the room? The side with the sofa's start in it: try both, pick the one
 // physics doesn't call blocked. nx, ny points from the room through the door.
 const NX = -uy, NY = ux;
-function run(offset, side, broadside = false, speed = 0.6) {
+// yawErr (radians) holds the sofa that far off square for the whole carry. The piece is *created* turned,
+// so nothing gets turned in place near the door (that shove is what spoiled the first try on #84).
+function run(offset, side, broadside = false, speed = 0.6, yawErr = 0) {
   const nx = NX * side, ny = NY * side;
   const start = 2.2, end = 2.0;                         // centre 2.2 m before the door plane, hand runs 2 m past
   // A fresh piece each run: physics keeps state per item, and moving the old one back to the start is
@@ -56,19 +58,26 @@ function run(offset, side, broadside = false, speed = 0.6) {
   sofa.position.x = door.x - nx * start + ux * offset;
   sofa.position.y = door.y - ny * start + uy * offset;
   // end-on: the 0.95 m side is across the door; broadside: the 2.10 m side is, and it must not go through
-  sofa.rotation.z = Math.atan2(ny, nx) + (broadside ? Math.PI / 2 : 0);
+  sofa.rotation.z = Math.atan2(ny, nx) + (broadside ? Math.PI / 2 : 0) + yawErr;
+  const held = sofa.rotation.z;
   physics.stats.assisted = 0;
   for (let i = 0; i < 40; i++) tick();                  // settle the new placement
+  // Where the carry really starts. #84: a run that the settle already shoved through the door looks like a
+  // short, failed carry, so every run reports this and the yaw sweep refuses to count a bad start.
+  const startU = +(-((sofa.position.x - door.x) * nx + (sofa.position.y - door.y) * ny)).toFixed(2);
   physics.grab(sofa, 'h', [sofa.position.x, sofa.position.y]);
   const total = start + end, secs = total / speed + 4;
+  let maxTurn = 0;
   for (let f = 0; f < secs * 60; f++) {
     const s = Math.min(total, (f / 60) * speed);
-    physics.moveTarget('h', [door.x - nx * (start - s) + ux * offset, door.y - ny * (start - s) + uy * offset], sofa.rotation.z);
+    physics.moveTarget('h', [door.x - nx * (start - s) + ux * offset, door.y - ny * (start - s) + uy * offset], held);
     tick();
+    maxTurn = Math.max(maxTurn, Math.abs(Math.atan2(Math.sin(sofa.rotation.z - held), Math.cos(sofa.rotation.z - held))));
   }
   physics.release('h');
   const rx = sofa.position.x - door.x, ry = sofa.position.y - door.y;
-  return { sideU: +(-(rx * nx + ry * ny)).toFixed(2), off: +(rx * ux + ry * uy).toFixed(3), assisted: physics.stats.assisted };
+  return { sideU: +(-(rx * nx + ry * ny)).toFixed(2), off: +(rx * ux + ry * uy).toFixed(3), assisted: physics.stats.assisted,
+    startU, turned: +(maxTurn * 180 / Math.PI).toFixed(1) };
 }
 
 // the room side: carrying with no offset must get somewhere from one side or the other
@@ -91,4 +100,22 @@ for (const off of door.width - 0.02 < 2.10 ? [0, 0.25] : []) {   // a 2.5 m open
   if (r.sideU < 0.3) leaked++;
   console.log(`broadside ${Math.round(off * 100)} cm: sideU ${r.sideU} ${r.sideU < 0.3 ? 'FAIL (a misfit got in)' : 'ok, stopped'}`);
 }
+// #84: how far off square can you carry it through, on the centre line? Same hand, same speed, the yaw held
+// the whole way. A run only counts if it started on the room side (startU near 2.2 m), never already through.
+console.log('off square | start (m) | sideU (m, <0 = through) | assist turned it (deg) | assist fired');
+let lastThrough = null, badStart = 0;
+for (const deg of [0, 2, 4, 6, 8, 10, 12, 15, 20]) {
+  const worst = [];
+  for (const sgn of deg ? [1, -1] : [1]) {
+    const r = run(0, side, false, 0.6, sgn * deg * Math.PI / 180);
+    const ok = r.startU > 1.5;
+    if (!ok) badStart++;
+    worst.push(r);
+    console.log(`${String(sgn * deg).padStart(7)} deg | ${String(r.startU).padStart(5)}${ok ? '' : ' BAD START'} | `
+      + `${String(r.sideU).padStart(6)} | ${String(r.turned).padStart(5)} | ${r.assisted}`);
+  }
+  if (worst.every((r) => r.startU > 1.5 && r.sideU < -1)) lastThrough = deg;
+}
+console.log(lastThrough === null ? 'off square: not even square goes through'
+  : `off square: goes through both ways up to ${lastThrough} deg${badStart ? ` (${badStart} runs had a bad start, not counted)` : ''}`);
 process.exitCode = leaked ? 1 : 0;

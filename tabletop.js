@@ -53,7 +53,7 @@ function onto(support, x, y, spec) {
 /**
  * Let go. (x, y) is where the hand wanted the piece, or null for a throw.
  * On a table it is close to: stand it on top and return the table. Otherwise, if it was lifted off something,
- * put it back on the floor. Returns the support or null.
+ * put it back on the floor. Returns the support's uuid (a string, so a console or a test can log it) or null.
  */
 export function setDown(item, x, y) {
   const w = window.walkin;
@@ -70,5 +70,5 @@ export function setDown(item, x, y) {
   if (item.userData.kind === 'tv') item.rotation.z = support.rotation.z;          // a television faces the room
   item.userData.on = support.uuid;
   item.userData.z0 = z0;               // where it goes if the table is taken away (physics.js)
-  return support;
+  return support.uuid;
 }

@@ -275,6 +275,7 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     card.position.z = f.height / 2;
     card.renderOrder = 2;
     g.add(card);
+    g.userData.card = card;
     g.position.set(f.pos.x, f.pos.y, floorZ);
     g.rotation.z = f.yaw + Math.PI / 2;                    // face the scan point it was cut from
     g.userData.kind = kind;
@@ -358,6 +359,32 @@ export async function labelRealFurniture(pieces = made) {
   return { ok: true, named, say: named.length ? `That is ${named.map((n) => n.name).join(', ')}.` : 'I could not name them.' };
 }
 
+// ------------------------------------------------------------------ keep the cut-outs facing you
+//
+// A cut-out is flat, so seen from the side it is an invisible sliver. It is cut facing the scan point
+// it came from, which is right until you walk somewhere else or slide the piece across the room —
+// and in a headset you are turning your head the whole time. So the card turns to face the camera
+// every frame.
+//
+// Only the card turns, never the group: the group's rotation is the piece's *footprint*, which
+// physics, the fit check and the doorway sentence all read. Spinning that would mean a sofa changed
+// shape as you walked around it.
+const _q = new THREE.Quaternion(), _want = new THREE.Quaternion(), _e = new THREE.Euler();
+
+function faceTheCamera() {
+  const w = window.walkin;
+  if (!w || !w.camera || !made.length) return;
+  for (const g of made) {
+    const card = g.userData.card;
+    if (!card || !g.parent) continue;
+    const theta = Math.atan2(w.camera.position.y - g.position.y, w.camera.position.x - g.position.x) + Math.PI / 2;
+    _e.set(Math.PI / 2, 0, theta, 'ZXY');                  // stand it up, then aim it
+    _want.setFromEuler(_e);
+    g.getWorldQuaternion(_q).invert();                     // the card lives under a rotated group
+    card.quaternion.copy(_q.multiply(_want));
+  }
+}
+
 /** Take them all away again. */
 export function clearRealFurniture() {
   let n = 0;
@@ -373,4 +400,5 @@ export function clearRealFurniture() {
   window.walkin.realFurniture = realFurniture;
   window.walkin.clearRealFurniture = clearRealFurniture;
   window.walkin.labelRealFurniture = labelRealFurniture;
+  if (window.walkin.beforeRender) window.walkin.beforeRender.add(faceTheCamera);
 })();

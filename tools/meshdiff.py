@@ -513,6 +513,14 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         blobs += parts
         index.append(rec)
 
+    # fold is not comparable between houses: La Mirada's median is 30 degrees and Gale Street's is
+    # 35, so a fixed cut drops a third of one house and three fifths of the other. Rank each piece
+    # inside its own house instead, and a caller can ask for "the worst quarter" and mean it anywhere.
+    folds = sorted(r['fold'] for r in index if r['fold'] is not None)
+    for r in index:
+        r['foldRank'] = (None if r['fold'] is None or not folds
+                         else round(sum(1 for f in folds if f < r['fold']) / len(folds), 3))
+
     bin_path = os.path.join(out_dir, 'furniture.bin')
     with open(bin_path, 'wb') as f:
         for b in blobs:

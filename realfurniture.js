@@ -434,7 +434,7 @@ const meshMade = [];
 
 /** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
 export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
-                                     maxFold = null, maxCaptured = null } = {}) {
+                                     maxFold = null, maxCaptured = null, worst = null } = {}) {
   const w = window.walkin;
   if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
   const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
@@ -464,6 +464,10 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     // top should be near zero), captured is surface area over hull area (above 1 means the surface
     // wanders past its own hull, which is noise, not detail). Neither is on by default - a caller
     // that wants only the pieces that hold up asks for it.
+    // `worst` is the one to reach for: 0.25 drops the quarter of this house that reconstructed
+    // least well. fold itself is not comparable between houses - La Mirada's median is 30 degrees
+    // and Gale Street's is 35, so a fixed cut takes a third of one and three fifths of the other.
+    if (worst != null && p.foldRank != null && p.foldRank >= 1 - worst) { skipped.push(p.i); continue; }
     if (maxFold != null && p.fold != null && p.fold > maxFold) { skipped.push(p.i); continue; }
     if (maxCaptured != null && p.captured != null && p.captured > maxCaptured) { skipped.push(p.i); continue; }
 

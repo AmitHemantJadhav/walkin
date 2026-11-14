@@ -507,7 +507,10 @@ const skinMat = new THREE.MeshStandardMaterial({ color: 0xf0c3a2, roughness: 0.5
 const pinchMat = new THREE.MeshStandardMaterial({ color: 0xffc400, emissive: 0x664400, roughness: 0.4 });
 const jointGeo = new THREE.SphereGeometry(1, 12, 10);
 const boneGeo = new THREE.CylinderGeometry(1, 1, 1, 10);
-const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
+const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {}, aims = {};
+// A2: a pinch grabs the nearest piece within 0.4 m of the pinch point (no need to hit it exactly), and teleports
+// only after the hand has pointed at the same puck for 300 ms (the cursor turns green), so a missed grab never jumps.
+const GRAB_RADIUS = 0.4, PUCK_RADIUS = 0.45, PUCK_DWELL_MS = 300;
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
@@ -566,6 +569,19 @@ function drawHands() {
   for (const [side, g] of Object.entries(handViz)) if (!seen.has(side)) g.visible = false;
 }
 
+const _gbox = new THREE.Box3();
+function nearestFurniture(f) { // the piece whose footprint is closest to floor point f, if within GRAB_RADIUS
+  let best = null, bestD = GRAB_RADIUS;
+  for (const o of furniture.children) {
+    if (!o.userData?.kind || o.visible === false) continue;
+    _gbox.setFromObject(o);
+    const d = Math.hypot(Math.max(_gbox.min.x - f.x, 0, f.x - _gbox.max.x), Math.max(_gbox.min.y - f.y, 0, f.y - _gbox.max.y));
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  return best;
+}
+function puckAt(f) { return f ? pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < PUCK_RADIUS) || null : null; }
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -575,6 +591,7 @@ function onHands(list, cam) {
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
   for (const side of Object.keys(grabs)) if (!present.has(side)) delete grabs[side];
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
+  for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
 
   const act = list.find((h) => h.pinch) || list[0];
   if (act) {
@@ -591,19 +608,24 @@ function onHands(list, cam) {
     const cur = handCursors[h.side] || (handCursors[h.side] = makeCursor());
     cur.visible = !!f;
     if (f) cur.position.set(f.x, f.y, f.z + 0.02);
-    cur.material.color.set(h.pinch ? 0xffc400 : 0x00e5ff);
+    const near = puckAt(f), now = performance.now();
+    if (aims[h.side]?.puck !== near) aims[h.side] = { puck: near, since: now };
+    const puckReady = !!near && now - aims[h.side].since >= PUCK_DWELL_MS;
+    cur.material.color.set(h.pinch ? 0xffc400 : puckReady ? 0x3dff8a : 0x00e5ff);
     cur.scale.setScalar(h.pinch ? 0.7 : 1);
 
     if (h.pinch && !prevPinch[h.side]) {
-      // pinch started: grab furniture you point at (or the selected piece if it's close); otherwise jump to a puck
+      // pinch started: grab the piece you point at; a held aim at a puck (300 ms) means teleport; otherwise grab
+      // the nearest piece within 0.4 m, or the selected piece if it's close
       let item = hitFurniture();
-      if (!item && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
+      if (!item && !puckReady && f) item = nearestFurniture(f);
+      if (!item && !puckReady && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
       if (item && f) {
         select(item);
         grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) };
-      } else if (f) {
-        const near = pucks.children.find((m) => Math.hypot(m.position.x - f.x, m.position.y - f.y) < 0.45);
-        if (near) goTo(near.userData.pano);
+      } else if (puckReady) {
+        aims[h.side] = null;
+        goTo(near.userData.pano);
       }
     } else if (!h.pinch) {
       delete grabs[h.side];

@@ -1233,3 +1233,33 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   },
 }; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin
+
+// #108: the home's own furniture as 3D pieces, cut from the MatterPak by tools/meshdiff.py (data/<model>/furniture.bin).
+// realfurniture.js builds them; this is the way in without a console, which a phone doesn't have.
+// More → 🛋 Own furniture toggles them; ?mesh=1 puts them in on load (add &a1=1 to get the headset fps with them on).
+const meshBtn = $('bMesh');
+const meshPieces = () => furniture.children.filter((o) => o.userData.meshPiece);
+let meshBusy = false;
+async function toggleMeshFurniture() {
+  const w = window.walkin;
+  if (meshBusy) return; // a second tap while furniture.bin loads would put every piece in twice
+  if (!w.meshFurniture) { warn('Own furniture: realfurniture.js did not load'); return; }
+  meshBusy = true;
+  try {
+    if (meshPieces().length) {
+      if (selected?.userData.meshPiece) select(null);
+      w.clearMeshFurniture();
+    } else {
+      const r = await w.meshFurniture();
+      console.log(`[mesh] ${r.say}`, r);
+      if (!r.ok || !r.placed) warn(`Own furniture: ${r.say}`);
+    }
+  } finally { meshBusy = false; }
+  const n = meshPieces().length;
+  if (meshBtn) { meshBtn.classList.toggle('on', n > 0); meshBtn.textContent = n ? `🛋 Own furniture (${n})` : '🛋 Own furniture'; }
+}
+if (meshBtn) meshBtn.onclick = toggleMeshFurniture;
+if (params.get('mesh') === '1') (function wait(tries = 0) { // realfurniture.js attaches its hooks a moment after this
+  if (window.walkin.meshFurniture) toggleMeshFurniture();
+  else if (tries < 100) setTimeout(() => wait(tries + 1), 50);
+})();

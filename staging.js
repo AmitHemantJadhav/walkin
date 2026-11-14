@@ -486,6 +486,20 @@ export function placeObject(kind, x, y, opts = {}) {
       if (r.ok) { found = { x: x + ox, y: y + oy }; break; }
       if (!why) why = r.room ? r.reasons[0] : 'that spot is not in a room';
     }
+    // Nothing near where they asked - usually because they were looking at a wall or through a doorway.
+    // Rather than refuse, put it somewhere sensible in the room they are standing in.
+    if (!found && !opts.hereOnly) {
+      const here = w.roomAt(w.current.pos[0], w.current.pos[1], floor);
+      if (here) {
+        for (const c of spotsFor(here, edgesOf(here, w.house), kind)) {
+          const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
+          if (r.room === here && r.ok && clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot)) {
+            found = { x: c.x, y: c.y };
+            break;
+          }
+        }
+      }
+    }
     if (found) { spot = found; why = ''; } else { fits = false; }
   }
 
@@ -505,6 +519,60 @@ export function placeObject(kind, x, y, opts = {}) {
   return { kind, name: spec.name, x: +spot.x.toFixed(2), y: +spot.y.toFixed(2), z: +z.toFixed(3),
     on, room: room ? room.label : null, fits: true, item: it,
     say: `${spec.name} on ${on}${room ? ` in the ${lower(room.label)}` : ''}` };
+}
+
+/**
+ * "What plant should go here?" in one call: read the light where the user is pointing, choose a plant
+ * that suits it, put it there, and give back a sentence.
+ *
+ * The light reading is Shruti's `light_here` (R5) when agent.js is loaded - it knows the window sizes,
+ * distances and compass facing - and falls back to counting the room's windows when it isn't. The choice
+ * itself is deliberately plain botany, so the beat still lands if the model never gets to answer:
+ * a cactus wants sun, a potted plant is happy in the middle, a fern prefers shade.
+ */
+export function suggestPlant(opts = {}) {
+  const w = window.walkin;
+  if (!w) return { ok: false, say: 'the viewer is not ready' };
+
+  let light = null, windows = null, room = null;
+  const tools = w.agent && w.agent.tools;
+  if (tools && typeof tools.light_here === 'function') {
+    const r = tools.light_here();
+    if (r && r.ok) { light = r.light; windows = r.windows; room = r.room; }
+  }
+  if (!light) {                                   // no agent.js: count what the room has
+    const pos = (w.pointer && w.pointer.point) || [w.current.pos[0], w.current.pos[1]];
+    const r = w.roomAt(pos[0], pos[1], w.current && w.current.floor);
+    room = r && r.label;
+    const n = r ? openings(r, w.house).filter((o) => o.kind === 'window').length : 0;
+    light = n >= 2 ? 'bright' : n === 1 ? 'medium' : 'low';
+  }
+
+  const level = /bright/.test(light) ? 'bright' : /medium/.test(light) ? 'medium' : 'low';
+  const pick = opts.kind || { bright: 'cactustall', medium: 'plant', low: 'plantfern' }[level];
+  const why = { bright: 'it takes direct sun', medium: 'it does well in indirect light',
+    low: 'it is happy out of the sun' }[level];
+
+  // "here" means the room you are standing in. The pointer is only trusted when it lands in that same
+  // room: aiming through an open door would otherwise put the plant in the closet next door.
+  let px = opts.x, py = opts.y;
+  if (px == null || py == null) {
+    const hereRoom = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
+    const pt = w.pointer && w.pointer.point;
+    if (pt && w.pointer.room && w.pointer.room === hereRoom) { px = pt[0]; py = pt[1]; }
+    else { px = w.current.pos[0]; py = w.current.pos[1]; }   // search outwards from where they stand
+  }
+  const placed = placeObject(pick, px, py, opts);
+  if (!placed.fits) return { ok: false, light: level, say: placed.say };
+
+  const near = windows && windows.length ? windows[0] : null;
+  return {
+    ok: true, kind: pick, name: placed.name, light: level, room: room || placed.room,
+    on: placed.on, x: placed.x, y: placed.y,
+    say: `A ${lower(placed.name)} — that spot is ${level} light`
+      + (near ? `, ${near.distance_m} m from the nearest window` : '')
+      + `, and ${why}.`,
+  };
 }
 
 /** The plants in the catalog, for the agent to choose from. */
@@ -563,4 +631,5 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
   window.walkin.describeRoom = describeRoom;
   window.walkin.placeObject = placeObject;
   window.walkin.plants = plants;
+  window.walkin.suggestPlant = suggestPlant;
 })();

@@ -13,11 +13,16 @@
 // - Grey ghost blobs around fast fingers: detection takes 20-50 ms on a phone and the <video> moves on meanwhile,
 //   so cutting the live video afterwards put the mask where the hand had been a frame earlier. hands.js now calls
 //   snap() right before each detection, and the cut uses that copy. The mask is also a little tighter.
+// - Fingers cut off by a straight line: the screen shows only the middle of the camera image, and shrinking the hand
+//   pulled the edge of that crop into the view. snap() now copies the whole camera image, and the hand fades out
+//   softly at the camera's own edges instead.
 
 const FINGERS = [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12],
   [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
 const PALM = [0, 1, 2, 5, 9, 13, 17];
 const MAX_W = 720;        // canvas width cap: the camera crop is only ~450-580 px wide, more pixels only cost fill rate
+const FRAME_W = 640;      // camera copy width cap (hands.js asks for 640 × 480)
+const TIPS = new Set([4, 8, 12, 16, 20]);
 const ALPHA = 0.95;       // a resting hand
 const PINCH_ALPHA = 0.4;  // a pinching (holding) hand: the piece in your fingers shows through
 
@@ -35,11 +40,21 @@ export function createRealHands(video, { scale = 0.6 } = {}) {
   size();
   addEventListener('resize', size);
 
-  // Off-screen buffers at camera-crop resolution. iOS Safari ignores globalCompositeOperation when the source is a
-  // <video>, so the video is only ever drawn plainly into `frame`; the masking is canvas-to-canvas in `mask`.
+  // Off-screen buffers, the whole camera image (not just the crop the view shows: a shrunk hand can reach past the
+  // crop). iOS Safari ignores globalCompositeOperation when the source is a <video>, so the video is only ever drawn
+  // plainly into `frame`; the masking is canvas-to-canvas in `mask`. `edge` fades the hand out at the camera's edges.
   const frame = document.createElement('canvas'), fctx = frame.getContext('2d');
   const mask = document.createElement('canvas'), mctx = mask.getContext('2d');
+  const edge = document.createElement('canvas'), ectx = edge.getContext('2d');
   let fresh = false; // `frame` holds the image the current landmarks were found in
+
+  function buildEdge(w, h) {
+    edge.width = w; edge.height = h;
+    const m = Math.round(Math.min(w, h) * 0.06);
+    ectx.fillStyle = ectx.shadowColor = '#fff';
+    ectx.shadowBlur = m;
+    ectx.fillRect(m, m, w - 2 * m, h - 2 * m);
+  }
 
   function maskPath(c, P, span) {
     c.beginPath();
@@ -47,22 +62,31 @@ export function createRealHands(video, { scale = 0.6 } = {}) {
     c.closePath();
     c.fill();
     c.beginPath();
-    for (const [a, b] of FINGERS) { c.moveTo(P[a][0], P[a][1]); c.lineTo(P[b][0], P[b][1]); }
-    // a finger is ~0.2 of wrist-to-knuckle; the round caps already reach ~1 cm past the tip landmarks
-    c.lineWidth = span * 0.21;
+    for (const [a, b] of FINGERS) {
+      let [x, y] = P[b];
+      if (TIPS.has(b)) { // end a little short of the tip landmark: the round cap still covers the fingertip
+        const dx = x - P[a][0], dy = y - P[a][1], L = Math.hypot(dx, dy) || 1, k = Math.min(0.04 * span, L * 0.4) / L;
+        x -= dx * k; y -= dy * k;
+      }
+      c.moveTo(P[a][0], P[a][1]); c.lineTo(x, y);
+    }
+    c.lineWidth = span * 0.21; // a finger is ~0.2 of wrist-to-knuckle
     c.stroke();
   }
 
-  /** Copy the camera crop (cam from hands.js) into `frame`. hands.js calls it right before each detection. */
+  /** Copy the camera image (mirrored like the view) into `frame`. hands.js calls it right before each detection. */
   function snap(cam) {
     const vw = video.videoWidth || video.width, vh = video.videoHeight || video.height;
     if (!cam || !vw || !vh) return false;
-    const fw = Math.max(2, Math.round(cam.sx * vw)), fh = Math.max(2, Math.round(cam.sy * vh));
-    if (frame.width !== fw || frame.height !== fh) { frame.width = mask.width = fw; frame.height = mask.height = fh; }
+    const fw = Math.min(vw, FRAME_W), fh = Math.max(2, Math.round((vh * fw) / vw));
+    if (frame.width !== fw || frame.height !== fh) {
+      frame.width = mask.width = fw; frame.height = mask.height = fh;
+      buildEdge(fw, fh);
+    }
     fctx.setTransform(1, 0, 0, 1, 0, 0);
     fctx.clearRect(0, 0, fw, fh);
     if (cam.mirror) { fctx.translate(fw, 0); fctx.scale(-1, 1); }
-    fctx.drawImage(video, cam.cx * vw, cam.cy * vh, cam.sx * vw, cam.sy * vh, 0, 0, fw, fh);
+    fctx.drawImage(video, 0, 0, fw, fh);
     fctx.setTransform(1, 0, 0, 1, 0, 0);
     return (fresh = true);
   }
@@ -82,10 +106,12 @@ export function createRealHands(video, { scale = 0.6 } = {}) {
     if (!had && !snap(cam)) return; // no copy from hands.js for this detection: the live frame is close enough
     fresh = false;
     const W = cv.width, H = cv.height, ew = stereo ? W / 2 : W;
-    const fw = frame.width, fh = frame.height, kx = ew / fw, ky = H / fh; // frame px -> eye px
+    // frame px -> eye px (before shrinking): the crop cam.{cx, cy, sx, sy} of the frame fills the eye
+    const fw = frame.width, fh = frame.height;
+    const kx = ew / (fw * cam.sx), ky = H / (fh * cam.sy), ox = (-ew * cam.cx) / cam.sx, oy = (-H * cam.cy) / cam.sy;
 
     for (const h of hands) {
-      const P = h.pts.map((p) => [p.x * fw, p.y * fh]);
+      const P = h.pts.map((p) => [(cam.cx + p.x * cam.sx) * fw, (cam.cy + p.y * cam.sy) * fh]);
       const span = Math.hypot(P[0][0] - P[9][0], P[0][1] - P[9][1]) || 1;
       // 1) this hand's mask, feathered with a blurred shadow of itself, then the camera kept inside it
       mctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -98,15 +124,22 @@ export function createRealHands(video, { scale = 0.6 } = {}) {
       mctx.shadowBlur = 0;
       mctx.globalCompositeOperation = 'source-in';
       mctx.drawImage(frame, 0, 0);
+      mctx.globalCompositeOperation = 'destination-in';
+      mctx.drawImage(edge, 0, 0);
       mctx.globalCompositeOperation = 'source-over';
 
       // 2) into each eye, shrunk by `scale` around the point between thumb and index tips
       const ax = (P[4][0] + P[8][0]) / 2, ay = (P[4][1] + P[8][1]) / 2;
       ctx.globalAlpha = h.pinch ? PINCH_ALPHA : ALPHA;
       for (const x0 of stereo ? [0, W / 2] : [0]) {
-        // frame px p -> eye px e = x0 + kx p; scaled about the anchor A: A + scale (e - A)
-        ctx.setTransform(scale * kx, 0, 0, scale * ky, x0 + kx * ax * (1 - scale), ky * ay * (1 - scale));
+        // frame px q -> eye px e = x0 + ox + kx q, then shrunk about the anchor A: A + scale (e - A).
+        // Clipped to this eye: the whole camera image is bigger than the eye.
+        const Ax = x0 + ox + kx * ax, Ay = oy + ky * ay;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(x0, 0, ew, H); ctx.clip();
+        ctx.setTransform(scale * kx, 0, 0, scale * ky, Ax * (1 - scale) + scale * (x0 + ox), Ay * (1 - scale) + scale * oy);
         ctx.drawImage(mask, 0, 0);
+        ctx.restore();
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;

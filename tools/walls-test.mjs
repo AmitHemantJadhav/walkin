@@ -99,7 +99,42 @@ if (thick >= 0) {
     if (r.ok) console.log(`     wall #${thick} side ${s > 0 ? '+' : '-'} with the mesh: ${JSON.stringify(r.fit)}`);
   }
 }
+// #61 step 3: walkin.wallFit() from every scan point, with app.js's roomAt (point in room polygon)
+const inPoly = (x, y, poly) => {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+};
+window.walkin.roomAt = (x, y, fl) => house.rooms.find((r) => r.poly && r.poly.length > 2
+  && (!fl || !r.floor || r.floor === fl) && inPoly(x, y, r.poly));
+let fitN = 0, fitCut = 0, fitFixed = 0, fitPts = 0, worstFit = null;
+const tf = Date.now();
+for (const p of house.panos) {
+  if (p.floorZ == null) continue;
+  window.walkin.current = { id: p.id, floor: p.floor, floorZ: p.floorZ, pos: p.pos };
+  const r = walls.wallFit(), o = off.wallFit();
+  if (!r.ok) { bad(`wallFit at ${p.id}: ${r.why}`); continue; }
+  if (r.how !== 'scan' || o.how !== 'fixed') bad(`wallFit how: ${r.how} / ${o.how}`);
+  if (r.faces !== o.faces || r.fixedCut !== o.cut) bad(`wallFit at ${p.id}: off ${JSON.stringify(o)} vs on ${JSON.stringify(r)}`);
+  if (!r.measured) continue;
+  if (r.cut > r.fixedCut + 1e-9) bad(`wallFit at ${p.id}: worse than the fixed offset (${r.cut} > ${r.fixedCut})`);
+  fitPts++; fitN += r.measured; fitCut += r.cut; fitFixed += r.fixedCut;
+  if (!worstFit || r.cut > worstFit.cut) worstFit = r;
+}
+console.log(`${fitPts ? 'ok  ' : 'FAIL'} wallFit() at ${fitPts} scan points (${(fitN / Math.max(1, fitPts)).toFixed(1)} walls each, `
+  + `${Date.now() - tf} ms): scan covers ${(100 * fitCut / Math.max(1, fitPts)).toFixed(1)}% of the paper on average, `
+  + `${(100 * fitFixed / Math.max(1, fitPts)).toFixed(1)}% at a fixed 8 cm`);
+if (!fitPts) fails++;
+if (worstFit) console.log(`     worst room: ${worstFit.say}`);
+window.walkin.roomAt = () => null;
 window.walkin.occluderMesh = null;
+{
+  const r = walls.wallFit();
+  if (!r.ok || r.cut !== null || r.how !== 'thickness') bad(`wallFit with no mesh: ${JSON.stringify(r)}`);
+}
 if (thick >= 0) {
   const r = await walls.setWallMaterial({ floor: f.id, index: thick }, 'tile.png', 1);
   const want = +Math.max(0.08, f.walls[thick].thickness / 2 + 0.015).toFixed(3);

@@ -92,18 +92,19 @@ export const FIT = {
  * A percentile of the measured face plus a small margin, between FIT.floor and FIT.cap. On purpose, it
  * does not chase the worst sample: a percentile plus a cap means a few samples (a bump, a skirting
  * board, the edge of a fireplace) stay in front of the paper, the way a real fireplace would.
- * Returns { offset, samples, cut } where cut = share of measured samples still in front of the paper.
- * With under 4 mesh samples (a face the scanner never saw) it returns the floor and cut null.
+ * Returns { offset, samples, cut, fixedCut } where cut = share of measured samples still in front of the
+ * paper, and fixedCut = the same at FIT.floor (the old fixed offset, what ?wallfit=off gives).
+ * With under 4 mesh samples (a face the scanner never saw) it returns the floor and both cuts null.
  */
 export function wallOffset(tris, wall, normal, floorZ, height, opts = {}) {
   const o = { ...FIT, ...opts };
   const d = wallDepths(tris, wall, normal, floorZ, height)
     .map((x) => x.depth)
     .filter((x) => x != null && x > -0.02 && x <= o.cap);
-  if (d.length < 4) return { offset: o.floor, samples: d.length, cut: null };
+  if (d.length < 4) return { offset: o.floor, samples: d.length, cut: null, fixedCut: null };
   d.sort((a, b) => a - b);
   const p = d[Math.min(d.length - 1, Math.floor(o.pct * d.length))];
   const offset = Math.min(o.cap, Math.max(o.floor, p + o.margin));
-  const cut = d.filter((x) => x > offset + 0.01).length / d.length;
-  return { offset: +offset.toFixed(3), samples: d.length, cut: +cut.toFixed(3) };
+  const cutAt = (off) => +(d.filter((x) => x > off + 0.01).length / d.length).toFixed(3);
+  return { offset: +offset.toFixed(3), samples: d.length, cut: cutAt(offset), fixedCut: cutAt(o.floor) };
 }

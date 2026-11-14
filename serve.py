@@ -200,6 +200,7 @@ def mock_gemini(req, model):
     words = " ".join(p.get("text", "") for p in parts if isinstance(p, dict)).lower()
     rules = [(r"wallpaper|brick|paint|wall", ("set_wall_material", {"description": "red brick with light grey mortar", "tile_metres": 0.9})),
              (r"plant", ("light_here", {})),
+             (r"whole house|entire house|every room|all (the )?rooms", ("stage_house", {})),
              (r"stage|furnish", ("stage_room", {"style": "modern bedroom"})),
              (r"take me|go to|walk to", ("go_to", {"room": "kitchen"})),
              (r"sofa|couch", ("add_furniture", {"kind": "sofa"})),

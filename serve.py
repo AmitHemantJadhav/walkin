@@ -334,8 +334,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _relay(self, kind, key, target, data, headers, fallback=None, transform=None):
         """Cache, then rate limit, then the upstream call (one polite retry on its 429).
-        fallback(): answer some other way when the upstream is rate limited, failing (5xx) or unreachable.
-        transform(bytes) -> bytes: rewrite a 200 reply (e.g. OpenRouter's JSON into Gemini's) before caching it."""
+        fallback(): answer another way when the upstream is rate limited, failing (5xx) or unreachable.
+        transform(bytes) -> bytes: rewrite a 200 reply (e.g. OpenRouter JSON into Gemini's) before caching it.
+        """
         hit = cache_get(key)
         if hit:
             return self._send(200, hit[0], hit[1])

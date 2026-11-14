@@ -1,0 +1,132 @@
+<!doctype html><meta charset="utf-8"><title>John furniture check</title>
+<!-- John moves, turns, recolours and removes furniture, asked in plain words, with the REAL model (needs the Gemini key):
+       python3 serve.py 8031   then   http://localhost:8031/tools/john-furniture-check.html     (?m=<model>, ?only=1,2,3)
+     Opens the real page (?layout=none, nothing saved) in an iframe, asks John each line through walkin.agent.ask and checks
+     the scene really changed (count, position, facing, colour), then prints a pass/fail table with John's replies and how
+     many Gemini calls it took. The relay allows ~8 calls a minute, so it waits for the bucket between questions (~3 min).
+     Keep the tab in front: a background tab gets no frames. Result also in window.result. -->
+<style>body{font:13px/1.4 ui-monospace,Menlo,monospace;margin:12px}table{border-collapse:collapse;margin:8px 0}
+td,th{border:1px solid #ccc;padding:3px 6px;vertical-align:top;text-align:left}.ok{color:#0a7a3a}.bad{color:#c0282d;font-weight:bold}</style>
+<div id="head">running…</div>
+<table id="t"><tr><th>#</th><th>said</th><th>result</th><th>check</th><th>John</th><th>calls</th><th>s</th></tr></table>
+<iframe id="f" width="1024" height="600"></iframe>
+<script>
+const q = new URLSearchParams(location.search);
+const model = q.get('m') || 'zvKHR9DHNjJ';
+const only = q.get('only') ? q.get('only').split(',').map(Number) : null;
+const f = document.getElementById('f');
+f.src = `../index.html?m=${model}&layout=none`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const W = () => f.contentWindow.walkin;
+const health = async () => (await fetch('/api/health')).json();
+
+// ------------------------------------------------------------------ scene facts
+function state() {
+  const w = W();
+  return w.furniture.children.filter((o) => o.userData.kind && !o.userData.meshPiece).map((o) => {
+    const room = w.roomAt(o.position.x, o.position.y, o.userData.floor);
+    let col = null;
+    o.traverse((m) => { if (!col && m.isMesh && m.material && m.material.userData && m.material.userData.walkinTint) col = m.material.color.clone(); });
+    return { o, kind: o.userData.kind, x: o.position.x, y: o.position.y, rot: o.rotation.z, room: room && room.label, roomObj: room,
+      tint: o.userData.tint && o.userData.tint.name, col };
+  });
+}
+const byKind = (s, k) => s.filter((p) => p.kind === k);
+const front = (rot) => [Math.sin(rot), -Math.cos(rot)];
+const hue = (c) => { if (!c) return null; const h = {}; c.getHSL(h); return h; };
+function camRight() {
+  const cam = W().camera; cam.updateMatrixWorld();
+  const e = cam.matrixWorld.elements, l = Math.hypot(e[0], e[1]) || 1;
+  return [e[0] / l, e[1] / l];
+}
+/** Distance from a piece's centre to the nearest window on its room's walls, and how far its back is from that wall. */
+function windowGap(p) {
+  const T = W().furnitureTools, room = p.roomObj;
+  if (!room) return null;
+  let best = null;
+  for (const e of T.edges(room)) {
+    if (!e.windows.length) continue;
+    const t = Math.max(0, Math.min(e.len, (p.x - e.ax) * e.dx + (p.y - e.ay) * e.dy));
+    const d = Math.hypot(e.ax + e.dx * t - p.x, e.ay + e.dy * t - p.y);
+    if (!best || d < best.d) best = { d, e };
+  }
+  return best;
+}
+
+// ------------------------------------------------------------------ the script
+const STEPS = [
+  { say: 'add a sofa', check: (a, b) => byKind(b, 'sofa').length === byKind(a, 'sofa').length + 1
+      ? [true, `sofas ${byKind(a, 'sofa').length} -> ${byKind(b, 'sofa').length}, in ${byKind(b, 'sofa')[0].room}`] : [false, 'no new sofa'] },
+  { say: 'move the sofa against the window', check: (a, b) => {
+      const s0 = byKind(a, 'sofa')[0], s1 = byKind(b, 'sofa')[0];
+      if (!s1 || byKind(b, 'sofa').length !== 1) return [false, 'sofa count changed'];
+      const moved = Math.hypot(s1.x - s0.x, s1.y - s0.y), g = windowGap(s1), depth = 0.95;
+      const ok = g && g.d < depth / 2 + 0.25 && moved > 0.05;
+      return [ok, `moved ${moved.toFixed(2)} m, centre ${g ? g.d.toFixed(2) : '?'} m from the window wall (${s1.room})`];
+    } },
+  { say: 'turn it to face the room', check: (a, b) => {
+      const s = byKind(b, 'sofa')[0];
+      const [fx, fy] = front(s.rot), w = W();
+      const ahead = w.roomAt(s.x + fx * 1.0, s.y + fy * 1.0, s.o.userData.floor);
+      const behindWall = windowGap(s);
+      const ok = ahead === s.roomObj;
+      return [ok, `front points ${ok ? 'into' : 'out of'} the ${s.room}; facing ${Math.round(s.rot * 180 / Math.PI)}°${behindWall ? `, back ${behindWall.d.toFixed(2)} m off the wall` : ''}`];
+    } },
+  { say: 'move it a metre to the left', pre: () => ({ right: camRight() }), check: (a, b, pre) => {
+      const s0 = byKind(a, 'sofa')[0], s1 = byKind(b, 'sofa')[0];
+      const dx = s1.x - s0.x, dy = s1.y - s0.y, d = Math.hypot(dx, dy);
+      const left = -(dx * pre.right[0] + dy * pre.right[1]);
+      const ok = d > 0.4 && d < 1.4 && left > 0.7 * d;
+      return [ok, `moved ${d.toFixed(2)} m, ${left.toFixed(2)} m of it to the user's left`];
+    } },
+  { say: 'make the sofa navy blue', check: (a, b) => {
+      const s = byKind(b, 'sofa')[0], h = hue(s.col);
+      const ok = !!s.tint && h && h.h > 0.55 && h.h < 0.72 && h.l < 0.45;
+      return [ok, `tint "${s.tint}", colour #${s.col ? s.col.getHexString() : '-'}${h ? ` (hue ${(h.h * 360).toFixed(0)}°, L ${h.l.toFixed(2)})` : ''}`];
+    } },
+  { say: 'remove the sofa', check: (a, b) => [byKind(b, 'sofa').length === 0 && b.length === a.length - 1, `pieces ${a.length} -> ${b.length}`] },
+  { say: 'add a queen bed in the bedroom and make it red', check: (a, b) => {
+      const q = byKind(b, 'queen')[0], h = q && hue(q.col);
+      const ok = !!q && /bedroom/i.test(q.room || '') && h && (h.h < 0.05 || h.h > 0.94) && h.s > 0.4;
+      return [ok, q ? `queen in ${q.room}, tint "${q.tint}" #${q.col ? q.col.getHexString() : '-'}` : 'no queen bed'];
+    } },
+  { say: 'delete everything', check: (a, b) => [b.length === 0 && a.length > 0, `pieces ${a.length} -> ${b.length}`] },
+];
+
+const result = window.result = { rows: [], pass: 0, fail: 0, calls: 0, done: false };
+function row(i, s, ok, note, reply, calls, secs) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${i}</td><td>${s}</td><td class="${ok ? 'ok' : 'bad'}">${ok ? 'PASS' : 'FAIL'}</td><td></td><td></td><td>${calls}</td><td>${secs}</td>`;
+  tr.children[3].textContent = note; tr.children[4].textContent = reply;
+  document.getElementById('t').appendChild(tr);
+}
+
+(async () => {
+  for (let i = 0; i < 300 && !(f.contentWindow.walkin && W().agent && W().furnitureTools); i++) await sleep(200);
+  if (!W() || !W().agent) { document.getElementById('head').textContent = 'page did not load'; return; }
+  await sleep(1500);
+  // count the page's own Gemini requests (the relay's counters include other endpoints)
+  const cw = f.contentWindow, realFetch = cw.fetch.bind(cw);
+  cw.fetch = (u, o) => { if (String(u).includes('/api/gemini')) result.calls++; return realFetch(u, o); };
+  const h0 = await health();
+  if (!h0.gemini || h0.mock) { document.getElementById('head').textContent = 'needs the real Gemini key (and GEMINI_MOCK off)'; return; }
+  for (let i = 0; i < STEPS.length; i++) {
+    const st = STEPS[i];
+    if (only && !only.includes(i + 1)) continue;
+    // stay under the relay's 8 calls a minute: a question takes 2-3
+    for (let k = 0; k < 40 && (await health()).calls_last_minute > 4; k++) await sleep(3000);
+    const before = state(), pre = st.pre ? st.pre() : null, c0 = result.calls, t0 = performance.now();
+    let reply;
+    try { reply = await W().agent.ask(st.say); } catch (e) { reply = 'threw ' + e; }
+    await sleep(600);                                            // physics settles
+    const after = state(), calls = result.calls - c0;
+    let ok, note;
+    try { [ok, note] = st.check(before, after, pre); } catch (e) { ok = false; note = 'check threw ' + e; }
+    result.rows.push({ n: i + 1, say: st.say, ok, note, reply, calls });
+    ok ? result.pass++ : result.fail++;
+    row(i + 1, st.say, ok, note, reply, calls, ((performance.now() - t0) / 1000).toFixed(1));
+  }
+  result.done = true;
+  document.getElementById('head').textContent = `${result.fail ? 'FAIL' : 'PASS'}: ${result.pass} passed, ${result.fail} failed, ${result.calls} Gemini calls`;
+})();
+</script>

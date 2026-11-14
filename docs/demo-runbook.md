@@ -119,24 +119,28 @@ The tile is generated, then laid on that wall at real scale, **cut around the do
 window**, and shaded by the photo's own light, so the corner stays dark and the patch beside the
 window stays bright. Walk to another scan point: still the same wall.
 
-**Point at the right wall, and you can do it from where beat 5 happens.** Wallpaper sits a fixed 8 cm
-out from the wall graph's centre line, and on a thick wall the scan mesh bulges past that and the
-occluder cuts the paper off (#61, measured in #88). It is not a Gale St problem: **11% of La Mirada's
-wall samples lose**, and the worst case is the **5.02 m, 0.28 m-thick wall #1, where 90% of the paper
-is hidden** — which is exactly the wall you hit if you point at the first long wall you see.
+**Point at the right wall, and you can do it from where beat 5 happens.** Wallpaper used to sit a
+fixed 8 cm out from the wall graph's centre line, and on a thick wall the scan mesh bulged past that
+and the occluder ate the paper — La Mirada's 5.02 m, 0.28 m-thick **wall #1** lost **90%** of it from
+the dining-room side. **#61 fixed that**: each wall is now papered just in front of its own scanned
+face (#88 measured it, #89 shipped it), and `walkin.wallFit()` reports what is left.
 
-Measured from **scan point 37**, where beats 5 and 6 already put you, the walls within 3 m:
+Measured on `main` from **scan point 37**, where beats 5 and 6 already put you — the share of each
+wall the scan still covers:
 
-| wall | cut | length | room | distance |
-|---|---|---|---|---|
-| **#19 +side** | **0%** | 3.94 m | Living Room | 2.16 m |
-| **#31 −side** | **0%** | 3.85 m | Living Room | 2.98 m |
-| #19 −side | 2% | 3.94 m | Living Room | 1.60 m |
-| #13 +side | 3% | 5.81 m | Living Room | 1.85 m |
+| wall | cut | length | room |
+|---|---|---|---|
+| **#31 −side** | **0%** | 3.85 m | Living Room |
+| **#19 +side** | **1%** | 3.94 m | Living Room |
+| #13 +side | 3% | 5.81 m | Living Room |
+| #1 +side | 10% | 5.02 m | Living Room |
 
-So **stay at scan point 37 and paper wall #19** — nothing is lost, it is nearly 4 m wide, and you do
-not have to walk anywhere between beats 4, 5 and 6. Sides matter as much as walls: wall #1 loses 90%
-on its − face and only 8% on its +. Once #61 lands these all improve, so this advice stays safe.
+So **paper wall #19 or #31** and nothing is lost. This is now belt-and-braces rather than a hazard —
+the worst wall in the house is no longer catastrophic, it is 10% — but a named wall is still the
+safer instruction on stage, and it means beats 4, 5 and 6 all happen without walking anywhere.
+
+`walkin.wallFit()` from the living room reports **4% cut, against 5% at the old fixed offset**; the
+bathroom is the worst room in the house and still only 14%. If a wall ever looks bare, run it.
 
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 

@@ -89,17 +89,21 @@ async function startLevel() {
     audioCtx.createMediaStreamSource(stream).connect(analyser);
   } catch (e) { analyser = null; }
 }
-(function pulse() {
+// Only while a command is being spoken (the glow is up), and only when the level moved: the headset is fps-bound.
+let pulsing = false, lastLvl = -1;
+function pulse() {
+  if (state.mode !== 'awake') { pulsing = false; return; }
   let lvl = 0.35 + 0.15 * Math.sin(performance.now() / 260);  // gentle breathing when there's no mic level
-  if (analyser && state.mode === 'awake') {
+  if (analyser) {
     analyser.getByteTimeDomainData(levelBuf);
     let sum = 0;
     for (const v of levelBuf) sum += (v - 128) * (v - 128);
     lvl = Math.min(1, Math.sqrt(sum / levelBuf.length) / 40 + 0.25);
   }
-  glow.style.setProperty('--lvl', lvl.toFixed(3));
+  if (Math.abs(lvl - lastLvl) > 0.03) { glow.style.setProperty('--lvl', lvl.toFixed(2)); lastLvl = lvl; }
   requestAnimationFrame(pulse);
-})();
+}
+function startPulse() { if (!pulsing) { pulsing = true; requestAnimationFrame(pulse); } }
 
 // ------------------------------------------------------------------ speech recognition: always on, restarted when it stops
 function startRec() {
@@ -173,6 +177,7 @@ function onCommandWords(finalPart, interimPart, allFinal) {
 
 function wake() {
   setMode('awake');
+  startPulse();
   state.wakeIdx = -1;
   state.carry = state.heard = state.interim = '';
   chime();

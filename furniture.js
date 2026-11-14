@@ -1,40 +1,89 @@
-// Real-size furniture built from boxes. Units: metres. Local frame: x = width, y = depth (front faces -y), z up,
+// Real-size furniture. Units: metres. Local frame: x = width, y = depth (front faces -y), z up,
 // origin at the centre of the footprint on the floor.
+// Each kind is a CC0 glTF model from Kenney's Furniture Kit (see models/CREDITS.md), rescaled to the
+// catalog's real metres. The box builders below stay as the fallback while a model loads or if it fails.
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+// `against` says how a piece wants to be placed when staging a room:
+//   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.85 },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95 },
-  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 1.1 },
-  king: { name: 'King bed', w: 1.95, d: 2.15, h: 1.1 },
-  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.75 },
-  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.75 },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', against: 'wall' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', against: 'free' },
+  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', against: 'wall' },
+  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', against: 'wall' },
+  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', against: 'free' },
+  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', against: 'wall' },
+  // pieces a staged room needs
+  chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', against: 'small' },
+  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small' },
+  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small' },
+  coffeetable: { name: 'Coffee table', w: 1.1, d: 0.6, h: 0.42, model: 'tableCoffee.glb', against: 'free' },
+  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall' },
+  tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
+  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall' },
+  floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', against: 'small' },
+  rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true },
+  ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true },
+  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', against: 'small' },
+  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', against: 'small' },
+  plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
+  plantsucculent: { name: 'Succulent', w: 0.22, d: 0.2, h: 0.33, model: 'plantSmall3.glb', against: 'small' },
 };
 
+// Resolved against this module, not the page, so models/preview.html loads the same files as index.html.
+const MODEL_DIR = new URL('models/', import.meta.url).href;
+// The kit's models are glTF Y-up and face +z before the Y-up -> Z-up turn; these face the other way,
+// so they get a half turn to put the front on -y.
+const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
+
+// ------------------------------------------------------------------ box fallback (also used by preview.html)
 const mat = (color, roughness = 0.85) => new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
 const M = {
   fabric: mat(0xb8b2a7), cushion: mat(0xcfc9be), dark: mat(0x2b2b2e, 0.6), wood: mat(0x8a5a3b, 0.6),
   sheet: mat(0xf3f0ea), pillow: mat(0xe7e2d8), top: mat(0x6e4a33, 0.5),
 };
 
+// ------------------------------------------------------------------ contact shadow
+// A soft blob under each piece, not a shadow map: phones can't afford one, and the photo already
+// contains the room's real shadows. lighting.js sets the strength from how bright the pano is.
 let shadowTex;
-function shadow(w, d) {
+const shadows = new Set();
+let shadowOpacity = 0.45;
+
+function shadowTexture() {
   if (!shadowTex) {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
-    const grad = g.createRadialGradient(64, 64, 10, 64, 64, 64);
-    grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+    const grad = g.createRadialGradient(64, 64, 8, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.45, 'rgba(0,0,0,0.62)');   // dark right under the piece, then falls off fast
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 128);
     shadowTex = new THREE.CanvasTexture(c);
   }
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.25, d * 1.25),
-    new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
+  return shadowTex;
+}
+
+function shadow(w, d) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.22, d * 1.22),
+    new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: shadowOpacity }));
   m.position.z = 0.002;
   m.renderOrder = 1;
+  shadows.add(m);
   return m;
+}
+
+/** How dark the contact shadows are (lighting.js calls this with the room's brightness). */
+export function setContactShadow({ opacity }) {
+  if (opacity == null) return;
+  shadowOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
+  for (const m of shadows) {
+    if (m.parent) m.material.opacity = shadowOpacity;
+    else shadows.delete(m);                       // the piece was deleted
+  }
 }
 
 function box(group, w, d, h, x, y, z, material) {
@@ -85,12 +134,83 @@ const BUILDERS = {
   },
 };
 
+export function buildBoxes(kind) {
+  const spec = FURNITURE[kind];
+  const g = new THREE.Group();
+  const builder = BUILDERS[kind] || (kind === 'queen' || kind === 'king' ? BUILDERS.bed : null);
+  if (builder) builder(g, spec);
+  else box(g, spec.w, spec.d, spec.h, 0, 0, 0, spec.flat ? M.fabric : M.cushion); // plain block until the model lands
+  return g;
+}
+
+// ------------------------------------------------------------------ glTF models
+const loader = new GLTFLoader();
+const loads = new Map(); // file -> Promise<THREE.Object3D> (one fetch per file, cloned per item)
+
+function load(file) {
+  if (!loads.has(file)) {
+    loads.set(file, loader.loadAsync(MODEL_DIR + file).then((gltf) => gltf.scene).catch((e) => {
+      console.warn(`furniture: ${file} failed to load, using boxes`, e);
+      return null;
+    }));
+  }
+  return loads.get(file);
+}
+
+/** Load every catalog model now, so the first click doesn't wait on the network. */
+export function preloadModels() {
+  return Promise.all([...new Set(Object.values(FURNITURE).map((s) => s.model))].filter(Boolean).map(load));
+}
+
+/**
+ * Turn a glTF model (Y-up, arbitrary origin and scale) into our frame: x = width, y = depth with the front
+ * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
+ */
+function fitToSpec(src, spec, flipped) {
+  const b = new THREE.Box3().setFromObject(src);
+  const size = b.getSize(new THREE.Vector3());
+  const c = b.getCenter(new THREE.Vector3());
+  // model x -> our width, model z -> our depth, model y -> our height
+  const sx = spec.w / size.x, sd = spec.d / size.z, sh = spec.h / size.y;
+  src.scale.set(sx, sh, sd);
+  src.position.set(-c.x * sx, -b.min.y * sh, -c.z * sd); // centred on x/z, standing on y = 0
+  src.traverse((o) => {
+    if (!o.isMesh) return;
+    o.renderOrder = 2;          // after the depth-only occluders
+    o.castShadow = o.receiveShadow = false;
+  });
+
+  const zUp = new THREE.Group();
+  zUp.rotation.x = Math.PI / 2; // glTF Y-up -> world Z-up (model +z ends up on -y)
+  zUp.add(src);
+
+  const g = new THREE.Group();
+  if (flipped) g.rotation.z = Math.PI;
+  g.add(zUp);
+  return g;
+}
+
+/**
+ * A piece of furniture, ready to add to the scene. Returns synchronously: the group starts with the box
+ * fallback and swaps in the real model when it arrives (the boxes stay if the model can't be loaded).
+ */
 export function buildFurniture(kind) {
   const spec = FURNITURE[kind];
   const g = new THREE.Group();
   g.userData.kind = kind;
-  const builder = BUILDERS[kind] || BUILDERS[kind === 'queen' || kind === 'king' ? 'bed' : 'table'];
-  builder(g, spec);
+  const boxes = buildBoxes(kind);
+  g.add(boxes);
   g.add(shadow(spec.w, spec.d));
+
+  if (spec.model) {
+    load(spec.model).then((src) => {
+      if (!src) return;          // load failed: keep the boxes
+      g.remove(boxes);
+      g.add(fitToSpec(src.clone(true), spec, FLIPPED.has(spec.model)));
+      g.userData.model = spec.model;
+    });
+  }
   return g;
 }
+
+preloadModels(); // 65 KB in total: fetch them while the house loads, so the first click is instant

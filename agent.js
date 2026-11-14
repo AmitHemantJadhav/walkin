@@ -18,7 +18,10 @@ Rules:
 - Use metres (add feet only if asked). Sizes and rooms come from the scan, so quote them exactly; never invent facts.
 - Call describe_house before answering questions about rooms, sizes, what is placed, or the listing.
 - "this wall", "here", "this room" mean what the user points at or the room they stand in: see pointer and current_room in describe_house.
-- Act first, then confirm briefly what you did and whether it fits. If a tool says a feature is unavailable, say so plainly.`;
+- Act first, then confirm briefly what you did and whether it fits. If a tool says a feature is unavailable, say so plainly.
+- Plant questions ("what plant should go here?"): call light_here, pick one plant that suits that light, call plant_preview,
+  then place_object with the matching kind. Give the reason in a few words (e.g. "bright light from the big window").
+  Only name a compass direction if light_here gives one.`;
 
 const TOOLS = [{
   functionDeclarations: [
@@ -47,6 +50,14 @@ const TOOLS = [{
       parameters: { type: 'object', properties: {
         kind: { type: 'string', description: 'Object key, e.g. plant-monstera, plant-snake, lamp, rug.' } },
         required: ['kind'] } },
+    { name: 'light_here',
+      description: 'How much daylight reaches the spot the user points at (or stands on): the windows of that room with sizes, distance and which way they face, the house latitude, and a light level.',
+      parameters: { type: 'object', properties: {} } },
+    { name: 'plant_preview',
+      description: 'Show the user a generated picture of a plant in a pot, before or while placing it.',
+      parameters: { type: 'object', properties: {
+        plant: { type: 'string', description: 'Common name, e.g. monstera, snake plant, fiddle-leaf fig, ZZ plant, pothos.' } },
+        required: ['plant'] } },
     { name: 'go_to',
       description: 'Move the user to a room.',
       parameters: { type: 'object', properties: {
@@ -106,7 +117,108 @@ function describeHouse() {
     pointer: pointerInfo(),
     placed: placedItems(),
     catalog: Object.entries(w.FURNITURE).map(([kind, f]) => ({ kind, name: f.name, width_m: f.w, depth_m: f.d, height_m: f.h })),
-    listing: h.listing || null,
+    listing: h.listing || listingFacts || null,
+  };
+}
+
+// ------------------------------------------------------------------ listing facts and location (docs/walkin_candidates.csv)
+let listingFacts = null;
+
+function parseCsvLine(line) {
+  const out = [];
+  let cur = '', q = false;
+  for (const ch of line) {
+    if (ch === '"') q = !q;
+    else if (ch === ',' && !q) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+async function loadListing(model) {
+  try {
+    const res = await fetch('docs/walkin_candidates.csv');
+    if (!res.ok) return;
+    const [head, ...rows] = (await res.text()).trim().split(/\r?\n/);
+    const cols = parseCsvLine(head);
+    const row = rows.map(parseCsvLine).find((r) => r[0] === model);
+    if (!row) return;
+    const v = Object.fromEntries(cols.map((c, i) => [c, row[i]]));
+    listingFacts = { address: v.address, city: v.city, homes_listing_id: v.homes_listing_id,
+      lat: Number(v.lat), lon: Number(v.lon), rooms_in_listing: Number(v.room_count) || undefined };
+  } catch (e) { /* listing facts are optional */ }
+}
+
+// ------------------------------------------------------------------ daylight at a point (R5)
+// Windows come from the wall graph (openings of type "window"). The scan is not north-aligned, so a compass
+// direction is only given when house.json has `north` (degrees from model +y to true north, clockwise).
+function pointInPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function distToSegment(px, py, [ax, ay], [bx, by]) {
+  const dx = bx - ax, dy = by - ay, L = dx * dx + dy * dy || 1e-9;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function onBoundary(x, y, poly, tol = 0.15) {
+  return poly.some((p, i) => distToSegment(x, y, p, poly[(i + 1) % poly.length]) < tol);
+}
+
+const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+
+function roomWindows(room) {
+  const h = W().house, floor = h.floors.find((f) => f.id === room.floor) || h.floors[0];
+  const out = [];
+  for (const w of floor ? floor.walls : []) {
+    const mx = (w.a[0] + w.b[0]) / 2, my = (w.a[1] + w.b[1]) / 2;
+    if (!onBoundary(mx, my, room.poly)) continue;
+    for (const o of w.openings || []) {
+      if (o.type !== 'window') continue;
+      const t = o.at == null ? 0.5 : o.at;
+      const cx = w.a[0] + t * (w.b[0] - w.a[0]), cy = w.a[1] + t * (w.b[1] - w.a[1]);
+      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]) || 1;
+      let nx = (w.b[1] - w.a[1]) / len, ny = -(w.b[0] - w.a[0]) / len; // a normal; flip it to point out of the room
+      if (pointInPoly(cx + nx * 0.3, cy + ny * 0.3, room.poly)) { nx = -nx; ny = -ny; }
+      out.push({ x: cx, y: cy, nx, ny, width: o.width || 1, height: o.height || 1.2 });
+    }
+  }
+  return out;
+}
+
+function lightHere() {
+  const w = W(), pt = w.pointer && w.pointer.point, u = userPos();
+  const x = pt ? pt[0] : u && u.x, y = pt ? pt[1] : u && u.y;
+  if (x == null) return { ok: false, reason: 'No position yet.' };
+  const room = w.roomAt(x, y, (u && u.floor) || undefined);
+  if (!room) return { ok: false, reason: 'That spot is not inside a room.' };
+  const north = typeof w.house.north === 'number' ? w.house.north : null;
+  let score = 0;
+  const windows = roomWindows(room).map((win) => {
+    const d = Math.max(0.5, Math.hypot(win.x - x, win.y - y)), area = win.width * win.height;
+    score += area / (d * d);
+    let facing = null;
+    if (north != null) {
+      const bearing = (Math.atan2(win.nx, win.ny) * 180 / Math.PI - north + 360) % 360; // 0 = model +y
+      facing = COMPASS[Math.round(bearing / 45) % 8];
+    }
+    return { size_m: `${round(win.width, 1)} x ${round(win.height, 1)}`, distance_m: round(d, 1), facing };
+  }).sort((a, b) => a.distance_m - b.distance_m);
+  const level = !windows.length ? 'low (no windows in this room)' : score > 0.6 ? 'bright' : score > 0.2 ? 'medium' : 'low';
+  const lat = listingFacts && listingFacts.lat;
+  return {
+    ok: true, room: room.label, spot: pt ? 'where the user points' : 'where the user stands', light: level,
+    windows, window_count: windows.length,
+    compass: north == null ? 'unknown: the scan is not north-aligned, so do not name a direction' : 'known',
+    latitude: lat ? round(lat, 1) : null,
+    climate_hint: lat ? (Math.abs(lat) < 35 ? 'strong sun most of the year' : 'moderate sun') : null,
   };
 }
 
@@ -152,6 +264,16 @@ const RUN = {
     return { ok: true, placed: kind, result: (await w.placeObject(kind, x, y)) ?? null };
   },
 
+  light_here: () => lightHere(),
+
+  async plant_preview({ plant }) {
+    setStatus('Drawing the plant…');
+    const url = await generateImage(`A photo of a healthy ${plant} houseplant in a simple matte ceramic pot, ` +
+      'standing on a plain light background, soft daylight, full plant visible, no text.');
+    showPreview(url, plant);
+    return { ok: true, shown: plant };
+  },
+
   async go_to({ room }) {
     const w = W(), r = findRoom(room);
     if (!r) return { ok: false, reason: `No room called "${room}". Rooms: ${w.house.rooms.map((x) => x.label).join(', ')}.` };
@@ -176,6 +298,13 @@ async function generateTile(description) {
   const prompt = `A seamless, tileable texture of ${description}, for covering an interior wall. ` +
     'Flat and straight-on, orthographic, evenly lit, no shadows, no perspective, no objects, no text, no border. ' +
     'The left edge must continue into the right edge and the top into the bottom. Square.';
+  const url = await squareTile(await generateImage(prompt));
+  tileCache.set(key, url);
+  return url;
+}
+
+/** One image from Gemini's image model, as a data URL. */
+async function generateImage(prompt) {
   const res = await fetch(`/api/gemini?model=${encodeURIComponent(IMAGE_MODEL)}`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -186,9 +315,7 @@ async function generateTile(description) {
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
   const img = parts.find((p) => p.inlineData && p.inlineData.data);
   if (!img) throw new Error('the image model returned no image');
-  const url = await squareTile(`data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`);
-  tileCache.set(key, url);
-  return url;
+  return `data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`;
 }
 
 // Centre-crop to a square and scale to TILE_PX, so the wall gets a small, power-of-two texture.
@@ -302,8 +429,15 @@ async function ask(text) {
 }
 
 // ------------------------------------------------------------------ voice out: /api/tts, browser voice as fallback
-let statusEl, inputEl, talkEl;
+let statusEl, inputEl, talkEl, previewEl;
 function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+
+function showPreview(url, alt) { // the generated plant picture; tap it to hide
+  if (!previewEl) return;
+  previewEl.src = url;
+  previewEl.alt = alt || '';
+  previewEl.style.display = 'block';
+}
 
 const player = new Audio();
 let audioUnlocked = false, speakSeq = 0;
@@ -393,18 +527,22 @@ function buildUI() {
     #agent input { flex: 1; min-width: 0; background: #2a2a31; color: var(--fg); border: 0; border-radius: 10px; padding: 8px 10px;
       font: inherit; font-size: 13px; outline: none; touch-action: auto; }
     #agentSay { margin-bottom: 6px; font-size: 13px; color: var(--fg); min-height: 1.35em; }
+    #agentPreview { display: none; width: 100%; max-height: 180px; object-fit: contain; border-radius: 10px; margin-bottom: 6px;
+      background: #1c1c21; }
     body.vr #agent { display: none !important; }`;
   document.head.appendChild(style);
   const el = document.createElement('div');
   el.id = 'agent';
   el.className = 'panel';
-  el.innerHTML = `<div id="agentSay">Ask me about this house, or tell me what to change.</div>
+  el.innerHTML = `<img id="agentPreview" alt=""><div id="agentSay">Ask me about this house, or tell me what to change.</div>
     <form><input id="agentIn" placeholder="add a sofa · how big is this room?" autocomplete="off" enterkeyhint="send">
     <button>Ask</button><button type="button" id="agentTalk" title="Talk to the agent">🎤 Talk</button></form>`;
   document.body.appendChild(el);
   statusEl = el.querySelector('#agentSay');
   inputEl = el.querySelector('#agentIn');
   talkEl = el.querySelector('#agentTalk');
+  previewEl = el.querySelector('#agentPreview');
+  previewEl.addEventListener('click', () => { previewEl.style.display = 'none'; });
   talkEl.addEventListener('click', onTalk);
   addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
   // the viewer listens for keys and drags on the window; keep typing and taps inside the box
@@ -425,7 +563,8 @@ function buildUI() {
     return;
   }
   buildUI();
-  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak };
+  loadListing(window.walkin.house.model);
+  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 })();

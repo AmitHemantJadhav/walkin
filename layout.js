@@ -52,7 +52,7 @@ export function saveLayout() {
  * By default it replaces what is there; pass { replace: false } to add to it.
  * Returns { added, skipped: [{kind, why}], model }.
  */
-export function loadLayout(data, { replace = true } = {}) {
+export function loadLayout(data, { replace = true, anyHouse = false } = {}) {
   const w = window.walkin;
   if (!w) return { added: 0, skipped: [], model: null };
   let doc = data;
@@ -60,6 +60,16 @@ export function loadLayout(data, { replace = true } = {}) {
     try { doc = JSON.parse(doc); } catch (e) { return { added: 0, skipped: [{ why: 'not JSON' }], model: null }; }
   }
   if (!doc || !Array.isArray(doc.items)) return { added: 0, skipped: [{ why: 'no items' }], model: null };
+
+  // Every position in here is in one house's own coordinates. Putting a La Mirada layout into Dunvegan
+  // doesn't give you a differently arranged room, it gives you furniture in the garden - and it clears
+  // what was there first, so you lose the real layout to get it. Autosave is keyed per house and can't
+  // do this; a hand or an agent passing a document around can. Pass { anyHouse: true } if you mean it.
+  if (!anyHouse && doc.model && w.house && doc.model !== w.house.model) {
+    return { added: 0, walls: 0, model: doc.model,
+      skipped: [{ why: `that layout is for a different house (${doc.model}); `
+        + 'its positions mean nothing here - pass { anyHouse: true } if you meant to' }] };
+  }
 
   if (replace) for (const o of [...w.furniture.children]) w.furniture.remove(o);
 

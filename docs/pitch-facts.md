@@ -56,8 +56,9 @@ Measured against `main` on Sat 14 Nov, La Mirada (`zvKHR9DHNjJ`) unless another 
 - The physics costs **0.0096 ms per piece per frame** — 0.31 ms for all 32.
 - The fit check while you drag is **0.015 ms**; the full one with the walkway raster is 1.6 ms and
   only runs 300 ms after you stop moving.
-- Twenty full-house stagings in three palettes leave the scene census **identical** — 401 objects,
-  189 geometries, 54 materials, 7 textures. Nothing leaks.
+- Twenty full-house stagings in three palettes leave the scene census **identical** — 429 objects,
+  196 geometries, 61 materials, 7 textures, before and after. Nothing leaks: a piece is a clone of one
+  cached glTF and the style materials are cached per (style, source material).
 
 ## Things to say carefully
 

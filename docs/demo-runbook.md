@@ -171,10 +171,16 @@ He reads the light at that spot from the photo and the window positions, and pla
 
 > *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
 
-The plant depends on the reading: a fern out of the sun, a plant in indirect light, a tall cactus in
-a bright window. Standing in the living room this morning it answered *"A plant — that spot is medium
-light, 3.3 m from the nearest window, and it does well in indirect light."* — so don't promise a fern
-before you've heard it.
+The plant depends on the reading, so don't promise a fern before you've heard it. All three, measured
+at La Mirada:
+
+> *"A tall cactus — that spot is bright light, 0.5 m from the nearest window, and it takes direct sun."*
+> *"A tall potted plant — that spot is medium light, 3.3 m from the nearest window, and it does well in indirect light."*
+> *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
+
+**It never names a compass direction**, and that is deliberate: the scan is not aligned to north, so
+`light_here` says so and tells the model not to claim one. If anyone asks how it knows, the answer is
+the windows' size and how far the spot is from them, both measured in the scan — not the sun.
 
 If the model doesn't chain the two steps, `walkin.suggestPlant()` does the whole thing in one call
 and always lands.

@@ -43,6 +43,9 @@ Open `…/?m=zvKHR9DHNjJ`, **stand inside a room**, and run one line in the cons
 await walkin.preflight()
 ```
 
+**On a phone there is no console**, so add `&preflight` to the URL instead — it runs once the house
+is up and puts the same nine lines on the screen. Tap to dismiss.
+
 Nine ✓ or ✗ with the number behind each: the house, whether John answers, staging, whether this
 house even has a door the sofa beat works at, physics, the wallpaper fallback tiles, whether a layout
 from an earlier session is waiting to come back, the hand hooks and the frame rate. It saves whatever is in the room first and puts it back, so it costs you nothing

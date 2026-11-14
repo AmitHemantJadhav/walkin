@@ -3,7 +3,8 @@
 One screen. The whole run is in `demo-runbook.md`; this is what you hold while you present.
 
 ```
-…/?m=zvKHR9DHNjJ&layout=none        stand in a room, then:  await walkin.preflight()
+…/?m=zvKHR9DHNjJ&layout=none             stand in a room, then:  await walkin.preflight()
+…/?m=zvKHR9DHNjJ&layout=none&preflight   on a phone — same nine lines, on the screen
 ```
 
 | | say | and then |

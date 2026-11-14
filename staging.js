@@ -2,7 +2,7 @@
 // Puts the big piece against the best wall, arranges the rest around it, and checks every placement
 // with fit.js, so what comes back is a set that actually fits with the doors still usable.
 import { FURNITURE, PLANTS, applyStyle, setStyle, STYLES, getStyle } from './furniture.js';
-import { fitReport, fitLine, openings, overlaps, pointInPoly } from './fit.js';
+import { fitReport, fitLine, openings, overlaps, pointInPoly, footprint } from './fit.js';
 
 const WALL_GAP = 0.06;          // a piece stands this far off the wall
 const lower = (s) => (s || 'room').toLowerCase();
@@ -11,6 +11,23 @@ const lower = (s) => (s || 'room').toLowerCase();
 /** One entry per polygon edge: midpoint, length, direction, inward normal, and whether a door opens onto it. */
 function edgesOf(room, house) {
   const holes = openings(room, house);
+  const walls = (house.floors || []).flatMap((f) => f.walls || []);
+
+  /** How thick the wall on this edge is: a room polygon follows wall centre lines, not their faces. */
+  const thicknessAt = (mx, my, dx, dy) => {
+    let best = 0.12;
+    let bestD = 0.25;
+    for (const w of walls) {
+      const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+      if (len < 0.1) continue;
+      const ux = (w.b[0] - w.a[0]) / len, uy = (w.b[1] - w.a[1]) / len;
+      if (Math.abs(ux * dx + uy * dy) < 0.95) continue;        // not parallel to this edge
+      const t = Math.max(0, Math.min(len, (mx - w.a[0]) * ux + (my - w.a[1]) * uy));
+      const d = Math.hypot(w.a[0] + ux * t - mx, w.a[1] + uy * t - my);
+      if (d < bestD) { bestD = d; best = w.thickness || 0.12; }
+    }
+    return best;
+  };
   const n = room.poly.length;
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -28,6 +45,7 @@ function edgesOf(room, house) {
     ];
     const on = holes.filter((h) => overlaps(h.zone, band));
     out.push({ ax, ay, bx, by, mx, my, dx, dy, nx, ny, len,
+      th: thicknessAt(mx, my, dx, dy),
       doors: on.filter((h) => h.kind === 'door').length,
       windows: on.filter((h) => h.kind === 'window').length,
       facing: Math.atan2(ny, nx) + Math.PI / 2 });
@@ -43,6 +61,28 @@ function wallsFor(edges, width, { avoidWindows = false } = {}) {
       || (b.len - a.len));
 }
 
+/**
+ * Is a piece clear of the walls themselves? A room polygon follows wall centre lines, so the fit check
+ * can call a spot "inside the room" while half the piece is buried in a 16 cm wall. Staging should never
+ * do that: it is also what left a staged sofa wedged in a wall once physics.js started holding it there.
+ */
+function clearOfWalls(house, floorId, kind, x, y, rot) {
+  const poly = footprint(kind, x, y, rot, -0.01);
+  const f = (house.floors || []).find((q) => q.id === floorId) || (house.floors || [])[0];
+  for (const w of (f && f.walls) || []) {
+    if (w.type !== 'wall') continue;
+    const len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
+    if (len < 0.1) continue;
+    const ux = (w.b[0] - w.a[0]) / len, uy = (w.b[1] - w.a[1]) / len;
+    const th = Math.max(0.06, w.thickness || 0.12) / 2;
+    const nx = -uy * th, ny = ux * th;
+    const band = [[w.a[0] + nx, w.a[1] + ny], [w.b[0] + nx, w.b[1] + ny],
+      [w.b[0] - nx, w.b[1] - ny], [w.a[0] - nx, w.a[1] - ny]];
+    if (overlaps(poly, band)) return false;
+  }
+  return true;
+}
+
 // ------------------------------------------------------------------ putting pieces down
 function makePlacer(room, floorZ, floor, style) {
   const w = window.walkin;
@@ -56,6 +96,7 @@ function makePlacer(room, floorZ, floor, style) {
       const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
       if (r.room !== room) { why = `would land in the ${lower(r.room ? r.room.label : 'hallway')}`; continue; }
       if (!r.ok) { why = r.reasons[0]; continue; }
+      if (!clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot)) { why = 'half of it would be in the wall'; continue; }
       const item = w.addFurniture(kind);
       const it = item || w.furniture.children[w.furniture.children.length - 1];
       it.position.set(c.x, c.y, floorZ + (FURNITURE[kind].flat ? 0.002 : 0.004));
@@ -72,7 +113,7 @@ function makePlacer(room, floorZ, floor, style) {
   /** Would this piece be fine here, without actually putting it there? */
   function probe(kind, c) {
     const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
-    return r.room === room && r.ok;
+    return r.room === room && r.ok && clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot);
   }
 
   return { placed, skipped, tryPlace, probe, floor };
@@ -81,7 +122,8 @@ function makePlacer(room, floorZ, floor, style) {
 /** Points along a wall, centre first, then stepping out to both sides. */
 function alongWall(edge, kind, offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]) {
   const spec = FURNITURE[kind];
-  const back = spec.d / 2 + WALL_GAP;
+  // the polygon edge is the wall's centre line, so clear half its thickness as well as the gap
+  const back = spec.d / 2 + (edge.th || 0.12) / 2 + WALL_GAP;
   const half = Math.max(0, edge.len / 2 - spec.w / 2 - 0.1);
   return offsets.filter((o) => Math.abs(o) <= half + 1e-6).map((o) => ({
     x: edge.mx + edge.dx * o + edge.nx * back,
@@ -134,8 +176,8 @@ const PLANS = {
     const placedBed = P.tryPlace(bed, [best.c], { optional: true });
     for (const s of best.sides) P.tryPlace('nightstand', [beside(best.c, reach * s)], { optional: true });
     void placedBed;
-    P.tryPlace('floorlamp', cornersOf(room, edges, 0.4), { optional: true });
-    P.tryPlace('plant', cornersOf(room, edges, 0.4).reverse(), { optional: true });
+    P.tryPlace('floorlamp', spotsFor(room, edges, 'floorlamp'), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant').reverse(), { optional: true });
   },
 
   living(room, edges, P) {
@@ -166,7 +208,7 @@ const PLANS = {
         break;
       }
     }
-    P.tryPlace('plant', cornersOf(room, edges, 0.4), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
   },
 
   dining(room, edges, P) {
@@ -187,7 +229,7 @@ const PLANS = {
         rot: rot + turn,
       }], { optional: true });
     }
-    P.tryPlace('plant', cornersOf(room, edges, 0.4), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
   },
 
   office(room, edges, P) {
@@ -201,7 +243,7 @@ const PLANS = {
     for (const e of wallsFor(edges, FURNITURE.bookcase.w)) {
       if (P.tryPlace('bookcase', alongWall(e, 'bookcase', [0, 1.0, -1.0]), { optional: true })) break;
     }
-    P.tryPlace('plant', cornersOf(room, edges, 0.4), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
   },
 };
 
@@ -211,14 +253,42 @@ function centroid(poly) {
   return { x, y };
 }
 
-/** Candidate spots tucked into each corner of the room. */
-function cornersOf(room, edges, inset) {
-  const out = [];
-  for (let i = 0; i < room.poly.length; i++) {
-    const [x, y] = room.poly[i];
-    const c = centroid(room.poly);
+/**
+ * Candidate spots tucked into each corner. The polygon corner is where two wall centre lines meet, so a
+ * piece has to come in far enough along the diagonal to clear half a wall on both sides as well as its
+ * own half-width - moving L along the diagonal only clears L/sqrt(2) on each axis.
+ */
+function cornersOf(room, kind) {
+  const spec = FURNITURE[kind] || { w: 0.5, d: 0.5 };
+  const clear = (Math.max(spec.w, spec.d) / 2 + 0.08 + 0.06) * Math.SQRT2;
+  const c = centroid(room.poly);
+  return room.poly.map(([x, y]) => {
     const dx = c.x - x, dy = c.y - y, len = Math.hypot(dx, dy) || 1;
-    out.push({ x: x + (dx / len) * (inset + 0.25), y: y + (dy / len) * (inset + 0.25), rot: Math.atan2(dy, dx) + Math.PI / 2 });
+    return { x: x + (dx / len) * clear, y: y + (dy / len) * clear, rot: Math.atan2(dy, dx) + Math.PI / 2 };
+  });
+}
+
+/**
+ * Where a small piece could go: corners first, then tucked against each wall, then a coarse sweep of the
+ * floor. The placer takes the first one that passes, so a lamp still lands somewhere sensible in a room
+ * whose corners are all taken or too tight.
+ */
+function spotsFor(room, edges, kind) {
+  const spec = FURNITURE[kind] || { w: 0.5, d: 0.5 };
+  const out = cornersOf(room, kind);
+  for (const e of edges) {
+    const back = spec.d / 2 + (e.th || 0.12) / 2 + WALL_GAP;
+    for (const o of [0, 0.6, -0.6, 1.2, -1.2]) {
+      const half = Math.max(0, e.len / 2 - spec.w / 2 - 0.15);
+      if (Math.abs(o) > half) continue;
+      out.push({ x: e.mx + e.dx * o + e.nx * back, y: e.my + e.dy * o + e.ny * back, rot: e.facing });
+    }
+  }
+  const xs = room.poly.map((p) => p[0]), ys = room.poly.map((p) => p[1]);
+  for (let gx = Math.min(...xs) + 0.5; gx < Math.max(...xs); gx += 0.7) {
+    for (let gy = Math.min(...ys) + 0.5; gy < Math.max(...ys); gy += 0.7) {
+      out.push({ x: gx, y: gy, rot: 0 });
+    }
   }
   return out;
 }
@@ -421,6 +491,47 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
   window.walkin.stageRoom = stageRoom;
   window.walkin.setStyle = (style) => setStyle(style, window.walkin.furniture);
   window.walkin.styles = () => Object.keys(STYLES);
+
+  // Buttons in the More popover, so a human can stage a room without the agent - the fallback if the
+  // voice path is having a bad day in front of the judges. Each press cycles to the next style.
+  const styles = Object.keys(STYLES);
+  let next = 0;
+  const stageBtn = document.getElementById('bStage');
+  if (stageBtn) {
+    stageBtn.addEventListener('click', () => {
+      const w = window.walkin;
+      const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
+      if (!room) { stageBtn.textContent = '⌂ not in a room'; setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 1800); return; }
+      const style = styles[next++ % styles.length];
+      const res = stageRoom(room, style);
+      stageBtn.textContent = res.placed.length ? `⌂ ${style}` : '⌂ no room for a set';
+      setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 2200);
+      console.log(`stage: ${res.say}`);
+    });
+  }
+  // Removing a piece deliberately disposes nothing. A model's geometry and materials are shared: a piece
+  // is THREE.Object3D.clone(true) of one cached glTF, which shares geometry and material references, the
+  // style materials are cached per (style, source material) in furniture.js, and every contact shadow uses
+  // one CanvasTexture. Disposing any of them from here would blank the next piece of the same kind. What a
+  // removed piece owns on its own is a few box geometries and one quad, which GC handles.
+  const clearBtn = document.getElementById('bClearRoom');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      const w = window.walkin;
+      const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
+      if (!room) return;
+      let n = 0;
+      for (const it of [...w.furniture.children]) {
+        if (it.userData.kind && w.roomAt(it.position.x, it.position.y, it.userData.floor) === room) {
+          w.furniture.remove(it);   // see the note below on why nothing is disposed here
+          n++;
+        }
+      }
+      if (w.select) w.select(null);
+      clearBtn.textContent = `⌁ took out ${n}`;
+      setTimeout(() => { clearBtn.textContent = '⌁ Clear room'; }, 1800);
+    });
+  }
   window.walkin.describeRoom = describeRoom;
   window.walkin.placeObject = placeObject;
   window.walkin.plants = plants;

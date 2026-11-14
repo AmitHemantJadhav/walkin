@@ -30,15 +30,32 @@ RELAY = os.environ.get('WALKIN_RELAY', 'http://localhost:8000')
 IMAGE_MODEL = 'gemini-3.1-flash-image'      # the same one agent.js uses for wallpaper tiles
 SWATCH = 384                                 # px in the atlas; caps are flat, they do not need more
 FILLER = np.array([150., 145., 140.])        # build_atlas paints unused atlas space this colour
-PAUSE = 31                                   # seconds between calls: the relay allows 2 images/min
+PAUSE = 34                                   # seconds between calls: the relay allows 2 images/min
 
 
-def _post(req, timeout=120):
+def _post(req, timeout=120, tries=5):
+    """One image, waiting out the relay's rate limit rather than giving up on it.
+
+    The relay allows 2 images/min and answers 429 over that. A fixed pause between pieces is not
+    enough on its own - a first run at 31 s lost 14 of 20 pieces to 429 - because a refused request
+    still costs its slot in the schedule. So back off and retry instead of dropping the piece.
+    """
+    import urllib.error
     import urllib.request
     url = f'{RELAY}/api/gemini?model={IMAGE_MODEL}'
-    r = urllib.request.urlopen(urllib.request.Request(
-        url, json.dumps(req).encode(), {'Content-Type': 'application/json'}), timeout=timeout)
-    return json.loads(r.read())
+    wait = PAUSE
+    for attempt in range(tries):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(
+                url, json.dumps(req).encode(), {'Content-Type': 'application/json'}), timeout=timeout)
+            return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt == tries - 1:
+                raise
+            print(f'    rate limited, waiting {wait}s', flush=True)
+            time.sleep(wait)
+            wait = min(wait * 1.6, 150)
+    raise RuntimeError('unreachable')
 
 
 def material_crop(atlas, want=320):
@@ -123,8 +140,13 @@ def main():
     buf = np.fromfile(os.path.join(out, 'furniture.bin'), dtype=np.uint8)
     tex_dir = os.path.join(out, 'furniture-tex')
 
-    todo = sorted([p for p in meta['pieces'] if p.get('capVerts')],
+    # Skip anything already skinned: its atlas has the swatch appended and its cap UVs point into
+    # it, so a second pass would extend the sheet again and leave the caps reading the wrong strip.
+    already = sum(1 for p in meta['pieces'] if p.get('capSkin'))
+    todo = sorted([p for p in meta['pieces'] if p.get('capVerts') and not p.get('capSkin')],
                   key=lambda p: -p['capped'])[:want]
+    if already:
+        print(f'  ({already} already skinned, leaving those alone)')
     print(f'{model}: skinning the caps of {len(todo)} of {len(meta["pieces"])} pieces '
           f'(~{PAUSE*len(todo)/60:.0f} min at the relay\'s 2 images/min)')
 
@@ -171,12 +193,12 @@ def main():
         p['capSkin'] = True
         done += 1
         print(f'  #{p["i"]:>2} {(p.get("room") or ""):<13} atlas {W}x{H} -> {newW}x{newH}, '
-              f'{p["capped"]} cap tris skinned (crop was {100*cover:.0f}% real texture)')
+              f'{p["capped"]} cap tris skinned (crop was {100*cover:.0f}% real texture)', flush=True)
         if n < len(todo) - 1:
             time.sleep(PAUSE)
 
     buf.tofile(os.path.join(out, 'furniture.bin'))
-    meta['capSkin'] = done
+    meta['capSkin'] = already + done
     json.dump(meta, open(os.path.join(out, 'furniture.json'), 'w'))
     print(f'skinned {done} pieces; furniture.bin and furniture.json rewritten')
 

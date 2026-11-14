@@ -247,7 +247,7 @@ whether #51 landed before assuming something is broken.
 | furniture won't move | `walkin.physics.enabled = false` |
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
-| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all |
+| the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again **then hard-reload** (⌘⇧R) — `/data/` is cached for a day, so without that you keep seeing the old file (#59); or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all |
 
 ## Console equivalents for every beat
 

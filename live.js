@@ -11,8 +11,10 @@
 // URL: ?live=off disables it, ?voice=<name> picks a Gemini voice (Charon, Puck, Kore, Achird, Sulafat, …).
 
 const params = new URLSearchParams(location.search);
-const IDLE_MS = 15000;            // nobody spoke for this long: end the conversation, back to "Hey John"
-const BYE = /\b(bye|goodbye|that'?s all|thanks?,? john|thank you,? john|stop listening|we'?re done)\b/i;
+const IDLE_MS = 9000;             // nobody spoke for this long: end the conversation, back to "Hey John" (short, so a
+                                  // presenter talking to the room isn't taken as more conversation for long)
+const CONNECT_MS = 6000;          // venue Wi-Fi: give up on a connection that hangs
+const BYE = /\b(bye|goodbye|that'?s all|that'?s it|thanks?,? john|thank you,? john|cheers,? john|stop listening|we'?re done|perfect,? thanks)\b/i;
 const IN_RATE = 16000, OUT_RATE = 24000;
 
 const LIVE_STYLE = `
@@ -21,9 +23,11 @@ house, not like an assistant reading a list. Keep each turn to one or two short 
 to what the person says, and ask a short follow-up question when it helps ("Want me to try it by the window?").
 Never read out numbers with more than one decimal, never spell out units like "metres squared" (say "square metres"),
 and never mention tools, functions or JSON. If you are running something that takes a moment, say so naturally.
-If the person says goodbye or thanks you at the end, answer briefly and warmly.`;
+If the person says goodbye or thanks you at the end, answer briefly and warmly.
+Before any action that takes a moment (wallpaper, staging, plants), first say three or four words like "Sure, one sec" so
+there is never dead air.`;
 
-let sdk = null, healthLive = null;
+let sdk = null, healthLive = null, connecting = null;
 let session = null, micStream = null, micCtx = null, micNode = null, playCtx = null;
 let playing = [], nextAt = 0, idleTimer = 0, ending = false, resolveEnd = null, active = false;
 
@@ -40,6 +44,8 @@ async function available() {
 
 // ------------------------------------------------------------------ audio out: 24 kHz PCM16 chunks, played gap-free
 function prime() {                             // call inside a tap: iOS only starts audio contexts made in a gesture
+  if (!sdk) import('./vendor/genai/genai.mjs').then((m) => { sdk = sdk || m; }).catch(() => {}); // fetch the SDK now, not on "Hey John"
+  try { if (navigator.audioSession) navigator.audioSession.type = 'play-and-record'; } catch (e) { /* Safari < 16.4 */ }
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
     playCtx = playCtx || new AC({ sampleRate: OUT_RATE });
@@ -203,6 +209,22 @@ function onMessage(m) {
   }
 }
 
+function withTimeout(p, ms, msg) {
+  return Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(msg)), ms))]);
+}
+
+/** Say this exact line in John's own voice inside the open conversation (one voice, and he won't answer himself). */
+function sayExact(line) {
+  if (!active || !session || ending) return false;
+  try {
+    session.sendClientContent({ turns: [{ role: 'user', parts: [{ text:
+      `(Not the user speaking: the app noticed something. Say exactly this, in your own voice, then wait: "${line}")` }] }],
+    turnComplete: true });
+    touch();
+    return true;
+  } catch (e) { return false; }
+}
+
 async function start({ firstText = '' } = {}) {
   if (active) return;
   active = true; ending = false; saidBye = false; userLine = ''; johnLine = '';
@@ -216,7 +238,7 @@ async function start({ firstText = '' } = {}) {
     const agent = window.walkin.agent;
     const voiceName = params.get('voice') || t.voice || 'Charon';
     emit({ kind: 'state', state: 'connecting' });
-    session = await ai.live.connect({
+    connecting = ai.live.connect({
       model: t.model,
       config: {
         responseModalities: [sdk.Modality.AUDIO],
@@ -232,6 +254,7 @@ async function start({ firstText = '' } = {}) {
         onclose: (e) => { if (!ending) { console.info('[live] closed', e && (e.reason || e.code)); stop('closed'); } },
       },
     });
+    session = await withTimeout(connecting, CONNECT_MS, 'connecting to Gemini Live timed out');
     if (ending || !active) {                     // it failed or was stopped while connecting: don't keep the socket
       try { session.close(); } catch (e) { /* already closed */ }
       session = null;
@@ -252,6 +275,7 @@ async function start({ firstText = '' } = {}) {
         if (session === mine && !ending) emit({ kind: 'state', state: 'nomic' });
       });
   } catch (e) {
+    if (connecting) connecting.then((late) => { if (late !== session) { try { late.close(); } catch (err) { /* gone */ } } }).catch(() => {});
     console.warn('[live] could not start:', e && (e.message || e));
     emit({ kind: 'state', state: 'failed', reason: String(e && e.message || e) });
     cleanup();
@@ -282,5 +306,5 @@ function stop(why = 'stop') {
 
 (function attach(tries = 0) {
   if (!window.walkin || !window.walkin.agent) { if (tries < 600) setTimeout(() => attach(tries + 1), 200); return; }
-  window.walkin.live = { available, start, stop, prime, isActive: () => active, _onMessage: onMessage, _upperTypes: upperTypes };
+  window.walkin.live = { available, start, stop, prime, sayExact, isActive: () => active, _onMessage: onMessage, _upperTypes: upperTypes };
 })();

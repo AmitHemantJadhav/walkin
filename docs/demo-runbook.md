@@ -79,7 +79,10 @@ Grab the sofa and carry it at the doorway **broadside**. It stops dead, and the 
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
 
-Turn it. It goes through.
+Turn it. It goes through — and you don't have to be precise about it: a piece that *would* fit is
+slid onto the doorway's centre line for you, because hands can't hold ±10 cm. A piece that genuinely
+doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it won't fit through at
+all"* instead.
 
 This is the beat to land hardest. Nobody buying a house asks whether a render looks nice; they ask
 whether the sofa gets through the door.
@@ -88,7 +91,12 @@ whether the sofa gets through the door.
 
 > **"Hey John — what plant should go here?"**
 
-He reads the light at that spot from the photo and the window positions, and places one.
+He reads the light at that spot from the photo and the window positions, and places one:
+
+> *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
+
+If the model doesn't chain the two steps, `walkin.suggestPlant()` does the whole thing in one call
+and always lands.
 
 ### 7. Close (10 s)
 
@@ -131,6 +139,8 @@ Useful for rehearsing without a microphone, and for anyone testing a change:
 walkin.stageRoom(walkin.roomAt(walkin.current.pos[0], walkin.current.pos[1], walkin.current.floor), 'cozy')
 walkin.setWallMaterial(walkin.pointer.wall, 'models/textures/brick_red.jpg', 0.9)
 walkin.placeObject('plant')
-walkin.stageHouse('modern')
+walkin.suggestPlant()                       // reads the light here, picks a plant, places it
+walkin.stageHouse('modern')                 // the whole house: 6 rooms, 28 pieces, ~0.2 s
+walkin.setStyle('cozy')                     // restyle everything already placed
 walkin.clearLayout()
 ```

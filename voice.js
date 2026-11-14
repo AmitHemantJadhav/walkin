@@ -214,7 +214,7 @@ async function finishCommand() {
 let liveOk = null;
 // Captions are two lines (~90 characters per eye in the headset): show the sentence being said, not the start of the turn.
 function tail(text, max = 90) {
-  const t = String(text || '').trim();
+  const t = String(text || '').replace(/\s+/g, ' ').trim();   // one line: '.' in the split below doesn't cross a newline
   if (t.length <= max) return t;
   const parts = (t.match(/[^.!?]+[.!?]*\s*/g) || [t]).map((s) => s.trim()); // no lookbehind: Safari < 16.4 can't parse it
   let out = parts.pop();

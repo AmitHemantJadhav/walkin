@@ -12,7 +12,7 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 | **1** 20 s | *"This is a real house, and it's empty."* | walk two scan points. Matterport emptied it; it's a real listing |
 | **2** 30 s | **"Hey John — stage this as a cosy living room."** | sofa, rug, coffee table, armchair, tv stand, television, plant. **Real metres, checked against the walls and the doorways.** The sofa is 2.1 m because sofas are |
 | **3** 20 s | *"Now walk around it."* | another scan point. Still exactly where you left it. **This is the pitch** — an image edit can't survive a change of viewpoint; ours is in model space |
-| **4** 30 s | **"Hey John — put red brick wallpaper on this wall."** | tile generated, laid at real scale, cut around the door and the window, shaded by the photo's own light |
+| **4** 30 s | **"Hey John — put red brick wallpaper on this wall."** | tile generated, laid at real scale, cut around the door and the window, shaded by the photo's own light. **Stay at scan point 37 and point at wall #19** — 0% of it is lost to the scan mesh; the first long wall you see (#1) loses 90% (#61) |
 | **5** 40 s | *"Will my sofa fit?"* | **the beat to land hardest.** See the box below |
 | **6** 20 s | **"Hey John — what plant should go here?"** | he reads the light at that spot and places one. Fallback: `walkin.suggestPlant()` |
 | **7** 10 s | **"Hey John — furnish the whole house."** | six rooms, 32 pieces. Fallback: `walkin.stageHouse('modern')` |
@@ -50,4 +50,4 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 | everything looks wrong | `walkin.clearLayout()` then **⋯ → ⌂ Stage room** |
 | the house won't load | re-prep it and reload, or `?m=fixture` after `python3 tools/fake_house.py` — needs no keys, does the whole run |
 | the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move. `&a6=round` is *not* a full rollback: it still blinks |
-| you changed `serve.py` | restart it. It is read once at startup |
+| you changed **or pulled** `serve.py` | restart it — it is read once at startup, so a `git pull` leaves the old one serving. If the John row says *"is serve.py the one you just pulled?"*, that is this |

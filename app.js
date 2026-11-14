@@ -750,11 +750,12 @@ let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (p
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
-// passthrough (default): the camera is mapped by angle, so the hand is drawn at its real size and place, no shrink.
-// ?handmap=crop: the old zoomed crop (reach the screen edges), where a 0.6 shrink keeps the hand from filling the view.
+// Headset (back camera at your eyes): passthrough, the camera mapped by angle, so the hand is at its real size and
+// place. Handheld: the camera is not where your eyes are, so the view shows the middle of the camera like the preview.
+// ?handmap=crop forces the crop everywhere. No shrink by default: a shrunk hand is no longer where your hand is.
 const HAND_MAP = params.get('handmap') === 'crop' ? 'crop' : 'angle';
-const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || (HAND_MAP === 'crop' ? 0.6 : 1),
-  seg: params.get('handseg') !== 'off' }); // skin-colour cut-out; ?handseg=off = landmark mask only
+const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 1,
+  seg: params.get('handseg') === '1' }); // skin-colour cut-out, experimental: ?handseg=1
 function setHandStyle(s) {
   handStyle = s === 'skeleton' ? 'skeleton' : 'real';
   if (handStyle !== 'real') realHands.clear();
@@ -956,7 +957,7 @@ async function restartHands(mode) {
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
     onFrame: (cam) => { if (handStyle === 'real' && handsList.length) realHands.snap(cam); }, // same frame as the landmarks
-    viewFov: HAND_MAP === 'angle' ? () => camera.fov : null,
+    viewFov: HAND_MAP === 'angle' ? () => (vr ? camera.fov : null) : null,
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low

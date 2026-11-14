@@ -29,13 +29,17 @@ const PINCH_ALPHA = 0.4;  // a pinching (holding) hand: the piece in your finger
 export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
   const cv = document.createElement('canvas');
   cv.id = 'realhands';
-  cv.style.cssText = 'position:fixed;left:0;top:0;width:100vw;height:100vh;pointer-events:none;z-index:2';
+  // sized in px from innerWidth/innerHeight like the 3D canvas, not 100vw/100vh: on iPhone Safari 100vh is the
+  // large viewport (behind the toolbars), which stretched the hand downwards, away from the cursor
+  cv.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;z-index:2';
   document.body.appendChild(cv);
   const ctx = cv.getContext('2d');
   const size = () => {
     const k = Math.min(1, MAX_W / innerWidth);
     cv.width = Math.round(innerWidth * k);
     cv.height = Math.round(innerHeight * k);
+    cv.style.width = innerWidth + 'px';
+    cv.style.height = innerHeight + 'px';
   };
   size();
   addEventListener('resize', size);

@@ -157,8 +157,19 @@ furniture and not the physics. **The coffee table alone is not enough**, which i
 to say: pull the **coffee table, the armchair and the tv stand** aside, or run beat 5 on a room you
 haven't staged. The rug makes no difference — rugs are `flat`, and the solver ignores them.
 
-Easiest on stage: **do beat 5 before beat 2**, in the empty living room, where the sofa has a clear
-run from the start. (Why the sofa doesn't just shove the coffee table out of the way: #57.)
+**The better beat, and it needs no clearing at all.** Do beat 5 **before** beat 2 and let the viewer
+place the sofa for you. Standing at scan point 37 you are on the **front porch** — the 1.15 m opening
+is the **front door** — so this becomes the question people actually ask: *will my sofa fit through
+the front door?* Verified against `main`, end to end:
+
+| | |
+|---|---|
+| **⋯ → + Add → Sofa** | lands on the porch, **1.53 m from the front door**, nothing in the way |
+| carry it at the door **broadside** | stops dead, and John says the line |
+| **turn it square** and carry it through | ends **in the Living Room**, 1.8 m past the door, 3.4 m travelled |
+
+Then run beat 2 on the room you have just carried it into. (Why the sofa doesn't just shove the coffee
+table out of the way: #57.)
 
 **Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
 La Mirada has three out of twenty-two: the 2.50 m opening between the living and dining rooms (too

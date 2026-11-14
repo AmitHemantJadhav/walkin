@@ -19,8 +19,10 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 
 ### Beat 5, in order
 
-1. **Clear the path: coffee table, armchair and tv stand.** All seven staged, the sofa travels 24 cm and
-   stops; with those three aside it gets a clear run. Simplest of all: **run beat 5 before beat 2**.
+1. **Run beat 5 before beat 2** and skip the problem. Scan point 37 is the **front porch**, so
+   **⋯ → + Add → Sofa** drops it 1.5 m from the **front door** with nothing in the way — and *"will it fit
+   through the front door"* is the better line anyway. After beat 2 it takes three drags (coffee table,
+   armchair, tv stand) or the sofa travels 24 cm and stops.
 2. Stand at **scan point 37**. The doorway you want is the **1.15 m** one, 0.47 m away.
 3. Carry the sofa at it **broadside**. It stops dead, John says it, and the same sentence appears
    under the room card:

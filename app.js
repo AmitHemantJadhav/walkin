@@ -1020,6 +1020,30 @@ const fpsEls = [0, 1].map((i) => {
 });
 const fpsAlways = params.has('fps');
 
+// A1 needs a number from an iPhone in the headset with hands on, and nobody wearing it has a hand free to write
+// it down. So in that mode the page reports its own frame rate: every 10 measured seconds, one HEAD request for
+// index.html with the numbers in the query (no body; it only shows up as a line in the server's access log).
+// `node tools/fps-report.mjs <server log>` reads them back. ?fpsreport=off stops it.
+const fpsReport = { on: params.get('fpsreport') !== 'off', sid: Math.random().toString(36).slice(2, 7), s: [] };
+function reportFps(fps, handHz) {
+  if (!fpsReport.on || !vr || !handsApi) { fpsReport.s.length = 0; return; }
+  fpsReport.s.push(fps);
+  if (fpsReport.s.length < 10) return;
+  const s = fpsReport.s.sort((a, b) => a - b);
+  fpsReport.s = [];
+  const ua = navigator.userAgent;
+  const px = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const q = new URLSearchParams({
+    fpsreport: 1, sid: fpsReport.sid,
+    dev: /iPhone|iPad/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'desktop',
+    scr: `${screen.width}x${screen.height}@${devicePixelRatio}`,
+    med: s[5].toFixed(0), min: s[0].toFixed(0), pr: perf.pr, px: `${px.x}x${px.y}`,
+    hz: handHz.toFixed(0), hms: (handsApi.stats?.ms ?? 0).toFixed(0), src: handsApi.stats?.src ?? '',
+    draws: renderer.info.render.calls, ktris: (renderer.info.render.triangles / 1000).toFixed(0),
+  });
+  fetch(`index.html?${q}`, { method: 'HEAD', cache: 'no-store' }).catch(() => {});
+}
+
 function tickPerf() {
   perf.frames++;
   const now = performance.now(), dt = now - perf.t0;
@@ -1042,6 +1066,7 @@ function tickPerf() {
     if (perf.pr < perf.cap) setPixelRatio(perf.pr + 0.25);
     else if (handHzNow < perf.handCap) { handsApi.setMaxHz(handHzNow + 5); console.log(`[perf] hand detection ${handHzNow + 5} Hz`); }
   }
+  reportFps(fps, handHz);
   const show = debug || fpsAlways;
   fpsEls.forEach((el, i) => { el.style.display = show && (i === 0 || vr) ? 'block' : 'none'; });
   if (!show) return;

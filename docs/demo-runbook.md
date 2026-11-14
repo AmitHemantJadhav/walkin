@@ -209,6 +209,10 @@ whether #51 landed before assuming something is broken.
   as-scanned photo it covers whatever was standing against that wall — the owner's sofa back, a
   lamp. It still works and still re-shades, it just looks like wallpaper over furniture. Empty is
   the default, so this only bites if you've toggled.
+- **Put small things down by asking, not by dragging.** `walkin.placeObject('plantsmall', x, y)` and
+  *"put a plant on the coffee table"* both land it on the table, linked, at the right height. Carry
+  the same plant there by hand and it stops 0.69 m short, on the floor beside it: the frame loop
+  treats the table as something to bump into, not something to stand on (#58).
 - **The reload is safe, so don't panic-clear.** Furniture, what each piece is standing on, and wall
   materials all come back. Only a *generated* tile doesn't — see the next line.
 - **A wall painted with a *generated* tile does not survive a reload.** The tile is a `data:` URL

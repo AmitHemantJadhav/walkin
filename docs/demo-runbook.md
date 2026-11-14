@@ -149,26 +149,23 @@ If you ever need to see the event directly:
 addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door
 ```
 
-Turn it and walk it through — **square on**. Swept at that doorway against `main`, walking the sofa in
-on a straight line at a fixed angle, the tolerance turns out to be two numbers rather than one, and
-they fail in different directions:
+Turn it and walk it through — **square on**. Swept at that doorway against `main`, walking the sofa out
+of the living room on a straight line: **up to about 10 cm off the centre line it goes straight
+through**, which is the clearance a 0.95 m sofa really has in a 1.15 m door, and matches the 10 cm
+`physics.js` documents. It is not symmetric — 12 cm to one side still went through and 12 cm to the
+other stopped — so **10 cm is the figure to trust, not a boundary to lean on**. By 16 cm it lines
+itself up with the doorway and stops in it, 0.10 m short of crossing.
 
-| off by | goes through? | how it fails |
-|---|---|---|
-| **±10 cm** sideways | yes | — |
-| ±12 cm sideways | no | lines up with the gap and **stops in it**, 0.27 m past the wall |
-| **±7°** off square | yes | — |
-| ±8° off square | no | **stops a metre short** and never enters the gap at all |
+Past that limit the assist does slide it towards the centre, but the hand is still pulling off to one
+side, so the sofa squares up to the gap and stops rather than passing. It looks deliberate rather
+than broken — if it stops, back off half a metre, square up and go again, and don't let anyone think
+it is meant to be forgiving. Fixing it properly needs the doorway to act as a rail for the whole
+traverse; four attempts at it each made something else worse (#55), so it is written down rather than
+half-done.
 
-So **the angle is the tight one** — and it is the one you cannot see while you are dragging. What is
-useful on stage is that the two failures look different: a sofa wedged *in* the doorway means you are
-off sideways, and a sofa stopped a stride *before* the doorway means you are off angle. Either way,
-back off half a metre, square up and go again. Past the sideways limit the assist does slide it
-towards the centre, but the hand is still pulling off to one side, so the sofa lines itself up with
-the doorway and stops in it rather than passing. It looks deliberate rather than broken — but don't
-let anyone think it is meant to be forgiving. Fixing it properly needs the doorway to act as a rail
-for the whole traverse; four attempts at it each made something else worse (#55), so it is written
-down rather than half-done.
+How far off *square* you can be is a fair question and I don't have an honest number for it: turning
+the sofa in place a stride from the door makes the solver shove it, so every run I set up beyond a few
+degrees had already been pushed through the doorway before the walk started (#84). Go in square.
 
 A piece that genuinely doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it
 won't fit through at all"* instead.

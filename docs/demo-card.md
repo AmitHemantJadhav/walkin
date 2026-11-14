@@ -33,9 +33,8 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 ### Six things that will bite you
 
 - **Only one doorway works for beat 5.** 19 of La Mirada's 22 are too narrow for a sofa even turned.
-- **Go in square — the angle matters more than the sideways position.** ±**10 cm** off the centre line
-  still goes through, but only ±**7°** off square. Stops *in* the gap → you are off sideways; stops a metre
-  *short* of it → you are off angle.
+- **Go in square.** About **10 cm** off the centre line still goes through — not symmetric, so don't lean
+  on it. By 16 cm it squares up to the gap and **stops in it**: back off half a metre and go again.
 - **Move the coffee table first.**
 - **Don't stand at scan point 38 or 16** — the scan gives those rooms no outline, so staging refuses.
 - **`&layout=none`** or last night's furniture comes back.

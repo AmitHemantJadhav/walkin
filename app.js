@@ -532,6 +532,20 @@ function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants 
   }
   g.last = { x, y, t };
 }
+// A2: push it away, pull it back. While carrying, moving the hand toward / away from the camera (metric depth from
+// hands.js) slides the piece along the pointing direction, DEPTH_GAIN metres per metre of hand travel, after a small
+// dead zone so depth noise doesn't wobble it. Front camera (handheld): toward the phone = away from you; back camera
+// (headset): away from the phone = away. ?dgain=0 turns it off.
+const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015;
+function carryPoint(f, cam, d0, depth, sign, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]
+  if (!gain || d0 == null || depth == null) return [f.x, f.y];
+  const dx = f.x - cam.x, dy = f.y - cam.y, r = Math.hypot(dx, dy);
+  if (r < 0.05) return [f.x, f.y]; // pointing at your feet: no direction to push along
+  const raw = (depth - d0) * sign, push = Math.sign(raw) * Math.max(0, Math.abs(raw) - DEPTH_DEAD);
+  const r2 = Math.min(Math.max(r + gain * push, Math.min(r, 0.4)), Math.max(r, 12)); // not behind you, not miles off
+  return [cam.x + (dx / r) * r2, cam.y + (dy / r) * r2];
+}
+const depthSign = () => (handCam === 'user' ? -1 : 1);
 function letGo(side, fling) {
   const g = grabs[side];
   if (!g) return;
@@ -657,7 +671,7 @@ function onHands(list, cam) {
         select(item);
         const P = phys();
         grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
-          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null, d0: h.depth ?? null };
       } else if (puckReady) {
         aims[h.side] = null;
         goTo(near.userData.pano);
@@ -686,14 +700,18 @@ function onHands(list, cam) {
   if (twist) { // two-hand hold just ended: re-anchor the hand still holding to where the piece is, so it doesn't jump
     for (const h of list) {
       const g = grabs[h.side];
-      if (g && g.item === twist.item && h.floor) g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
+      if (g && g.item === twist.item && h.floor) {
+        g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
+        g.d0 = h.depth ?? null; // push / pull starts again from where the hand is now
+      }
     }
     twist = null;
   }
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      moveHeld(g, h.side, h.floor.x + g.off.x, h.floor.y + g.off.y);
+      const [cx, cy] = carryPoint(h.floor, camera.position, g.d0, h.depth ?? null, depthSign());
+      moveHeld(g, h.side, cx + g.off.x, cy + g.off.y);
       checkFit();
     }
   }
@@ -911,6 +929,7 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   set handStyle(s) { setHandStyle(s); },
   // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
   // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
+  // Add depth (metres from the camera) to try push / pull: with the front camera a smaller depth pushes the piece away.
   simHands(list = []) {
     onHands(list.map((h) => ({ side: 'Right', pinch: false, size: 0.2, ...h,
       pts: h.pts || Array.from({ length: 21 }, () => ({ x: h.x, y: h.y, z: 0 })) })), null);

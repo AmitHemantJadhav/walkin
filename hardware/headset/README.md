@@ -23,6 +23,11 @@ temples (13 mm behind) and a little back at the cheeks. The nose arch is 18 mm w
 bottom, cut through the shroud, the lens board and the front of the tunnel (a nose reaches about 30 mm in front of
 the eyes). For comfort, stick a 12–15 mm wide self-adhesive foam strip along the face edge.
 
+## Print a test first (~30 min)
+`test-pocket-slice.stl` (the screen ledge, phone pocket and back rim, 13.5 mm tall) and `test-lens-seat.stl` (one
+lens seat). Check that the iPhone slides in, the screen sits flat on the ledge, and a lens plus ring seats. Then print
+the rest. If the phone is tight or loose, change `CLR` and re-run `build.py`.
+
 ## Print (PLA or PETG, 0.2 mm layers, 3 walls, 15 % infill, no supports)
 | file | qty | on the bed |
 |---|---|---|
@@ -30,9 +35,16 @@ the eyes). For comfort, stick a 12–15 mm wide self-adhesive foam strip along t
 | `lensboard.stl` | 1 | flat |
 | `body.stl` | 1 | as exported (back rim down) |
 | `endcap.stl` | 1 | as exported |
-| `ring.stl` | 2 | flat |
+| `ring.stl` (40.45 mm) and `ring-40.6.stl` | 2 of each | flat. Use whichever size presses in; glue is the backup |
 
-Size: 158.6 × 82.6 × 89.8 mm, or 180.6 mm wide over the strap ears.
+Size: 159 × 83 × 90 mm, or 181 mm wide over the strap ears.
+
+Print tolerances (FDM, 0.4 mm nozzle; from the review on #120):
+- phone pocket 0.7 mm clearance per side (`CLR`); no room for a case
+- 2.5 mm screen ledge: covers the bezel and prints as a short overhang without drooping
+- M3 holes 3.4 mm (they print about 3.2), self-tap pilots 2.7 mm
+- end cap 0.4 mm over the body
+- 0.4 mm elephant's-foot relief on the bed-side edges of the back window and the pocket mouth
 
 ## Buy
 - **2 × Google Cardboard v2 / 2.0 replacement lenses, 34 mm aspheric** (sold as "Cardboard 2.0 lenses 34 mm").

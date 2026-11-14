@@ -20,7 +20,7 @@ from manifold3d import Manifold, CrossSection, JoinType
 
 # ------------------------------------------------------------------ phone
 PH_L, PH_W, PH_T = 147.6, 71.6, 7.8
-CLR = 0.5
+CLR = 0.7                            # per side; FDM-friendly (review on #120). No room for a case.
 POCKET_L, POCKET_W, POCKET_T = PH_L + 2 * CLR, PH_W + 2 * CLR, PH_T + 0.5
 WALL = 5.0
 OUT_W, OUT_H = POCKET_L + 2 * WALL, POCKET_W + 2 * WALL       # 158.6 x 82.6
@@ -34,11 +34,15 @@ Z_BOARD = 19.0                       # eye-side face of the lens board
 Z_LEDGE = Z_BOARD + 1.1              # lens rim sits here
 Z_TAB = Z_LEDGE + TAB_T              # tab face toward the display
 Z_BOARD_BACK = Z_BOARD + BOARD_T     # 23.5
-Z_SCREEN = Z_TAB + 39.07             # 61.8 ; board back -> screen = 38.3 (spec 37.3 +2/-0.5)
+Z_SCREEN = Z_TAB + 39.07             # 60.82 ; board back -> screen = 37.32 (spec 37.3 +2/-0.5)
 Z_RIM = Z_SCREEN + POCKET_T
 RIM_T = 2.2
 Z_END = Z_RIM + RIM_T
 RIM_LONG, RIM_END = 4.0, 3.0
+LEDGE = 2.5                          # screen ledge: covers the bezel, short enough to print as an overhang
+M3_HOLE = 3.4                        # prints ~3.2
+CAP_GAP = 0.4                        # end cap over the body: two printed faces sliding
+FOOT = 0.4                           # elephant's-foot chamfer on bed-side edges
 # eye position: pupil plane Z = 0 ; eye-side lens vertex ~ Z_LEDGE - 3.5 ; eye relief 18 -> pupil ~ -1.4 (we use 0)
 # ------------------------------------------------------------------ face contour (where the shroud meets skin)
 BROW = 9.0       # brow ridge sits ~9 mm in front of the pupil
@@ -82,7 +86,7 @@ def shroud():
     for x, y in pins:                                   # corner bosses, 8 mm deep, screw access from the face side
         boss = (cyl(x, y, Z_BOARD - 8, Z_BOARD, 9.0) ^ outer)
         m = m + boss
-        m = m - cyl(x, y, Z_BOARD - 9, Z_BOARD + 1, 3.3) - cyl(x, y, Z_BOARD - 30, Z_BOARD - 5.5, 6.2)
+        m = m - cyl(x, y, Z_BOARD - 9, Z_BOARD + 1, M3_HOLE) - cyl(x, y, Z_BOARD - 30, Z_BOARD - 5.5, 6.2)
     for sx in (-1, 1):                                  # strap ears with 26 mm slots, on the sides near the temples
         xo = OUT_W / 2 if sx > 0 else -OUT_W / 2
         ear = box(min(xo, xo + sx * 11), max(xo, xo + sx * 11), -17, 17, Z_BOARD - 22, Z_BOARD)
@@ -101,17 +105,17 @@ def lensboard():
         m = m - cyl(x, 0, Z_LEDGE, Z_BOARD_BACK + 1, LENS_TAB_D + 0.6)    # lens + tabs + retainer ring recess
     m = m - nose(Z_BOARD - 1, Z_BOARD_BACK + 1)
     for x, y in pins:
-        m = m - cyl(x, y, Z_BOARD - 1, Z_BOARD_BACK + 1, 3.3)
+        m = m - cyl(x, y, Z_BOARD - 1, Z_BOARD_BACK + 1, M3_HOLE)
     return m
 
-def ring():   # sits on the lens rim/tabs, press-fit into the 40.6 mm recess
-    return cyl(0, 0, 0, Z_BOARD_BACK - Z_TAB, LENS_TAB_D + 0.45) - cyl(0, 0, -1, 5, 32.6)
+def ring(od=LENS_TAB_D + 0.45):   # sits on the lens rim/tabs, press-fit into the 40.6 mm recess (print both sizes)
+    return cyl(0, 0, 0, Z_BOARD_BACK - Z_TAB, od) - cyl(0, 0, -1, 5, 32.6)
 
 # ------------------------------------------------------------------ body
 def body():
     outer = rbox(OUT_W, OUT_H, Z_BOARD_BACK, Z_END, 4)
     m = outer - box(-OUT_W / 2 + SHELL, OUT_W / 2 - SHELL, -OUT_H / 2 + SHELL, OUT_H / 2 - SHELL, Z_BOARD_BACK - 1, Z_SCREEN - 2.5)
-    win_w, win_h = POCKET_L - 8, POCKET_W - 8
+    win_w, win_h = POCKET_L - 2 * LEDGE, POCKET_W - 2 * LEDGE
     for i in range(5):                                   # 45 deg step down to the screen window
         t = i / 4
         w = (OUT_W - 2 * SHELL) * (1 - t) + win_w * t
@@ -121,6 +125,9 @@ def body():
     m = m - box(-win_w / 2, win_w / 2, -win_h / 2, win_h / 2, Z_SCREEN - 3, Z_SCREEN + 0.1)
     m = m - box(-POCKET_L / 2, OUT_W / 2 + 1, -POCKET_W / 2, POCKET_W / 2, Z_SCREEN, Z_RIM)       # pocket, open at +X
     m = m - box(-POCKET_L / 2 + RIM_END, OUT_W / 2 + 1, -POCKET_W / 2 + RIM_LONG, POCKET_W / 2 - RIM_LONG, Z_RIM - 0.1, Z_END + 1)
+    # elephant's foot: 0.4 mm relief on the bed-side (back) edges of the window and the pocket mouth
+    m = m - box(-POCKET_L / 2 + RIM_END - FOOT, OUT_W / 2 + 1, -POCKET_W / 2 + RIM_LONG - FOOT, POCKET_W / 2 - RIM_LONG + FOOT, Z_END - FOOT, Z_END + 1)
+    m = m - box(OUT_W / 2 - FOOT, OUT_W / 2 + 1, -POCKET_W / 2 - FOOT, POCKET_W / 2 + FOOT, Z_SCREEN, Z_END + 1)
     m = m + (box(-1.0, 1.0, -OUT_H / 2 + SHELL, OUT_H / 2 - SHELL, Z_BOARD_BACK, Z_SCREEN - 4) - nose(Z_BOARD_BACK - 1, 34))
     m = m - nose(Z_BOARD_BACK - 1, 31)                   # nose tip reaches ~30 mm in front of the pupil
     for x, y in pins:
@@ -131,8 +138,8 @@ def body():
 def endcap():
     t, reach, x_in = 2.4, 8.0, OUT_W / 2
     m = (box(x_in, x_in + t, -OUT_H / 2 - t, OUT_H / 2 + t, Z_SCREEN - 2, Z_END)
-         + box(x_in - reach, x_in + t, OUT_H / 2 + 0.2, OUT_H / 2 + 0.2 + t, Z_SCREEN - 2, Z_END)
-         + box(x_in - reach, x_in + t, -OUT_H / 2 - 0.2 - t, -OUT_H / 2 - 0.2, Z_SCREEN - 2, Z_END))
+         + box(x_in - reach, x_in + t, OUT_H / 2 + CAP_GAP, OUT_H / 2 + CAP_GAP + t, Z_SCREEN - 2, Z_END)
+         + box(x_in - reach, x_in + t, -OUT_H / 2 - CAP_GAP - t, -OUT_H / 2 - CAP_GAP, Z_SCREEN - 2, Z_END))
     return m - box(x_in - 1, x_in + t + 1, -6, 6, Z_SCREEN + 1, Z_RIM - 1)
 
 # ------------------------------------------------------------------ output
@@ -158,6 +165,12 @@ if __name__ == '__main__':
     write_stl(on_bed(P['body'], flip=True), f'{out}/body.stl')         # back rim down
     write_stl(on_bed(P['endcap'].rotate([0, -90, 0])), f'{out}/endcap.stl')
     write_stl(on_bed(P['ring']), f'{out}/ring.stl')
+    write_stl(on_bed(ring(LENS_TAB_D + 0.6)), f'{out}/ring-40.6.stl')       # second size: use whichever presses in
+    # test print first (~30 min): a 13.5 mm slice through the ledge, pocket and rim, and one lens seat
+    test_pocket = P["body"] ^ box(-OUT_W, OUT_W, -OUT_H, OUT_H, Z_SCREEN - 3, Z_END + 1)   # ledge + pocket + rim, ~13.5 mm
+    write_stl(on_bed(test_pocket, flip=True), f'{out}/test-pocket-slice.stl')
+    test_seat = P['lensboard'] ^ box(IPD / 2 - 25, IPD / 2 + 25, -25, 25, Z_BOARD - 1, Z_BOARD_BACK + 1)
+    write_stl(on_bed(test_seat), f'{out}/test-lens-seat.stl')
     print(json.dumps(rep))
     print('board back -> screen', round(Z_SCREEN - Z_BOARD_BACK, 2), '| tab -> screen', round(Z_SCREEN - Z_TAB, 2),
           '| face edge: brow', BROW, 'temples', round(float(face_z(OUT_W / 2, 0)), 1), 'cheeks', round(float(face_z(40, -OUT_H / 2)), 1))

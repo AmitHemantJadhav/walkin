@@ -7,7 +7,8 @@ LIVE="../walkin-live"
 git fetch -q origin
 [ -d "$LIVE" ] || git worktree add --detach "$LIVE" origin/main
 ln -sfn "$PWD/data" "$LIVE/data"
-[ -f .env ] && ln -sfn "$PWD/.env" "$LIVE/.env"
+# Link the keys only if the served serve.py refuses dotfiles; otherwise /.env would be downloadable through the tunnel.
+if [ -f .env ] && grep -q "refuse dotfiles" "$LIVE/serve.py"; then ln -sfn "$PWD/.env" "$LIVE/.env"; else rm -f "$LIVE/.env"; fi
 (cd "$LIVE" && python3 serve.py 8000) &
 SERVER=$!
 trap 'kill $SERVER' EXIT

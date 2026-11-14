@@ -397,7 +397,13 @@ function cantTurn(item, by) {
  * turns the television on top of it rather than sliding it off the end.
  */
 function carry(item, px, py, pr, st) {
-  const ddx = st.x - px, ddy = st.y - py, ddr = st.rot - pr;
+  const ddx = st.x - px, ddy = st.y - py;
+  // Take the short way round. Nothing normalises these angles today - the rotate button just keeps
+  // adding 45 degrees, so they run past 360 - but the day something does, the wrap would be a full
+  // turn of difference and whatever is standing on the piece would be flung across the room.
+  let ddr = st.rot - pr;
+  while (ddr > Math.PI) ddr -= 2 * Math.PI;
+  while (ddr < -Math.PI) ddr += 2 * Math.PI;
   if (Math.abs(ddx) < 1e-6 && Math.abs(ddy) < 1e-6 && Math.abs(ddr) < 1e-6) return;
   const w = window.walkin;
   for (const r of w.furniture.children) {

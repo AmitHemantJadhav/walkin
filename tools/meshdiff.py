@@ -15,6 +15,8 @@ import time
 
 import numpy as np
 
+import meshclose
+
 
 def load_obj(path, want_uv=False):
     """Vertices and triangles of an OBJ, with UVs and the material each face uses if asked.
@@ -352,7 +354,7 @@ def _room_of(x, y, house):
     return None
 
 
-def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors=()):
+def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors=(), close_holes=True):
     """One binary of geometry plus a JSON index and a small texture per piece."""
     pak = os.path.join('data', model, 'pak')
     out_dir = os.path.join('data', model)
@@ -406,6 +408,22 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         uv = np.asarray(uv_list, np.float32)
         idx = np.asarray(idx_list, np.uint32)
 
+        # The scanner only saw the sides it could see, so a piece against a wall has no back and
+        # turning it shows the inside of its front. Cap the holes on their own planes and give the new
+        # faces a UV that lands on a typical pixel of this piece's atlas, so a capped sofa reads as
+        # that sofa's fabric. Caps are new vertices: nothing already built here is disturbed.
+        if close_holes:
+            cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx)
+        else:
+            cap_pos, cap_idx, open_before, open_after = None, (), 0, 0
+        if close_holes and len(cap_idx):
+            flat = meshclose.representative_uv(built['image'] if built else None)
+            idx = np.vstack([idx, cap_idx + len(pos)]).astype(np.uint32)
+            pos = np.vstack([pos, cap_pos]).astype(np.float32)
+            uv = np.vstack([uv, np.tile(flat, (len(cap_pos), 1))]).astype(np.float32)
+        else:
+            open_after = open_before
+
         tex_name = None
         if built:
             tex_name = f'p{i}.jpg'
@@ -424,6 +442,8 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             room=_room_of(float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2), house),
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
+            capped=int(len(cap_idx)) if close_holes else 0,
+            closed=bool(close_holes and open_after == 0),
             pos=[offset, len(parts[0])],
             uv=[offset + len(parts[0]), len(parts[1])],
             idx=[offset + len(parts[0]) + len(parts[1]), len(parts[2])],
@@ -445,6 +465,11 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
     print(f'wrote {bin_path} ({mb:.1f} MB) + {tex_bytes/1e6:.1f} MB of textures, {len(index)} pieces')
     print(f'  {sum(1 for r in index if r["room"])}/{len(index)} inside a room on the floor plan')
     print(f'  {sum(1 for r in index if r["tex"])}/{len(index)} have a texture')
+    if close_holes:
+        caps = sum(r['capped'] for r in index)
+        tris = sum(r['tris'] for r in index)
+        print(f'  closed {sum(1 for r in index if r["closed"])}/{len(index)} pieces, '
+              f'+{caps} cap triangles ({100*caps/max(tris-caps,1):.0f}% more)')
     return pieces
 
 

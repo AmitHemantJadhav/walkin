@@ -482,9 +482,12 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
       map.magFilter = THREE.LinearFilter;
       map.flipY = true;
     }
+    // A piece tools/meshclose.py managed to close can be drawn front-faces-only: turn it round and you
+    // see its cap, not the inside of its own front, and we stop paying for the back faces. A piece that
+    // is still open keeps DoubleSide, because culling there would leave a hole you can see through.
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
       map, vertexColors: !map && !!p.col,
-      roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+      roughness: 0.85, metalness: 0, side: p.closed ? THREE.FrontSide : THREE.DoubleSide }));
     mesh.renderOrder = 2;
     const grp = new THREE.Group();
     grp.add(mesh);

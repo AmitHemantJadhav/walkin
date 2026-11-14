@@ -178,19 +178,29 @@ function step(item, st, tx, ty, trot, walls) {
   if (trot !== st.rot) {
     if (!blockedBy(fp(item, st.x, st.y, trot), item, walls)) st.rot = trot;
     else {
-      // Turning a piece that is pressed against a jamb has nowhere to go, which is exactly the moment
-      // someone turns a sofa at a door. Give it room: back off a little the way it came and turn there.
-      const len = Math.hypot(dx, dy) || 1;
-      const bx = -dx / len, by = -dy / len;
+      // Turning a piece that is pressed against something has nowhere to go, which is exactly the moment
+      // someone turns a sofa at a door. Give it room: shuffle it a little and turn there.
+      //
+      // Backing off "the way it came" is only a direction if it was going somewhere. Pressing ⟳ on a
+      // piece that is standing still gives dx = dy = 0, and -0/1 is 0, so the whole manoeuvre moved it
+      // nowhere and quietly refused: the Rotate button did nothing at all on any piece with a neighbour
+      // within arm's reach, which in a staged room is all of them. Standing still, try every direction.
+      const len = Math.hypot(dx, dy);
+      const dirs = len > 1e-6 ? [[-dx / len, -dy / len]]
+        : [[1, 0], [-1, 0], [0, 1], [0, -1], [0.71, 0.71], [-0.71, 0.71], [0.71, -0.71], [-0.71, -0.71]];
       let turned = false;
       for (const back of [0.08, 0.16, 0.26]) {
-        const nx2 = st.x + bx * back, ny2 = st.y + by * back;
-        if (blockedBy(fp(item, nx2, ny2, trot), item, walls)) continue;
-        if (!clearPath(item, st, nx2, ny2, trot, walls)) continue;
-        st.x = nx2; st.y = ny2; st.rot = trot; turned = true;
-        break;
+        for (const [bx, by] of dirs) {
+          const nx2 = st.x + bx * back, ny2 = st.y + by * back;
+          if (blockedBy(fp(item, nx2, ny2, trot), item, walls)) continue;
+          if (!clearPath(item, st, nx2, ny2, trot, walls)) continue;
+          st.x = nx2; st.y = ny2; st.rot = trot; turned = true;
+          break;
+        }
+        if (turned) break;
       }
-      if (!turned) hit = { kind: 'rotate' };
+      // keep what stopped it, so we can say what is in the way rather than just that something is
+      if (!turned) hit = { kind: 'rotate', by: blockedBy(fp(item, st.x, st.y, trot), item, walls) };
     }
   }
   let dist = Math.hypot(dx, dy);
@@ -362,6 +372,16 @@ function assistThroughDoor(item, st, walls, dt, dx, dy, wantRot) {
   return st.x !== before || st.y !== beforeY;
 }
 
+/** "there is no room to turn the sofa there - the wall is in the way" */
+function cantTurn(item, by) {
+  const name = (FURNITURE[item.userData.kind] || {}).name || 'that';
+  const what = !by ? null
+    : by.kind === 'wall' ? 'the wall'
+      : `the ${((FURNITURE[(by.item || {}).userData ? by.item.userData.kind : ''] || {}).name || 'furniture').toLowerCase()}`;
+  return `there is no room to turn the ${name.toLowerCase()} there`
+    + (what ? ` — ${what} is in the way` : '');
+}
+
 let lastBlocked = 0;
 function sayBlocked(item, info) {
   const now = performance.now();
@@ -530,6 +550,13 @@ function frame() {
         else {
           const door = doorReason(item, st, walls);
           if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
+          else if (hit.kind === 'rotate') {
+            sayBlocked(item, { reason: cantTurn(item, hit.by) });
+            // A hand still asking for the turn gets to keep asking - that is the door beat. A piece
+            // nobody is holding has been told no, so stop wanting it: the target rotation would sit
+            // there unreachable and say the same sentence every 1.2 s for the rest of the session.
+            if (!held) st.trot = st.rot;
+          }
         }
       }
     } else if (st.sliding) {

@@ -498,7 +498,10 @@ async function gemini(contents) {
  */
 function spoken(text) {
   return String(text || '')
-    .replace(/[*_#`>~]+/g, '')                        // Markdown emphasis, headings, code, quotes
+    .replace(/^\s*>+\s?/gm, '')                         // Markdown quote markers at the start of a line
+    .replace(/\s>=\s/g, ' at least ').replace(/\s<=\s/g, ' at most ')
+    .replace(/\s>\s/g, ', more than ').replace(/\s<\s/g, ', less than ')   // "2.10 m > 1.15 m" is said, not dropped
+    .replace(/[*_#`~]+/g, '')                         // Markdown emphasis, headings, code
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')            // [label](url) -> label
     .replace(/^\s*[A-Z]{2,4}\s+(?=[A-Z])/, '')          // a lone all-caps token before the sentence ("MD I've…")
     .replace(/\s+/g, ' ')

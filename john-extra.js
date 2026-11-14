@@ -193,7 +193,7 @@ const PROCEDURAL = [
   [/\b(christmas tree|xmas tree)\b/, 'christmastree', { name: 'Christmas tree', w: 1.1, d: 1.1, h: 2.0, against: 'free' }],
   [/\b(cat tree|cat tower|scratching post)\b/, 'cattree', { name: 'Cat tree', w: 0.6, d: 0.5, h: 1.5, against: 'wall' }],
   [/\b(treadmill|running machine)\b/, 'treadmill', { name: 'Treadmill', w: 0.8, d: 1.8, h: 1.4, against: 'free' }],
-  [/\b(mirror)\b/, 'floormirror', { name: 'Floor mirror', w: 0.6, d: 0.05, h: 1.7, against: 'wall' }],
+  [/\bmirror\b/, 'floormirror', { name: 'Floor mirror', w: 0.6, d: 0.05, h: 1.7, against: 'wall' }],
   [/\b(table lamp|desk lamp|bedside lamp|reading lamp)\b/, 'tablelamp', { name: 'Table lamp', w: 0.3, d: 0.3, h: 0.5, against: 'small' }],
   [/\b(single bed|twin bed|kids'? bed|child'?s bed|toddler bed)\b/, 'boxy', { name: 'Single bed', w: 1.0, d: 2.0, h: 0.5, against: 'wall' }],
 ];
@@ -294,6 +294,10 @@ const tools = () => (W().furnitureTools && W().furnitureTools.run) || W().agent.
 async function addObject(args = {}) {
   const w = W(), desc = String(args.description || args.kind || '').trim();
   if (!desc) return { ok: false, reason: 'Say what to add.' };
+  const OUTDOOR = /\b(back ?yard|front ?yard|yard|garden|lawn|patio|deck|porch|driveway|outside|outdoors?|pool|hot ?tub|jacuzzi|trampoline|swing ?set|bbq|barbecue|grill)\b/;
+  if (OUTDOOR.test(lower(`${desc} ${args.room || ''}`))) {
+    return { ok: false, outdoor: true, reason: 'Only the inside of the house was scanned, so nothing can be placed outside. Offer something indoors instead.' };
+  }
   if (args.room && !findRoom(args.room)) {             // "the nursery" on a plan that calls it "Bedroom": let the model pick
     return { ok: false, reason: `No room called "${args.room}". Pick one of these and call again: ${w.house.rooms.map((r) => r.label).join(', ')}.` };
   }
@@ -317,6 +321,11 @@ async function addObject(args = {}) {
       res = await tools().add_furniture({ kind, room: args.room });
     }
     if (!res || res.ok === false) return { ...(res || {}), described: desc };
+  }
+  if (res && res.room == null && /not inside a room|outside/i.test(String(res.fit || ''))) {   // landed outside the plan
+    const stray = [...w.furniture.children].reverse().find((o) => o.userData.kind === kind);
+    if (stray) { if (w.selected === stray && w.select) w.select(null); stray.parent.remove(stray); }
+    return { ok: false, reason: 'There was no free spot inside a room for it here. Ask the user which room, then call again with room.' };
   }
   const item = w.selected && w.selected.userData.kind === kind ? w.selected
     : [...w.furniture.children].reverse().find((o) => o.userData.kind === kind);
@@ -576,6 +585,7 @@ const declarations = [
 
 const rules = `- Anything not in the catalog (fireplace, piano, crib, bunk bed, dresser, wardrobe, sectional, Christmas tree, treadmill, mirror, table lamp, aquarium…) -> add_object with the user's words, never a refusal. Say it is a simple real-size stand-in. "X on the desk" -> add_object with on.
 - Rooms the plan doesn't name ("nursery", "kids' room", "master", "guest room", "office") mean the matching room in describe_house: a bedroom (the biggest for master, a smaller one for nursery/kids/guest), never a made-up name.
+- A mirror ON a wall ("hang a mirror above the sofa") -> hang_picture with description "a plain mirror reflecting the room" and wall "above the sofa"; a floor or full-length mirror -> add_object.
 - "Swap / replace the X with a Y": remove_furniture the X, then add_object (or add_furniture) the Y, in the same turn.
 - "Paint everything / the whole room / all the walls X" -> paint_room (room "all" for the whole house). One wall -> set_wall_material.
 - "Undo", "undo that", "go back", "never mind", "put it back" -> undo (not remove_decor). Say what it reverted from its result.

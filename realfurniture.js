@@ -279,7 +279,12 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     g.rotation.z = f.yaw + Math.PI / 2;                    // face the scan point it was cut from
     g.userData.kind = kind;
     g.userData.real = true;
+    // physics.js picks a piece's walls and its neighbours by floor (`wallsOf(item.userData.floor)` and
+    // the floor test in `neighbours`). Without this a real piece has neither: it walks through walls and
+    // through the catalog furniture, because nothing matches `undefined`. Caught by Amit on #103.
+    g.userData.floor = pano.floor;
     g.userData.z0 = floorZ;
+    g.userData.cut = tex.image;                            // kept so labelRealFurniture() can send it
     w.furniture.add(g);
     f.kind = kind;
     made.push(g);
@@ -292,6 +297,65 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
                                       at: [+f.pos.x.toFixed(2), +f.pos.y.toFixed(2)] })),
            say: found.length ? `I found ${found.length} piece${found.length > 1 ? 's' : ''} of the home's own furniture — pick one up and move it.`
                              : 'I could not pick the real furniture out from here.' };
+}
+
+/**
+ * Give the pieces their real names.
+ *
+ * Matterport's schema does have per-object semantics — `Model.objectAnnotations`, with a
+ * classification label and a confidence — but it is empty on every one of the twelve hackathon
+ * houses I checked, and even when populated a `VectorRegion` is a pin on a surface
+ * (`anchorPosition`, `stemLength`, `stemNormal`), not an extent you could cut out. There is also no
+ * search over the contents of a model: the top-level queries are folder, model, models and
+ * roomClassifications, and `ModelSearchResult` is addresses and listings, i.e. finding *properties*.
+ *
+ * So the labels have to be ours. Each cut-out is already a tidy picture of one object on a
+ * transparent background, which is about the easiest thing a vision model can be asked to name. One
+ * request carries every piece, because /api/gemini allows 8 a minute and a room has about ten things
+ * in it.
+ */
+export async function labelRealFurniture(pieces = made) {
+  const w = window.walkin;
+  const live = pieces.filter((g) => g.parent && g.userData.cut);
+  if (!live.length) return { ok: false, say: 'nothing to name' };
+  const parts = [{ text: 'Each image is one piece of furniture from a house, cut out on a transparent '
+    + 'background. Name each one in one or two plain words a homeowner would use, like "sofa", "floor lamp", '
+    + '"dining chair". If an image is not furniture, say "skip". Answer with only a JSON array of strings, '
+    + `one per image, ${live.length} in total.` }];
+  for (const g of live) {
+    const small = document.createElement('canvas');
+    const src = g.userData.cut;
+    const k = Math.min(1, 192 / Math.max(src.width, src.height));
+    small.width = Math.max(8, Math.round(src.width * k));
+    small.height = Math.max(8, Math.round(src.height * k));
+    const c = small.getContext('2d');
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, small.width, small.height);   // alpha reads badly as black
+    c.drawImage(src, 0, 0, small.width, small.height);
+    parts.push({ inlineData: { mimeType: 'image/png', data: small.toDataURL('image/png').split(',')[1] } });
+  }
+  let names = null;
+  try {
+    const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ contents: [{ role: 'user', parts }] }) });
+    const j = await res.json();
+    const text = ((((j.candidates || [])[0] || {}).content || {}).parts || []).map((p) => p.text || '').join('');
+    names = JSON.parse((text.match(/\[[\s\S]*\]/) || [text])[0]);
+  } catch (e) {
+    // The mock answers "Mock reply.", and a real model sometimes wraps the list in prose. Neither is
+    // worth saying out loud, so keep the detail in the console and say something a person can act on.
+    console.info('[realfurniture] naming failed:', e.message);
+    return { ok: false, say: 'I could not make out what these are.' };
+  }
+  if (!Array.isArray(names)) return { ok: false, say: 'I could not make out what these are.' };
+  const named = [];
+  live.forEach((g, i) => {
+    const name = String(names[i] || '').trim().toLowerCase();
+    if (!name || name === 'skip') return;
+    FURNITURE[g.userData.kind].name = name;
+    g.userData.realName = name;
+    named.push({ kind: g.userData.kind, name });
+  });
+  return { ok: true, named, say: named.length ? `That is ${named.map((n) => n.name).join(', ')}.` : 'I could not name them.' };
 }
 
 /** Take them all away again. */
@@ -308,4 +372,5 @@ export function clearRealFurniture() {
   }
   window.walkin.realFurniture = realFurniture;
   window.walkin.clearRealFurniture = clearRealFurniture;
+  window.walkin.labelRealFurniture = labelRealFurniture;
 })();

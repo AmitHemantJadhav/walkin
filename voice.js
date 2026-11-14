@@ -216,7 +216,8 @@ let liveOk = null;
 function tail(text, max = 90) {
   const t = String(text || '').trim();
   if (t.length <= max) return t;
-  const parts = t.split(/(?<=[.!?])\s+/);
+  // split after . ! ? only when a space or the end follows, so "0.9 m" stays whole; no lookbehind (Safari < 16.4)
+  const parts = (t.match(/.*?(?:[.!?]+(?=\s|$)|$)\s*/g) || [t]).map((s) => s.trim()).filter(Boolean);
   let out = parts.pop();
   while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max) out = `${parts.pop()} ${out}`;
   return out.length > max ? `…${out.slice(-max + 1)}` : out;

@@ -360,6 +360,8 @@ function parseStyle(style) {
     : /dining/.test(s) ? 'dining' : /office|study|desk|work/.test(s) ? 'office' : null;
   return { palette, kind };
 }
+// what to call the set when the user asked for one by name ("I couldn't fit a living room set", not "a garage set")
+const SET_NAME = { bedroom: 'bedroom', living: 'living room', dining: 'dining room', office: 'office' };
 
 // "A big room with no set of its own" is how staging finds an open-plan great room or a kitchen that
 // runs into a lounge. It describes a garage, a basement and a laundry just as well — and a sofa in the
@@ -454,7 +456,7 @@ export function stageRoom(room, style = 'modern') {
   const say = P.placed.length
     ? `I put ${list(names)} in the ${lower(r.label)}`
       + (P.skipped.length ? `. No room for the ${list(P.skipped.map((s) => lower(s.name)))} — ${P.skipped[0].why}.` : '. Everything fits, doors clear.')
-    : `I couldn't fit ${aan(lower(r.label))} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
+    : `I couldn't fit ${aan(SET_NAME[asked.kind] || lower(r.label))} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
 
   return { room: r, style: styleName, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
 }

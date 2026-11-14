@@ -19,10 +19,10 @@ Each one is explained where it belongs below; this is the list to read on the wa
    doorway and stops in it. Back off half a metre, square up, go again.
 3. **Move the coffee table first.** Beat 2 puts one right in front of the sofa, and a sofa can't pass
    through a coffee table: dragged straight at the door it travels 24 cm and stops.
-4. **Beat 5 is silent unless #54 is merged.** `physics.js` computes the sentence; the only thing that
-   speaks it is eleven lines in `agent.js` on that PR.
-5. **Beat 7 needs #60 merged** to be a real tool call; without it there is a safety net that works
-   in mock mode. `walkin.stageHouse('modern')` always does the house.
+4. **In the headset, John's voice is the only version of beat 5.** The same sentence appears under
+   the room card on a phone or a laptop, but `ui.css` hides that panel in stereo. If the voice is
+   off, say the line yourself.
+5. **Beat 7 is a real tool call** (`stage_house`). `walkin.stageHouse('modern')` is the fallback.
 6. **Don't stand at scan point 38 or 16.** They are inside rooms the scan gives no outline, so
    staging refuses — and 38 is 0.63 m from the doorway beat 5 needs.
 
@@ -138,10 +138,12 @@ Grab the sofa and carry it at the doorway **broadside**. It stops dead, and John
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
 
-**Check #54 is merged before you rely on that.** `physics.js` computes the sentence and fires it as a
-`walkin:blocked` event; the only thing that listens is eleven lines at the end of `agent.js` in #54.
-Without them the sofa stops at the door **in silence** and the beat is half of what it should be. One
-line in the console tells you:
+The same sentence appears under the room card at the same moment — `physics.js` works it out and
+fires it as a `walkin:blocked` event, John speaks it and `fit.js` writes it. **In the headset the
+card is hidden**, so his voice is the only version there; if `await walkin.preflight()` says the
+voice is off, say the line yourself.
+
+If you ever need to see the event directly:
 
 ```js
 addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door

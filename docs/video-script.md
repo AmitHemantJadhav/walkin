@@ -15,7 +15,7 @@ the headset. Cut between the two. For readable shots, also record the same actio
 | 4 | 0:45–0:58 | Pinch a floor marker, move to the next scan point, turn back: the sofa is where it was left, partly hidden by the wall. | "Walk to the next room and look back. It's still there, behind the right wall, because we edit the house in metres, not the photo." |
 | 5 | 0:58–1:10 | **[check]** Pinch-and-hold menu → Talk. "How big is this room?" The reply plays. | Agent audio: the room's real dimensions. VO: "Ask anything. The answers come from the scan." |
 | 6 | 1:10–1:28 | **[check]** Point at a wall: "Put red-brick wallpaper on this wall." The wall changes. Move to another scan point: same wall, still brick. | "Point and talk. A generated tile, placed on the real wall, consistent from every scan point." |
-| 7 | 1:28–1:43 | **[check]** Point at a corner: "What plant should go here?" Reply plays, a plant appears. | Agent audio: the plant suggestion with the reason (light from the window). VO: "It knows where the windows are and which way they face." |
+| 7 | 1:28–1:43 | **[check]** Point at a corner: "What plant should go here?" Reply plays, a plant appears. | Agent audio: the plant suggestion with the reason (light from the window). VO: "It knows where the windows are and how far away they are." |
 | 8 | 1:43–1:50 | **[check]** "Stage this as a modern bedroom." A full set appears. | "Or furnish a whole room in one sentence." |
 | 9 | 1:50–1:55 | Wide shot of the person in the headset, then the title card: **Walk-In** — "Homes.com gets you into the house. Walk-In lets you live in it." Team names. | "Walk-In. Built on Matterport digital twins at HackPrinceton." |
 

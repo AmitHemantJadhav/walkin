@@ -191,7 +191,12 @@ const PLANS = {
     P.tryPlace('plant', spotsFor(room, edges, 'plant', bedAt), { optional: true });
   },
 
-  living(room, edges, P) {
+  living(room, edges, P, floorZ, style) {
+    if (NOT_LIVING.test(lower(room.label)) && !ASKED_LIVING.test(lower(style || ''))) {
+      P.skipped.push({ kind: 'sofa', name: FURNITURE.sofa.name,
+        why: `${aan(lower(room.label))} is not living space — ask for a living room set by name and I'll try` });
+      return;
+    }
     const sofa = FURNITURE.sofa;
     let placedSofa = null;
     for (const e of wallsFor(edges, sofa.w)) {
@@ -320,6 +325,12 @@ function spotsFor(room, edges, kind, near) {
   return out;
 }
 
+// "A big room with no set of its own" is how staging finds an open-plan great room or a kitchen that
+// runs into a lounge. It describes a garage, a basement and a laundry just as well — and a sofa in the
+// garage is worse than an empty garage, because John says it out loud. Asking by name still overrides.
+const NOT_LIVING = /garage|basement|utility|laundry|storage|attic|crawl|mechanical|closet|bath|stair|porch|patio|deck/;
+const ASKED_LIVING = /living|lounge|family|sitting|great ?room/;
+
 const PLAN_FOR = (label) => {
   const l = lower(label);
   if (l.includes('bed')) return PLANS.bedroom;
@@ -406,7 +417,8 @@ export function stageHouse(style) {
   let placed = 0;
   for (const room of w.house.rooms) {
     if (!room.poly || room.poly.length < 3) continue;
-    if (!PLAN_FOR(room.label) && ((room.dims || {}).areaFloor || 0) < 20) continue;   // kitchens, bathrooms, halls
+    if (!PLAN_FOR(room.label)
+      && (((room.dims || {}).areaFloor || 0) < 20 || NOT_LIVING.test(lower(room.label)))) continue;   // baths, halls, garages
     const res = stageRoom(room, style);
     if (!res.placed.length) continue;
     placed += res.placed.length;

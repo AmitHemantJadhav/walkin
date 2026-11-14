@@ -3,10 +3,11 @@
 // line), i.e. how much wallpaper the occluder cuts off, per house. Reads data/<model>/house.json and the
 // defurnished OBJ, rotates the mesh the way app.js placeMesh() does, then casts rays at every wall face.
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { wallDepths } from '../wallfit.js';
+import { wallDepths, wallOffset } from '../wallfit.js';
 
 const OFFSET = 0.08;      // walls.js
 const OBJECT = 0.25;      // deeper than this is a thing (fireplace, cabinet), not the wall: the occluder should win
+const FIT_OPTS = process.env.FIT_PCT ? { pct: +process.env.FIT_PCT } : {};   // FIT_PCT=0.75 to try another percentile
 
 function loadObj(path) {
   const v = [], tris = [];
@@ -51,7 +52,8 @@ for (const m of models) {
   if (!mesh || !existsSync(`data/${m}/${mesh.file}`)) { console.log(`${m}: no defurnished mesh, skipped`); continue; }
   const t0 = Date.now();
   const { tris, fit } = placeMesh(loadObj(`data/${m}/${mesh.file}`), house.panos);
-  let samples = 0, buried = 0, objects = 0;
+  let samples = 0, buried = 0, objects = 0, fitted = 0;
+  const offsets = [];
   const bad = [];
   for (const f of house.floors || []) {
     const zs = house.panos.filter((p) => p.floor === f.id && p.floorZ != null).map((p) => p.floorZ);
@@ -69,6 +71,10 @@ for (const m of models) {
         const wallOnly = d.filter((x) => x.depth <= OBJECT);
         const under = wallOnly.filter((x) => x.depth > OFFSET + 0.01);   // clearly in front of the paper, not a tie
         samples += d.length; objects += d.length - wallOnly.length; buried += under.length;
+        // step 2: the per-wall offset walls.js now uses, and what it still leaves cut
+        const fit = wallOffset(tris, w, [n[0] * s, n[1] * s], floorZ, 2.6, FIT_OPTS);
+        fitted += wallOnly.filter((x) => x.depth > fit.offset + 0.01).length;
+        offsets.push(fit.offset);
         if (under.length / d.length > 0.1) {
           bad.push({ floor: f.id, index, side: s, len: +len.toFixed(2), share: Math.round(100 * under.length / d.length),
             worst: +Math.max(...under.map((x) => x.depth)).toFixed(3), med: +median(wallOnly.map((x) => x.depth)).toFixed(3),
@@ -80,6 +86,12 @@ for (const m of models) {
   const share = samples ? (100 * buried / samples) : 0;
   console.log(`${m} ${house.name}: mesh fit ${(fit * 100).toFixed(0)}%, ${samples} samples on scanned wall faces, `
     + `${share.toFixed(1)}% where the scan is > ${OFFSET * 100 + 1} cm out (paper cut off), ${objects} on objects > ${OBJECT * 100} cm, ${Date.now() - t0} ms`);
+  const after = samples ? (100 * fitted / samples) : 0;
+  const os = [...offsets].sort((x, y) => x - y);
+  console.log(`   per-wall offset (#61 step 2): ${after.toFixed(1)}% still cut; offsets over ${os.length} faces: `
+    + `median ${(100 * median(os)).toFixed(1)} cm, 90th ${(100 * os[Math.floor(0.9 * (os.length - 1))]).toFixed(1)} cm, `
+    + `max ${(100 * os[os.length - 1]).toFixed(1)} cm, ${os.filter((x) => x > OFFSET + 0.001).length} faces moved out`);
+  if (samples && after >= share) { console.log('   FAIL: the per-wall offset cuts no less than the fixed one'); failed++; }
   for (const b of bad.sort((x, y) => y.share - x.share).slice(0, 6)) {
     console.log(`   wall ${b.floor}#${b.index} side ${b.side > 0 ? '+' : '-'} (${b.len} m, half-thickness ${b.half}): `
       + `${b.share}% cut, scan face median ${b.med} m / worst ${b.worst} m from centre, ${b.lowRows} cut samples below 0.6 m`);

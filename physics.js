@@ -40,6 +40,11 @@ const STOP = 0.06;             // below this speed a sliding piece is parked
 const MAX_V = 6;               // m/s, so a wild hand can't fling a sofa across the house
 const MAX_STEP = 0.6;          // metres a piece may travel in one frame, however far the hand has run off
 const ESCAPE = 0.08;           // how fast a piece that starts overlapped may crawl out of trouble
+const ASSIST = 0.35;           // m/s a piece that would fit is slid towards a doorway's centre line...
+const ASSIST_MIN = 0.03;       // ...but at least this much per frame it is actually blocked, because it only
+                               // gets a handful of those: it alternates between nudging sideways and moving
+                               // forward again, and 0.35 m/s of a 16 ms frame is 6 mm
+const ASSIST_RANGE = 1.2;      // how close to the doorway the assist starts
 
 const mass = (kind) => MASS[kind] || DEFAULT_MASS;
 // how long a piece takes to catch up with your hand: a plant is immediate, a sofa drags
@@ -48,7 +53,7 @@ const lagOf = (kind) => 0.02 + mass(kind) / 420;
 const state = new Map();       // item -> { x, y, rot, vx, vy, still, sliding }
 let segCache = null;           // { floor, segs: [{poly, a, b}], doors: [{x, y, width, a, b}] }
 
-const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, lastHit: null };
+const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, lastHit: null };
 
 export const physics = {
   enabled: true,
@@ -146,12 +151,25 @@ const fp = (item, x, y, rot) => footprint(item.userData.kind, x, y, rot, -SKIN);
 function step(item, st, tx, ty, trot, walls) {
   let hit = null;
 
-  if (trot !== st.rot) {                                  // turning on the spot: only if it has room
-    if (!blockedBy(fp(item, st.x, st.y, trot), item, walls)) st.rot = trot;
-    else hit = { kind: 'rotate' };
-  }
-
   let dx = tx - st.x, dy = ty - st.y;
+
+  if (trot !== st.rot) {
+    if (!blockedBy(fp(item, st.x, st.y, trot), item, walls)) st.rot = trot;
+    else {
+      // Turning a piece that is pressed against a jamb has nowhere to go, which is exactly the moment
+      // someone turns a sofa at a door. Give it room: back off a little the way it came and turn there.
+      const len = Math.hypot(dx, dy) || 1;
+      const bx = -dx / len, by = -dy / len;
+      let turned = false;
+      for (const back of [0.08, 0.16, 0.26]) {
+        const nx2 = st.x + bx * back, ny2 = st.y + by * back;
+        if (blockedBy(fp(item, nx2, ny2, trot), item, walls)) continue;
+        st.x = nx2; st.y = ny2; st.rot = trot; turned = true;
+        break;
+      }
+      if (!turned) hit = { kind: 'rotate' };
+    }
+  }
   let dist = Math.hypot(dx, dy);
   if (dist < 1e-5) return hit;
   if (dist > MAX_STEP) { dx *= MAX_STEP / dist; dy *= MAX_STEP / dist; dist = MAX_STEP; }
@@ -242,10 +260,7 @@ function doorReason(item, st, walls) {
   if (!best) return null;
   const { d } = best;
   // the footprint's extent along the wall the door is in
-  const c = Math.cos(st.rot), sn = Math.sin(st.rot);
-  const across = Math.abs((spec.w / 2) * (d.dx * c + d.dy * sn))
-    + Math.abs((spec.d / 2) * (-d.dx * sn + d.dy * c));
-  const width = across * 2;
+  const width = widthAcross(item, st.rot, d);
   if (width <= d.width - 0.02) return null;                 // it isn't the door's fault
   const narrow = Math.min(spec.w, spec.d);
   const name = spec.name.toLowerCase();
@@ -256,6 +271,71 @@ function doorReason(item, st, walls) {
       + `${d.width.toFixed(2)} m`
       + (narrow <= d.width - 0.02 ? ` — turn it and it goes through` : ` — it won't fit through at all`),
   };
+}
+
+/**
+ * The doorway a piece is being pushed at, if it is close enough to one and actually heading through it.
+ * Returns the doorway plus how far off its centre line the piece is, measured along the wall.
+ */
+function doorAhead(item, st, walls, dx, dy) {
+  let best = null;
+  for (const d of walls.doors) {
+    const vx = d.x - st.x, vy = d.y - st.y;
+    const dist = Math.hypot(vx, vy);
+    if (dist > ASSIST_RANGE) continue;
+    if (dx * vx + dy * vy <= 0) continue;                 // not moving towards it
+    if (!best || dist < best.dist) best = { d, dist, off: vx * d.dx + vy * d.dy };
+  }
+  return best;
+}
+
+/** How wide the piece is measured across a doorway, at a given rotation. */
+function widthAcross(item, rot, d) {
+  const spec = FURNITURE[item.userData.kind];
+  const c = Math.cos(rot), sn = Math.sin(rot);
+  return 2 * (Math.abs((spec.w / 2) * (d.dx * c + d.dy * sn))
+    + Math.abs((spec.d / 2) * (-d.dx * sn + d.dy * c)));
+}
+
+/**
+ * S9: a piece that would fit through a doorway only goes through within about 10 cm of its centre line,
+ * which is finer than tracked hands can hold. When one is blocked at a jamb and it *would* fit the way it
+ * is turned, slide it sideways towards the centre line instead of stopping. A piece that genuinely does
+ * not fit is left alone, so it still stops and still says "turn it".
+ */
+function assistThroughDoor(item, st, walls, dt, dx, dy, wantRot) {
+  const near = doorAhead(item, st, walls, dx, dy);
+  if (!near) return false;
+  // Judge the fit by the way it is turned OR the way the user is turning it: pressed against a jamb a
+  // piece can't turn at all, so waiting for the turn to happen first would deadlock the two.
+  const fits = Math.min(widthAcross(item, st.rot, near.d),
+    typeof wantRot === 'number' ? widthAcross(item, wantRot, near.d) : Infinity);
+  if (fits > near.d.width - 0.02) return false;                            // a real misfit: say so instead
+  if (Math.abs(near.off) < 0.015) return false;                            // already lined up
+  const d = near.d;
+
+  // The user is turning it and it would fit turned, but it is jammed against the jamb so it can't turn
+  // and can't slide. Do what a person does: back it off the doorway, line it up, and turn it, in one move.
+  if (typeof wantRot === 'number' && wantRot !== st.rot
+      && widthAcross(item, wantRot, d) <= d.width - 0.02) {
+    const len = Math.hypot(dx, dy) || 1;
+    const bx = -dx / len, by = -dy / len;
+    for (const back of [0.15, 0.3, 0.5, 0.75]) {
+      for (const frac of [1, 0.6, 0.3, 0]) {
+        const lat = near.off * frac;
+        const nx2 = st.x + bx * back + d.dx * lat, ny2 = st.y + by * back + d.dy * lat;
+        if (blockedBy(fp(item, nx2, ny2, wantRot), item, walls)) continue;
+        st.x = nx2; st.y = ny2; st.rot = wantRot;
+        return true;
+      }
+    }
+  }
+
+  const move = Math.sign(near.off) * Math.min(Math.abs(near.off), Math.max(ASSIST * dt, ASSIST_MIN));
+  const before = st.x;
+  const beforeY = st.y;
+  step(item, st, st.x + d.dx * move, st.y + d.dy * move, st.rot, walls);
+  return st.x !== before || st.y !== beforeY;
 }
 
 let lastBlocked = 0;
@@ -390,9 +470,14 @@ function frame() {
       st.vx = (st.x - before[0]) / dt;
       st.vy = (st.y - before[1]) / dt;
       st.sliding = false;
-      if (hit && (hit.kind === 'wall' || hit.kind === 'overlapping')) {   // say why either way
-        const door = doorReason(item, st, walls);
-        if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
+      if (hit && (hit.kind === 'wall' || hit.kind === 'overlapping' || hit.kind === 'rotate')) {
+        // Help before complaining. A piece that would fit the way it is turned - or the way the user is
+        // turning it - gets slid onto the doorway's centre line; only a real misfit gets the sentence.
+        if (assistThroughDoor(item, st, walls, dt, tx - st.x, ty - st.y, trot)) stats.assisted++;
+        else {
+          const door = doorReason(item, st, walls);
+          if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
+        }
       }
     } else if (st.sliding) {
       const v = Math.hypot(st.vx, st.vy);

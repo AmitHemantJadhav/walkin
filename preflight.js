@@ -89,7 +89,13 @@ export async function preflight({ quiet = false } = {}) {
       && !(FURNITURE[o.userData.kind] || {}).flat && !(o.userData || {}).on);
     const stuck = solid.filter((o) => w.physics.probe(o, o.position.x, o.position.y, o.rotation.z).hit);
     const segs = w.physics.segments();
-    if (!solid.length) rows.push(no('physics', 'nothing in the room to test it with — stage a room and run it again'));
+    if (!solid.length) {
+      // Two red rows for one cause reads like two problems. Say which one to fix.
+      const staging = rows.find((r) => r.name === 'staging');
+      rows.push(no('physics', staging && !staging.ok
+        ? 'nothing to test it against, because the staging check above did not run — fix that one first'
+        : 'nothing in the room to test it against — stage a room and run it again'));
+    }
     else if (!segs) rows.push(no('physics', 'no wall segments: furniture will walk through walls'));
     else if (stuck.length) rows.push(no('physics', `${stuck.length} of ${solid.length} pieces are stuck in something`));
     else rows.push(ok('physics', `${segs} wall segments, none of ${solid.length} pieces stuck, enabled: ${w.physics.enabled}`));

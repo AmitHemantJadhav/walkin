@@ -382,6 +382,31 @@ function cantTurn(item, by) {
     + (what ? ` — ${what} is in the way` : '');
 }
 
+/**
+ * Take anything standing on this piece with it. Nothing else looks at `on`, so without this, dragging a
+ * tv stand leaves the television hanging in the air where the stand used to be — 0.84 m behind it after
+ * one drag, and it stays there. The offset is carried through the rotation as well, so turning a stand
+ * turns the television on top of it rather than sliding it off the end.
+ */
+function carry(item, px, py, pr, st) {
+  const ddx = st.x - px, ddy = st.y - py, ddr = st.rot - pr;
+  if (Math.abs(ddx) < 1e-6 && Math.abs(ddy) < 1e-6 && Math.abs(ddr) < 1e-6) return;
+  const w = window.walkin;
+  for (const r of w.furniture.children) {
+    if (r.userData.on !== item.uuid) continue;
+    const ox = r.position.x - px, oy = r.position.y - py;
+    const c = Math.cos(ddr), sn = Math.sin(ddr);
+    r.position.x = st.x + ox * c - oy * sn;
+    r.position.y = st.y + ox * sn + oy * c;
+    r.rotation.z += ddr;
+    const rst = state.get(r);
+    if (rst) {
+      rst.x = rst.tx = r.position.x; rst.y = rst.ty = r.position.y; rst.rot = rst.trot = r.rotation.z;
+      rst.wroteX = rst.x; rst.wroteY = rst.y; rst.wroteRot = rst.rot;
+    }
+  }
+}
+
 let lastBlocked = 0;
 function sayBlocked(item, info) {
   const now = performance.now();
@@ -491,6 +516,10 @@ function frame() {
     }
     const spec = FURNITURE[item.userData.kind];
     const st = ensure(item);
+    // Where the piece was according to physics, not according to the item: a mouse drag and the rotate
+    // button write item.position/rotation themselves, so by the time this runs those already hold the
+    // new value and the difference would always be zero. st still holds last frame's.
+    const px = st.x, py = st.y, pr = st.rot;              // for anything riding on it
     if (spec.flat || item.userData.on) {                  // rugs and things on tables don't collide
       st.x = st.tx = item.position.x; st.y = st.ty = item.position.y; st.rot = st.trot = item.rotation.z;
       st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
@@ -573,6 +602,7 @@ function frame() {
     item.position.y = st.y;
     item.rotation.z = st.rot;
     st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
+    carry(item, px, py, pr, st);
   }
   for (const item of state.keys()) if (!live.has(item)) state.delete(item);
 }

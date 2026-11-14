@@ -28,18 +28,22 @@ picture follow. That's Walk-In. It runs on a phone in a headset. Let me show you
 ## 0:40 – 2:10 · Live demo (headset person acts, speaker narrates)
 1. **Stand in the house (10 s).** "This is a real listing, scanned by Matterport and digitally emptied. She's
    looking around with her head."
-2. **Hands (25 s).** Add a sofa, pinch, carry it to the wall, twist with two hands. "Real size. Green means it fits.
-   Push it through the doorway and it goes red." Walk to the next scan point and look back. "Still there, same
-   place, hidden behind the right wall. That's the consistency."
-3. **Ask (15 s).** "How big is this room?" → spoken answer with the real dimensions. "That number comes from the
+2. **Will my sofa fit through the front door? (30 s).** Standing on the porch, **＋ Add → Sofa**, pinch it and carry it
+   at the front door sideways. It stops, and John says: *"The sofa is 2.10 m across the way you're holding it and
+   that door is 1.15 m — turn it and it goes through."* Turn it, carry it in. "Real size, real door, measured by the
+   scan. That's the question every buyer actually asks." (Details and traps: `demo-card.md` beat 5.)
+3. **Stage it (20 s).** *"Hey John, stage this as a cosy living room."* A full set appears, every piece checked
+   against the walls and doorways. Walk to the next scan point and look back. "Still there, same place, hidden
+   behind the right wall. That's the consistency an image edit can't give you."
+4. **Ask (15 s).** "How big is this room?" → spoken answer with the real dimensions. "That number comes from the
    scan, not from the model's imagination."
-4. **Point and talk (20 s).** Point at a wall: "Put red-brick wallpaper on this wall." The wall changes. Move to
+5. **Point and talk (20 s).** Point at a wall: "Put red-brick wallpaper on this wall." The wall changes. Move to
    another scan point. "Same wall, from the other side of the room."
-5. **Advice (20 s).** Point at a corner: "What plant should go here?" → "This corner gets bright light from the big
+6. **Advice (20 s).** Point at a corner: "What plant should go here?" → "This corner gets bright light from the big
    window two metres away, so a monstera would do well." The plant appears. "It knows where the windows are, how big
    they are and how far this spot is from them, because the scan measured them."
 
-*If time is short, drop step 5 first, then step 3.*
+*All six run about 115 s against a 90 s slot: plan on dropping step 6 and step 4 (80 s), and add them back only if you are ahead. Never drop step 2.*
 
 ## 2:10 – 2:40 · How it works, in three sentences
 "Every scan point's 360 photo is drawn around you in the model's own coordinates, with the calibration verified

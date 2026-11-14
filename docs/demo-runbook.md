@@ -119,6 +119,25 @@ The tile is generated, then laid on that wall at real scale, **cut around the do
 window**, and shaded by the photo's own light, so the corner stays dark and the patch beside the
 window stays bright. Walk to another scan point: still the same wall.
 
+**Point at the right wall, and you can do it from where beat 5 happens.** Wallpaper sits a fixed 8 cm
+out from the wall graph's centre line, and on a thick wall the scan mesh bulges past that and the
+occluder cuts the paper off (#61, measured in #88). It is not a Gale St problem: **11% of La Mirada's
+wall samples lose**, and the worst case is the **5.02 m, 0.28 m-thick wall #1, where 90% of the paper
+is hidden** — which is exactly the wall you hit if you point at the first long wall you see.
+
+Measured from **scan point 37**, where beats 5 and 6 already put you, the walls within 3 m:
+
+| wall | cut | length | room | distance |
+|---|---|---|---|---|
+| **#19 +side** | **0%** | 3.94 m | Living Room | 2.16 m |
+| **#31 −side** | **0%** | 3.85 m | Living Room | 2.98 m |
+| #19 −side | 2% | 3.94 m | Living Room | 1.60 m |
+| #13 +side | 3% | 5.81 m | Living Room | 1.85 m |
+
+So **stay at scan point 37 and paper wall #19** — nothing is lost, it is nearly 4 m wide, and you do
+not have to walk anywhere between beats 4, 5 and 6. Sides matter as much as walls: wall #1 loses 90%
+on its − face and only 8% on its +. Once #61 lands these all improve, so this advice stays safe.
+
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 
 **Move the coffee table first.** Beat 2 just put one directly in front of the sofa, because that is

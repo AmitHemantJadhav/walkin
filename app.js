@@ -578,14 +578,22 @@ function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants 
 // piece away. So once the hand has been still (within DEPTH_DEAD) for DEPTH_STILL_MS, whatever it has pushed so far
 // is kept and the anchor moves to where the hand is now: anything slower than ~DEPTH_DEAD / DEPTH_STILL_MS (3 cm/s)
 // never moves the piece, a real push (20+ cm/s) does.
+// Drift that never stops (just over 3 cm/s, so the hand is never "still"): each DEPTH_DEAD step is timed, and once
+// the hand is already moving, a step slower than DEPTH_SLOW_MS (under ~6 cm/s) right after another slow step is
+// folded out like drift. The first step after a still spell always counts (its time includes the still spell), and
+// so does one slow step after fast ones (the smoothed depth settling at the end of a real push or pull).
 const DEPTH_GAIN = params.has('dgain') ? Number(params.get('dgain')) || 0 : 6, DEPTH_DEAD = 0.015, DEPTH_STILL_MS = 500;
+const DEPTH_SLOW_MS = 250;
 const deadZone = (v) => Math.sign(v) * Math.max(0, Math.abs(v) - DEPTH_DEAD);
-function anchorDepth(g, depth, now) { g.d0 = depth; g.ref = depth; g.refT = now; g.base = 0; }
+function anchorDepth(g, depth, now) { g.d0 = depth; g.ref = depth; g.refT = now; g.base = 0; g.moving = false; }
 function handPush(g, depth, sign, now) { // metres of hand travel away from you since the grab, drift folded out
   if (g.d0 == null && depth != null) anchorDepth(g, depth, now); // grabbed before depth came in: start from here
   if (g.d0 == null || depth == null) return (g.base || 0) * sign;
-  if (Math.abs(depth - g.ref) > DEPTH_DEAD) { g.ref = depth; g.refT = now; } // moving: restart the stillness clock
-  else if (now - g.refT >= DEPTH_STILL_MS) { g.base += deadZone(depth - g.d0); g.d0 = depth; g.refT = now; }
+  if (Math.abs(depth - g.ref) > DEPTH_DEAD) { // moving: one more step, restart the stillness clock
+    const slow = now - g.refT > DEPTH_SLOW_MS;
+    if (g.moving && slow && g.slow) g.d0 += depth - g.ref; // two slow steps in a row: drift, not a push
+    g.ref = depth; g.refT = now; g.moving = true; g.slow = slow;
+  } else if (now - g.refT >= DEPTH_STILL_MS) { g.base += deadZone(depth - g.d0); g.d0 = depth; g.refT = now; g.moving = false; }
   return (g.base + deadZone(depth - g.d0)) * sign;
 }
 function carryPoint(f, cam, push, gain = DEPTH_GAIN) { // floor point the held piece follows: [x, y]

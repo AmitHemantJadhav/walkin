@@ -439,6 +439,11 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
       console.log(`stage: ${res.say}`);
     });
   }
+  // Removing a piece deliberately disposes nothing. A model's geometry and materials are shared: a piece
+  // is THREE.Object3D.clone(true) of one cached glTF, which shares geometry and material references, the
+  // style materials are cached per (style, source material) in furniture.js, and every contact shadow uses
+  // one CanvasTexture. Disposing any of them from here would blank the next piece of the same kind. What a
+  // removed piece owns on its own is a few box geometries and one quad, which GC handles.
   const clearBtn = document.getElementById('bClearRoom');
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
@@ -448,7 +453,7 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
       let n = 0;
       for (const it of [...w.furniture.children]) {
         if (it.userData.kind && w.roomAt(it.position.x, it.position.y, it.userData.floor) === room) {
-          w.furniture.remove(it);
+          w.furniture.remove(it);   // see the note below on why nothing is disposed here
           n++;
         }
       }

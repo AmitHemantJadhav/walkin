@@ -23,7 +23,9 @@ while true; do
 
   PROMPT="$(sed "s/{{WHO}}/$WHO/g" agents/cycle.md)"
   START=$(date '+%F %T')
-  OUT="$(claude -p "$PROMPT" --permission-mode acceptEdits --max-turns "$TURNS" 2>&1)"
+  # --settings: headless runs ignore .claude/settings.json in a folder never opened interactively ("not trusted"),
+  # so every git/gh call would wait for an approval nobody gives. Passing it explicitly applies its allow and deny lists.
+  OUT="$(claude -p "$PROMPT" --settings .claude/settings.json --permission-mode acceptEdits --max-turns "$TURNS" 2>&1)"
   CODE=$?
   printf '\n===== %s (exit %s) =====\n%s\n' "$START" "$CODE" "$OUT" | tail -c 30000 >> "$LOG"
   echo "[$START] $(echo "$OUT" | tail -n 1 | cut -c1-160)"

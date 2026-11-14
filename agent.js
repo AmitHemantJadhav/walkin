@@ -244,7 +244,10 @@ const RUN = {
     const w = W(), r = findRoom(room);
     if (!r) return { ok: false, reason: `No room called "${room}".` };
     if (typeof w.stageRoom !== 'function') return unavailable('stageRoom', 'shaurya');
-    return { ok: true, room: r.label, result: (await w.stageRoom(r.id, style)) ?? null };
+    const res = (await w.stageRoom(r.id, style)) || {};
+    return { ok: !!(res.placed && res.placed.length), room: r.label, style,         // plain facts only: no geometry
+      placed: (res.placed || []).map((p) => p.name), skipped: (res.skipped || []).map((s) => `${s.name}: ${s.why}`),
+      cleared: res.cleared || [], fits: !!res.fits, say: res.say || null };
   },
 
   async set_wall_material({ description, tile_metres }) {

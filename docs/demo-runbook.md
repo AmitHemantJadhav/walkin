@@ -120,7 +120,16 @@ and always lands.
 
 > **"Hey John — furnish the whole house."**
 
-Six rooms, 32 pieces, about a fifth of a second. Then walk through it.
+**Say it, but press the button.** John has eight tools and `stage_house` is not one of them, so
+"furnish the whole house" lands on `stage_room` and furnishes the room you are standing in — one
+room, not six. That is true with a real key as much as in mock mode: the model can only call what it
+has. Until the tool exists (#56), do the close from the console or the dock:
+
+```js
+walkin.stageHouse('modern')      // six rooms, 32 pieces, about a fifth of a second
+```
+
+Then walk through it.
 
 Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
 halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass

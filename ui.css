@@ -93,6 +93,7 @@ body { -webkit-font-smoothing: antialiased; }
 
 /* ------------------------------------------------------------------ info card (top left) */
 #info.panel {
+  z-index: 4;                     /* above realhands.js's camera-cut hands, so a hand never paints over the room card */
   top: max(16px, env(safe-area-inset-top));
   left: 16px;
   border-radius: 22px;

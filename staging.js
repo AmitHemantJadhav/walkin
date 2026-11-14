@@ -363,10 +363,11 @@ export function stageRoom(room, style = 'modern') {
   const w = window.walkin;
   if (!w) return { placed: [], skipped: [], fits: false, say: 'the viewer is not ready' };
 
-  // "Furnish the whole house" is beat 7 of the demo, and John has no stage_house tool (#56): the only
-  // staging tool he has is this one, so the request arrives here with the whole sentence as the style
-  // and furnishes the one room you happen to be standing in. Until the tool exists, honour what was
-  // actually asked for. Shaped like a stageRoom result so agent.js needs no change at all.
+  // "Furnish the whole house" is beat 7 of the demo. #60 gives John a real stage_house tool, which is
+  // the proper answer; this stays as the safety net under it, because it fires on the style string and
+  // costs nothing when the model does the right thing. It was written when stage_room was the only
+  // staging tool there was, so the sentence arrived here and furnished whichever room you happened to
+  // be standing in. Shaped like a stageRoom result, so agent.js and the mock need no change either way.
   if (WHOLE_HOUSE.test(lower(style))) {
     // Take the phrase out before delegating: stageHouse calls back into this function for every room,
     // and leaving "the whole house" in the style would have each of those ask for the whole house

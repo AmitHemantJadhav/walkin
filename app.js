@@ -753,7 +753,8 @@ let handStyle = 'real';
 // passthrough (default): the camera is mapped by angle, so the hand is drawn at its real size and place, no shrink.
 // ?handmap=crop: the old zoomed crop (reach the screen edges), where a 0.6 shrink keeps the hand from filling the view.
 const HAND_MAP = params.get('handmap') === 'crop' ? 'crop' : 'angle';
-const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || (HAND_MAP === 'crop' ? 0.6 : 1) });
+const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || (HAND_MAP === 'crop' ? 0.6 : 1),
+  seg: params.get('handseg') !== 'off' }); // skin-colour cut-out; ?handseg=off = landmark mask only
 function setHandStyle(s) {
   handStyle = s === 'skeleton' ? 'skeleton' : 'real';
   if (handStyle !== 'real') realHands.clear();

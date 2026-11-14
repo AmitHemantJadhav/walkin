@@ -30,6 +30,16 @@ document.body.appendChild(renderer.domElement);
 const stereo = new StereoEffect(renderer);
 stereo.setSize(innerWidth, innerHeight);
 
+// Adaptive resolution state (A1). Declared here, before any event handler that touches it (see tickPerf below).
+const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(0.75, MAX_PR);
+const perf = { frames: 0, hands: 0, t0: performance.now(), pr: MAX_PR, cap: MAX_PR, slow: 0, fast: 0 };
+function setPixelRatio(pr) {
+  perf.pr = THREE.MathUtils.clamp(Math.round(pr * 4) / 4, MIN_PR, MAX_PR);
+  renderer.setPixelRatio(perf.pr);
+  console.log(`[perf] pixel ratio ${perf.pr}`);
+}
+function resetPerfCap() { perf.cap = MAX_PR; perf.slow = perf.fast = 0; }
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 500);
 camera.up.set(0, 0, 1);
@@ -43,6 +53,7 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   stereo.setSize(innerWidth, innerHeight);
+  resetPerfCap();
 });
 
 // ------------------------------------------------------------------ calibration: pano-local frame -> model frame
@@ -103,7 +114,7 @@ const panoMat = new THREE.ShaderMaterial({
     }`,
   side: THREE.BackSide, depthTest: false, depthWrite: false,
 });
-const sphere = new THREE.Mesh(new THREE.SphereGeometry(100, 96, 48), panoMat);
+const sphere = new THREE.Mesh(new THREE.SphereGeometry(100, 64, 32), panoMat); // vDir is per pixel, so 64x32 is exact enough
 sphere.frustumCulled = false;
 sphere.renderOrder = -10;
 scene.add(sphere);
@@ -458,6 +469,7 @@ async function toggleVR(force) {
     const want = vr ? 'environment' : handCam;
     if (handsApi.facingMode !== want) await restartHands(want); else showCamPreview(want);
   }
+  resetPerfCap();
 }
 
 // ------------------------------------------------------------------ hands: two tracked hands, drawn in 3D in front of you
@@ -518,6 +530,7 @@ function drawHands() {
 }
 
 function onHands(list) {
+  perf.hands++;
   handsList = list;
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
@@ -589,6 +602,7 @@ async function restartHands(mode) {
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands });
   showCamPreview(mode);
+  resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
 async function toggleHands() {
   const btn = $('bHands');
@@ -597,6 +611,7 @@ async function toggleHands() {
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
     btn.classList.remove('on'); showCamPreview(handCam);
+    resetPerfCap();
     return;
   }
   btn.textContent = '✋ Loading…';
@@ -664,6 +679,43 @@ function deleteSelected() {
   checkFit();
 }
 
+// ------------------------------------------------------------------ frame rate (A1): readout in Debug, adaptive resolution
+// The readout shows with Debug on (it stays visible in the headset) or always with ?fps in the URL.
+// Resolution drops 0.25x after 2 s under 45 fps and climbs back after 4 s over 57 fps, but never back to a
+// level that was too slow, until the mode changes (headset, hands, resize).
+// (MAX_PR, perf, setPixelRatio and resetPerfCap are declared next to the renderer at the top.)
+// In the headset the readout is drawn once per eye: a second copy sits in the right half of the screen.
+const fpsEls = [0, 1].map((i) => {
+  const el = document.createElement('div');
+  el.style.cssText = `position:fixed;left:${i ? 'calc(50% + 8px)' : '8px'};bottom:8px;z-index:6;padding:3px 7px;`
+    + 'border-radius:6px;pointer-events:none;font:11px/1.35 ui-monospace,Menlo,monospace;color:#fff;'
+    + 'background:rgba(0,0,0,.6);white-space:pre;display:none';
+  document.body.appendChild(el);
+  return el;
+});
+const fpsAlways = params.has('fps');
+
+function tickPerf() {
+  perf.frames++;
+  const now = performance.now(), dt = now - perf.t0;
+  if (dt < 1000) return;
+  const fps = (perf.frames * 1000) / dt, handHz = (perf.hands * 1000) / dt;
+  perf.frames = perf.hands = 0; perf.t0 = now;
+  if (dt > 2000 || document.hidden) return; // the tab was in the background: not a real measurement
+  perf.slow = fps < 45 ? perf.slow + 1 : 0;
+  perf.fast = fps > 57 ? perf.fast + 1 : 0;
+  if (perf.slow >= 2 && perf.pr > MIN_PR) { perf.cap = perf.pr - 0.25; setPixelRatio(perf.cap); perf.slow = 0; }
+  else if (perf.fast >= 4 && perf.pr < perf.cap) { setPixelRatio(perf.pr + 0.25); perf.fast = 0; }
+  const show = debug || fpsAlways;
+  fpsEls.forEach((el, i) => { el.style.display = show && (i === 0 || vr) ? 'block' : 'none'; });
+  if (!show) return;
+  const px = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
+    + `hands ${handsApi ? `${handHz.toFixed(0)}/s, ${handsList.length} seen` : 'off'} · `
+    + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
+  fpsEls.forEach((el) => { el.textContent = text; });
+}
+
 // ------------------------------------------------------------------ buttons
 document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => addFurniture(b.dataset.add)));
 $('bRotate').onclick = () => rotateSelected(45);
@@ -704,6 +756,7 @@ function frame() {
   drawHands();
   if (selected && selBox.visible) selBox.box.setFromObject(selected);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
+  tickPerf();
 }
 
 // ------------------------------------------------------------------ start

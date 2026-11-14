@@ -18,7 +18,8 @@ import { localToModel } from './lighting.js';
 const W = 1024, H = 512;                 // detection resolution: enough for a 25 cm object at 4 m
 const DIFF = 35;                         // per-channel difference that counts as "something is here"
 const MIN_PX = 1200;                     // smaller than this is clutter, not furniture
-const MAX_REACH = 12;                    // metres: beyond this the floor ray is too grazing to trust
+const MAX_REACH = 12;
+const OPEN_EDGE_OK = 0.02;       // open-edge share a piece can have and still be drawn front-faces-only                    // metres: beyond this the floor ray is too grazing to trust
 
 const a = document.createElement('canvas'); a.width = W; a.height = H;
 const actx = a.getContext('2d', { willReadFrequently: true });
@@ -433,7 +434,8 @@ function checkSwap() {
 const meshMade = [];
 
 /** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
-export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {}) {
+export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
+                                     maxFold = null, maxCaptured = null, worst = null } = {}) {
   const w = window.walkin;
   if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
   const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
@@ -453,10 +455,22 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   // is most of the time.
   const maxAniso = w.renderer ? Math.min(8, w.renderer.capabilities.getMaxAnisotropy()) : 1;
   const placed = [];
+  const skipped = [];
   for (const p of meta.pieces) {
     if (placed.length >= max) break;
     if (Math.max(p.size[0], p.size[1]) < minSize) continue;
     if (room && p.room !== room) continue;
+    // Photogrammetry reconstructs a bed well and a dining chair badly, and tools/meshquality.py
+    // measures the difference: fold is the mean angle between neighbouring triangles (a flat table
+    // top should be near zero), captured is surface area over hull area (above 1 means the surface
+    // wanders past its own hull, which is noise, not detail). Neither is on by default - a caller
+    // that wants only the pieces that hold up asks for it.
+    // `worst` is the one to reach for: 0.25 drops the quarter of this house that reconstructed
+    // least well. fold itself is not comparable between houses - La Mirada's median is 30 degrees
+    // and Gale Street's is 35, so a fixed cut takes a third of one and three fifths of the other.
+    if (worst != null && p.foldRank != null && p.foldRank >= 1 - worst) { skipped.push(p.i); continue; }
+    if (maxFold != null && p.fold != null && p.fold > maxFold) { skipped.push(p.i); continue; }
+    if (maxCaptured != null && p.captured != null && p.captured > maxCaptured) { skipped.push(p.i); continue; }
 
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, p.pos[0], p.pos[1] / 4), 3));
@@ -482,9 +496,24 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
       map.magFilter = THREE.LinearFilter;
       map.flipY = true;
     }
+    // A piece tools/meshclose.py managed to close can be drawn front-faces-only: turn it round and you
+    // see its cap, not the inside of its own front, and we stop paying for the back faces. A piece that
+    // is still open keeps DoubleSide, because culling there would leave a hole you can see through.
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
       map, vertexColors: !map && !!p.col,
-      roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+      roughness: 0.85, metalness: 0,
+      // Front faces only once the export has made the piece wind consistently. DoubleSide costs
+      // 4.09 ms of GPU fill at the worst scan point in La Mirada against 0.14 ms for FrontSide:
+      // at close range the furniture covers most of the screen and every pixel gets shaded twice.
+      // A furniture.bin built before meshclose.orient() existed keeps DoubleSide, or it would show
+      // holes wherever two neighbouring triangles disagree about which side is out.
+      // Front faces only where the piece is nearly closed. DoubleSide costs 4.09 ms of GPU fill at
+      // the worst scan point in La Mirada against 0.14 ms - at close range furniture covers most of
+      // the screen and every pixel gets shaded twice - but it is also what hides the holes the scan
+      // left: cull the back faces of a holey piece and you see straight through it. So each piece
+      // picks: nearly closed means cheap, holey means correct. A furniture.bin built before
+      // meshclose.orient() existed keeps DoubleSide throughout, or its disagreeing triangles show.
+      side: (meta.oriented && (p.openEdge ?? 1) <= OPEN_EDGE_OK) ? THREE.FrontSide : THREE.DoubleSide }));
     mesh.renderOrder = 2;
     const grp = new THREE.Group();
     grp.add(mesh);
@@ -510,6 +539,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   }
   return { ok: true, ms: Math.round(performance.now() - t0), built: meta.built,
            available: meta.pieces.length, placed: placed.length, items: placed,
+           skipped: skipped.length, skippedPieces: skipped,
            say: placed.length ? `I put back ${placed.length} pieces of the home's own furniture, as real objects.`
                               : 'I found no mesh furniture to place.' };
 }

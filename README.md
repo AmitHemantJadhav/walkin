@@ -40,5 +40,8 @@ from your words and even generates a wall tile.
 Once it is up, stand inside a room and run `await walkin.preflight()` in the console: nine pass/fail
 lines covering the house, the agent, staging, physics, the wallpaper tiles and the frame rate.
 
+End-to-end with the real Gemini model, after every merge: `RELAY_CACHE=0 python3 serve.py 8033`, open
+`http://localhost:8033/tools/e2e.html` (tab in front, ~7 min): a pass/fail table of every demo step, also in `window.__e2e`.
+
 See `CLAUDE.md` for the data notes and the coordinate conventions, `docs/demo-runbook.md` for the
 three-minute run and `docs/demo-card.md` for the one-screen version.

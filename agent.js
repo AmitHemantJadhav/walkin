@@ -22,7 +22,11 @@ Rules:
 - Plant questions ("what plant should go here?"): call light_here, pick one plant that suits that light, call plant_preview,
   then place_object with the closest catalog kind (plant for a tall floor plant; plantsmall, plantfern or plantsucculent
   for small ones). Give the reason in a few words (e.g. "bright light from the big window").
-  Only name a compass direction if light_here gives one.`;
+  Only name a compass direction if light_here gives one.
+- Taste and budget questions ("what would look good here?", "furnish it to suit", "make it cheaper", "something nicer",
+  "under $2,000"): call suggest_room, then say in two short sentences why it suits the room (the house's style and the
+  light) and the room total from its say field. Prices are estimates from our catalogue: say "about", never quote a brand.
+- After stage_house, mention the estimated cost to furnish (estimated_cost_usd) next to the listing price if it is known.`;
 
 const TOOLS = [{
   functionDeclarations: [
@@ -40,6 +44,12 @@ const TOOLS = [{
         room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
         style: { type: 'string', description: 'For example: modern bedroom, cosy living room, home office.' } },
         required: ['style'] } },
+    { name: 'suggest_room',
+      description: 'Suggest and place furniture that suits a room: picks the style from the house (era, architectural style) and the room light, fits a full set against walls and doorways, shows a price tag on each piece and the room total. Use for "what would look good here", "furnish it to suit", "make it cheaper", "something nicer", "under $2000".',
+      parameters: { type: 'object', properties: {
+        room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
+        budget_usd: { type: 'number', description: 'Spending cap for the room, if the user gave one.' },
+        tier: { type: 'string', description: 'budget, mid, premium, or cheaper / nicer to step from the last suggestion.' } } } },
     { name: 'stage_house',
       description: 'Furnish every room in the house that has a set (living rooms, bedrooms, dining rooms, offices) in one go. Use for "furnish the whole house", "stage every room".',
       parameters: { type: 'object', properties: {
@@ -307,14 +317,25 @@ const RUN = {
       cleared: res.cleared || [], fits: !!res.fits, say: res.say || null };
   },
 
+  async suggest_room({ room, budget_usd, tier }) {
+    const w = W();
+    if (!w.suggest) return unavailable('suggest', 'shruti');
+    setStatus('Choosing furniture for this room…');
+    return w.suggest.suggestRoom({ room, tier, budget: Number(budget_usd) || 0 });
+  },
+
   async stage_house({ style }) {
     const w = W();
     if (typeof w.stageHouse !== 'function') return unavailable('stageHouse', 'shaurya');
     setStatus('Furnishing the house…');
     const res = (await w.stageHouse(style || undefined)) || {};
     const rooms = res.rooms || [];
+    const cost = w.suggest && (res.placed || 0) > 0 ? w.suggest.tagHouse() : null;    // price tags + house total
+    const listing = (describeHouse().listing || {});
     return { ok: (res.placed || 0) > 0, rooms: rooms.length, pieces: res.placed || 0,   // plain facts only
-      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null };
+      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null,
+      estimated_cost_usd: cost ? cost.total_usd : null, listing_price_usd: Number(listing.price) || null,
+      price_note: cost ? cost.price_note : null };
   },
 
   async set_wall_material({ description, tile_metres }) {
@@ -661,6 +682,7 @@ function fillerFor(text) {
   const t = text.toLowerCase();
   if (/wall|wallpaper|brick|paint/.test(t)) return 'Sure, let me look at this wall.';
   if (/plant/.test(t)) return 'Let me check the light here.';
+  if (/look good|suggest|suit|cheaper|nicer|budget|afford|under \$/.test(t)) return 'Let me take a look at this room.';
   if (/stage|furnish|set up/.test(t)) return 'Okay, setting up the room.';
   if (/take me|go to|walk to/.test(t)) return 'On our way.';
   if (/how big|size|area|measure|dimension/.test(t)) return 'Let me check the measurements.';

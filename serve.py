@@ -5,6 +5,7 @@ Relays (keys are read from .env here and never reach the browser):
   POST /api/gemini[?model=<name>]  body = a Gemini generateContent request (JSON) -> Gemini's JSON reply
   POST /api/tts                    body = {"text": "...", "voice": "<voice id, optional>"} -> audio/mpeg
   GET  /api/health                 -> {"gemini": bool, "tts": bool}  (which keys are set; never the keys)
+  GET  /api/houses                 -> [{id, name, panos, rooms}] for every data/<id>/house.json (house picker)
 """
 import http.server, json, os, re, socketserver, sys, urllib.error, urllib.parse, urllib.request
 
@@ -38,6 +39,19 @@ TTS_VOICE = os.environ.get("ELEVENLABS_VOICE_ID") or "21m00Tcm4TlvDq8ikWAM"
 TTS_MODEL = os.environ.get("ELEVENLABS_MODEL_ID") or "eleven_flash_v2_5"
 
 
+def houses():
+    """Houses downloaded with prep_house.py: [{id, name, panos, rooms}] from data/<id>/house.json."""
+    out, data = [], os.path.join(ROOT, "data")
+    for mid in sorted(os.listdir(data)) if os.path.isdir(data) else []:
+        try:
+            with open(os.path.join(data, mid, "house.json"), encoding="utf-8") as f:
+                h = json.load(f)
+        except (OSError, ValueError):
+            continue
+        out.append({"id": mid, "name": h.get("name"), "panos": len(h.get("panos") or []), "rooms": len(h.get("rooms") or [])})
+    return out
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, max-age=0")
@@ -49,9 +63,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return any(part.startswith(".") for part in path.replace("\\", "/").split("/") if part)
 
     def do_GET(self):
-        if urllib.parse.urlsplit(self.path).path == "/api/health":
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/api/health":
             return self._json(200, {"gemini": bool(os.environ.get("GEMINI_API_KEY")),
                                     "tts": bool(os.environ.get("ELEVENLABS_API_KEY"))})
+        if path == "/api/houses":
+            return self._json(200, houses())
         if self._hidden():
             return self.send_error(404)
         super().do_GET()

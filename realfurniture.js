@@ -18,7 +18,8 @@ import { localToModel } from './lighting.js';
 const W = 1024, H = 512;                 // detection resolution: enough for a 25 cm object at 4 m
 const DIFF = 35;                         // per-channel difference that counts as "something is here"
 const MIN_PX = 1200;                     // smaller than this is clutter, not furniture
-const MAX_REACH = 12;                    // metres: beyond this the floor ray is too grazing to trust
+const MAX_REACH = 12;
+const OPEN_EDGE_OK = 0.02;       // open-edge share a piece can have and still be drawn front-faces-only                    // metres: beyond this the floor ray is too grazing to trust
 
 const a = document.createElement('canvas'); a.width = W; a.height = H;
 const actx = a.getContext('2d', { willReadFrequently: true });
@@ -500,7 +501,19 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     // is still open keeps DoubleSide, because culling there would leave a hole you can see through.
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
       map, vertexColors: !map && !!p.col,
-      roughness: 0.85, metalness: 0, side: p.closed ? THREE.FrontSide : THREE.DoubleSide }));
+      roughness: 0.85, metalness: 0,
+      // Front faces only once the export has made the piece wind consistently. DoubleSide costs
+      // 4.09 ms of GPU fill at the worst scan point in La Mirada against 0.14 ms for FrontSide:
+      // at close range the furniture covers most of the screen and every pixel gets shaded twice.
+      // A furniture.bin built before meshclose.orient() existed keeps DoubleSide, or it would show
+      // holes wherever two neighbouring triangles disagree about which side is out.
+      // Front faces only where the piece is nearly closed. DoubleSide costs 4.09 ms of GPU fill at
+      // the worst scan point in La Mirada against 0.14 ms - at close range furniture covers most of
+      // the screen and every pixel gets shaded twice - but it is also what hides the holes the scan
+      // left: cull the back faces of a holey piece and you see straight through it. So each piece
+      // picks: nearly closed means cheap, holey means correct. A furniture.bin built before
+      // meshclose.orient() existed keeps DoubleSide throughout, or its disagreeing triangles show.
+      side: (meta.oriented && (p.openEdge ?? 1) <= OPEN_EDGE_OK) ? THREE.FrontSide : THREE.DoubleSide }));
     mesh.renderOrder = 2;
     const grp = new THREE.Group();
     grp.add(mesh);

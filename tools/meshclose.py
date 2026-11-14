@@ -181,3 +181,66 @@ def representative_uv(image, sample=64):
     u = ((k % sw) + 0.5) / sw
     v = ((k // sw) + 0.5) / small.size[1]
     return (float(u), float(1.0 - v))               # the loader flips Y
+
+
+def orient(V, F):
+    """Make every triangle in a piece wind the same way, so it can be drawn front-faces-only.
+
+    Drawing these pieces DoubleSide costs 4.09 ms of GPU fill at the worst scan point in La Mirada
+    and FrontSide costs 0.14 ms - a 29x difference, because at close range the furniture covers most
+    of the screen and every pixel gets shaded twice. FrontSide straight off the MatterPak leaves
+    white holes, though: 0.3-2.2% of shared edges are traversed the same way by both their triangles,
+    which means those two disagree about which side is out.
+
+    So: walk the surface, flipping any neighbour that disagrees, then flip the whole shell if it
+    ended up inside out. Flipping a triangle only reorders its three indices, so per-vertex UVs are
+    untouched.
+    """
+    from collections import defaultdict, deque
+
+    vid, _ = weld(V)
+    edge = defaultdict(list)
+    for fi, f in enumerate(F):
+        w = (vid[f[0]], vid[f[1]], vid[f[2]])
+        for k in range(3):
+            a, b = w[k], w[(k + 1) % 3]
+            edge[(a, b) if a < b else (b, a)].append((fi, a, b))
+
+    out = F.copy()
+    flip = np.zeros(len(F), bool)
+    seen = np.zeros(len(F), bool)
+    for seed in range(len(F)):
+        if seen[seed]:
+            continue
+        seen[seed] = True
+        q = deque([seed])
+        comp = [seed]
+        while q:
+            fi = q.popleft()
+            w = (vid[out[fi][0]], vid[out[fi][1]], vid[out[fi][2]])
+            for k in range(3):
+                a, b = w[k], w[(k + 1) % 3]
+                for fj, aj, bj in edge[(a, b) if a < b else (b, a)]:
+                    if fj == fi or seen[fj]:
+                        continue
+                    wj = (vid[out[fj][0]], vid[out[fj][1]], vid[out[fj][2]])
+                    same = any(wj[m] == a and wj[(m + 1) % 3] == b for m in range(3))
+                    if same:                      # both traverse a->b: one of them is inside out
+                        out[fj] = out[fj][[0, 2, 1]]
+                        flip[fj] = True
+                    seen[fj] = True
+                    q.append(fj)
+                    comp.append(fj)
+        # does this shell face outwards? compare its normals against the way out of its own middle
+        idx = np.array(comp)
+        T = V[out[idx]]
+        n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        ln = np.linalg.norm(n, axis=1)
+        ok = ln > 1e-12
+        if ok.any():
+            c = T.reshape(-1, 3).mean(axis=0)
+            away = T[:, 0] - c
+            s = float((n[ok] * away[ok]).sum())
+            if s < 0:
+                out[idx] = out[idx][:, [0, 2, 1]]
+    return out

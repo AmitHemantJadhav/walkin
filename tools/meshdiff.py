@@ -300,6 +300,17 @@ def atlas_uv(uv, crops_by_face, fi, sheet):
 
 
 
+# Per-house flap settings. Four different rules failed to tell a flap from a real part across both
+# houses - edge length gutted the piano, sliver aspect holed the sofa, grazing angle does not separate
+# at all (even the worst 1% of triangles had a camera 74 degrees off normal), and compactness has the
+# small patches reading *more* compact than the big ones, 0.50 against 0.44. The patch-area rule works
+# and does not travel. So it is tuned per house by eye, and a house nobody has checked gets nothing.
+TUNED = {
+    'zvKHR9DHNjJ': dict(flap_frac=0.003),   # La Mirada, the demo house: swept room by room,
+                                            # sofa and piano both verified by eye. Clear win.   # La Mirada, the demo house: swept room by room, sofa and
+                                            # piano both verified. Clear win.
+}
+
 FLAP_FOLD = 40      # degrees: above this the surface is not continuing, it is folding over
 
 
@@ -372,7 +383,11 @@ def drop_flaps(Vf, Ff, idx, lab, n, fold_deg, frac, floor_m2=0.0010):
     return out
 
 
-def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12, flap_frac=0.0):
+def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12, flap_frac=None):
+    if flap_frac is None:
+        flap_frac = TUNED.get(model, {}).get('flap_frac', 0.0)
+        if flap_frac:
+            print(f'{model} is tuned: dropping flaps under {flap_frac*100:.1f}% of a piece')
     full, empty = paths(model)
     t0 = time.time()
     Vf, Ff, Tf, Ftf, Fmat, mats = load_obj(full, want_uv=True)
@@ -544,6 +559,11 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         # turning it shows the inside of its front. Cap the holes on their own planes and give the new
         # faces a UV that lands on a typical pixel of this piece's atlas, so a capped sofa reads as
         # that sofa's fabric. Caps are new vertices: nothing already built here is disturbed.
+        # Make the whole piece wind the same way, so the viewer can draw it front-faces-only. That is
+        # worth 4.09 ms of GPU fill at the worst scan point in this house against 0.14 ms - at close
+        # range furniture covers most of the screen and DoubleSide shades every pixel of it twice.
+        idx = meshclose.orient(pos.astype(np.float64), idx)
+
         # Measure the piece as scanned, before any caps go on: a flat lid meeting a crumpled rim
         # reads as a huge fold angle and would hide the thing we actually want to know.
         captured, fold, _, _ = meshquality.measure(pos.astype(np.float64), idx)
@@ -578,6 +598,7 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
             capped=int(len(cap_idx)) if close_holes else 0,
+            openEdge=round(float(open_after) / max(int(len(idx)) * 1.5, 1), 4),
             fold=(None if fold != fold else round(float(fold), 1)),
             captured=(None if captured != captured else round(float(captured), 3)),
             closed=bool(close_holes and open_after == 0),
@@ -602,7 +623,7 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         for b in blobs:
             f.write(b)
     meta = dict(model=model, built=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                cut=cut, floorZ=round(float(floor_z), 3), textured=True, pieces=index)
+                cut=cut, floorZ=round(float(floor_z), 3), textured=True, oriented=True, pieces=index)
     with open(os.path.join(out_dir, 'furniture.json'), 'w') as f:
         json.dump(meta, f)
     mb = os.path.getsize(bin_path) / 1e6

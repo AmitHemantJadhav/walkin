@@ -147,6 +147,32 @@ tiles missing. @sshruti115 has a headless Chrome setup (she tested #60 with it) 
 `preflight()` headlessly in `smoke.sh` and failing on a red row** is the cheapest real test suite
 this repo could have. `scripts/` is the humans' to change, so this is a note, not a commit.
 
+### Don't measure physics by teleporting a piece and turning it
+
+Checking how far off square the sofa can enter a doorway, I set each run up by teleporting it a
+stride from the door, grabbing it, calling `moveTarget(hand, point, yaw)` with the yaw I wanted and
+letting it settle. **Turning a 2.1 m sofa in place that close to a door makes the solver shove it**,
+so every run past about 5° had already been pushed through the doorway before the walk started. The
+end states looked plausible and I nearly shipped "±7° goes through, ±8° stops a metre short" as a
+measurement (#84).
+
+What gave it away was a result that was too good rather than obviously broken: the **0.98 m** bathroom
+door looked *more* forgiving than the **1.15 m** demo door, which cannot be true. Both were the same
+artefact.
+
+So, for anything physics:
+- **Assert where the run started**, not just where it ended — `roomAt(x, y)` at the first frame, plus a
+  plausible travel distance. A run that travelled 0.20 m did not traverse anything.
+- **Don't teleport into a tight spot.** Grab the piece and walk it to the start gradually so the
+  solver tracks it, and turn it in open floor away from the obstacle.
+- **Say which direction you drove.** Through the *same* door, 12 cm off centre goes through one way
+  and stops the other, and the whole envelope differs by direction. Worth knowing before retrying #55.
+- `-0/1` is `0` and `op.at` is not `op.relativeCenter`. Same family of mistake: the number came back
+  looking usable.
+
+The lateral figure that survived all this is **about 10 cm**, not symmetric, which is what
+`physics.js:342` already documented. The docs now say that and decline to name an angle.
+
 ### Still untested by anyone, as of this writing
 
 - **Hands with a real camera** (#41, #50) — no webcam on this machine.

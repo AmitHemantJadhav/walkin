@@ -550,8 +550,8 @@ function drawHands() {
     seen.add(h.side);
     const g = handViz[h.side] || (handViz[h.side] = makeHandViz());
     g.visible = true;
-    // bigger in the camera image = closer; about an arm's length when relaxed
-    const d = THREE.MathUtils.clamp(0.42 * (0.2 / h.size), 0.22, 0.8);
+    // metric distance to the camera from hands.js (world landmarks); else bigger in the image = closer
+    const d = THREE.MathUtils.clamp(h.depth ?? 0.42 * (0.2 / h.size), 0.22, 0.8);
     const P = h.pts.map((p, i) => screenToWorld(p.x, p.y, d * (1 + p.z * 1.2), g.userData.joints[i].position));
     for (const i of [4, 8]) g.userData.joints[i].material = h.pinch ? pinchMat : skinMat;
     BONES.forEach(([a, b], k) => {
@@ -770,7 +770,7 @@ function tickPerf() {
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
     + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
-      + `${handsList.length} seen` : 'off'} · `
+      + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }

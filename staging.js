@@ -6,6 +6,8 @@ import { fitReport, fitLine, openings, overlaps, pointInPoly, footprint } from '
 
 const WALL_GAP = 0.06;          // a piece stands this far off the wall
 const lower = (s) => (s || 'room').toLowerCase();
+/** "a bedroom", but "an office" - room labels from the API include Office and Attic. */
+const aan = (word) => `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`;
 
 // ------------------------------------------------------------------ the room's walls
 /** One entry per polygon edge: midpoint, length, direction, inward normal, and whether a door opens onto it. */
@@ -346,7 +348,7 @@ export function stageRoom(room, style = 'modern') {
   const plan = PLAN_FOR(r.label);
   if (!plan) {
     return { room: r, placed: [], skipped: [], fits: true,
-      say: `I don't have a set for a ${lower(r.label)} yet` };
+      say: `I don't have a set for ${aan(lower(r.label))} yet` };
   }
 
   // start from an empty room
@@ -371,7 +373,7 @@ export function stageRoom(room, style = 'modern') {
   const say = P.placed.length
     ? `I put ${list(names)} in the ${lower(r.label)}`
       + (P.skipped.length ? `. No room for the ${list(P.skipped.map((s) => lower(s.name)))} — ${P.skipped[0].why}.` : '. Everything fits, doors clear.')
-    : `I couldn't fit a ${lower(r.label)} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
+    : `I couldn't fit ${aan(lower(r.label))} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
 
   return { room: r, style: styleName, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
 }

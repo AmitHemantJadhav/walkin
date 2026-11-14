@@ -730,7 +730,7 @@ let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (p
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
-const realHands = createRealHands($('handcam'));
+const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 0.6 });
 function setHandStyle(s) {
   handStyle = s === 'skeleton' ? 'skeleton' : 'real';
   if (handStyle !== 'real') realHands.clear();
@@ -931,6 +931,7 @@ async function restartHands(mode) {
   if (handsApi) handsApi.stop();
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
+    onFrame: (cam) => { if (handStyle === 'real' && handsList.length) realHands.snap(cam); }, // same frame as the landmarks
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low

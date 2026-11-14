@@ -12,7 +12,7 @@
 //
 // Exposed as walkin.realFurniture(). Talks to the viewer only through window.walkin.
 import * as THREE from 'three';
-import { FURNITURE } from './furniture.js';
+import { FURNITURE, buildFurniture } from './furniture.js';
 import { localToModel } from './lighting.js';
 
 const W = 1024, H = 512;                 // detection resolution: enough for a 25 cm object at 4 m
@@ -286,6 +286,7 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     g.userData.floor = pano.floor;
     g.userData.z0 = floorZ;
     g.userData.cut = tex.image;                            // kept so labelRealFurniture() can send it
+    g.userData.cutYaw = g.rotation.z;                      // the angle the photo was taken from
     w.furniture.add(g);
     f.kind = kind;
     made.push(g);
@@ -319,10 +320,14 @@ export async function labelRealFurniture(pieces = made) {
   const w = window.walkin;
   const live = pieces.filter((g) => g.parent && g.userData.cut);
   if (!live.length) return { ok: false, say: 'nothing to name' };
+  // Constrained to our own catalog, which @sshruti115 suggested on #104: then the swap in C is a lookup
+  // rather than a guess, and "other" means "keep the cut-out and don't offer rotation".
+  const kinds = Object.keys(FURNITURE).filter((k) => !FURNITURE[k].real);
   const parts = [{ text: 'Each image is one piece of furniture from a house, cut out on a transparent '
-    + 'background. Name each one in one or two plain words a homeowner would use, like "sofa", "floor lamp", '
-    + '"dining chair". If an image is not furniture, say "skip". Answer with only a JSON array of strings, '
-    + `one per image, ${live.length} in total.` }];
+    + 'background. For each one give: `kind`, which must be exactly one of these words — '
+    + `${kinds.join(', ')}, other — whichever is the closest match; \`name\`, two or three plain words a `
+    + 'homeowner would use, like "grey linen sofa"; and `confidence` from 0 to 1. Use "other" if it is not '
+    + `furniture or nothing fits. Answer with a JSON array of ${live.length} objects, one per image, in order.` }];
   for (const g of live) {
     const small = document.createElement('canvas');
     const src = g.userData.cut;
@@ -337,7 +342,8 @@ export async function labelRealFurniture(pieces = made) {
   let names = null;
   try {
     const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ role: 'user', parts }] }) });
+      body: JSON.stringify({ contents: [{ role: 'user', parts }],
+        generationConfig: { responseMimeType: 'application/json' } }) });
     const j = await res.json();
     const text = ((((j.candidates || [])[0] || {}).content || {}).parts || []).map((p) => p.text || '').join('');
     names = JSON.parse((text.match(/\[[\s\S]*\]/) || [text])[0]);
@@ -350,13 +356,66 @@ export async function labelRealFurniture(pieces = made) {
   if (!Array.isArray(names)) return { ok: false, say: 'I could not make out what these are.' };
   const named = [];
   live.forEach((g, i) => {
-    const name = String(names[i] || '').trim().toLowerCase();
-    if (!name || name === 'skip') return;
-    FURNITURE[g.userData.kind].name = name;
-    g.userData.realName = name;
-    named.push({ kind: g.userData.kind, name });
+    const got = names[i];
+    if (!got) return;
+    const name = String(got.name || got || '').trim().toLowerCase();
+    const kind = String(got.kind || '').trim().toLowerCase();
+    if (name) { FURNITURE[g.userData.kind].name = name; g.userData.realName = name; }
+    // Only a kind we actually have a model for is worth keeping: it is what the swap looks up.
+    if (FURNITURE[kind] && !FURNITURE[kind].real) {
+      g.userData.looksLike = kind;
+      g.userData.confidence = Number(got.confidence) || 0;
+    }
+    if (name || g.userData.looksLike) named.push({ kind: g.userData.kind, name, looksLike: g.userData.looksLike || null });
   });
-  return { ok: true, named, say: named.length ? `That is ${named.map((n) => n.name).join(', ')}.` : 'I could not name them.' };
+  return { ok: true, named, say: named.length ? `That is ${named.map((n) => n.name).filter(Boolean).join(', ')}.` : 'I could not name them.' };
+}
+
+/**
+ * Turn a cut-out into a real model once it is turned far enough that being flat would show.
+ *
+ * A cut-out is the piece's own photograph, which is the whole point — "that is *your* sofa". But we
+ * only ever saw its front, so past a certain angle a flat card is a lie. @AmitHemantJadhav's call on
+ * #104: keep the photo within about 15° of the yaw it was cut at, so a nudge still looks like their
+ * sofa, and swap to our catalog model past that, which is exactly where a card would visibly break.
+ *
+ * The model is scaled to the *measured* footprint, so it stays the size of the piece it replaces. Its
+ * height comes from the catalog unless the measurement is plausible for that kind, because a blob that
+ * merged with the picture hanging behind it reads 2.5 m and would give us a sofa the height of a door.
+ */
+const SWAP_AT = THREE.MathUtils.degToRad(15);
+
+function swapToModel(g) {
+  const w = window.walkin;
+  const kind = g.userData.looksLike;
+  const spec = FURNITURE[kind];
+  const mine = FURNITURE[g.userData.kind];
+  if (!spec || !mine || g.userData.swapped) return false;
+  let model;
+  try { model = buildFurniture(kind); } catch (e) { console.info('[realfurniture] no model for', kind, e.message); return false; }
+
+  // measured width and depth, catalog height unless ours is believable for this kind
+  const okHeight = mine.h > spec.h * 0.6 && mine.h < spec.h * 1.6;
+  const h = okHeight ? mine.h : spec.h;
+  model.scale.set(mine.w / spec.w, mine.d / spec.d, h / spec.h);
+  mine.h = h;                                              // keep the catalog entry honest for the fit check
+
+  if (g.userData.card) { g.remove(g.userData.card); g.userData.card = null; }
+  g.add(model);
+  g.userData.swapped = kind;
+  if (w && w.say) w.say(`That is a ${mine.name}. Turning it, so this is our ${spec.name.toLowerCase()} at its size.`);
+  return true;
+}
+
+/** Has this piece been turned far enough from its photograph to need the model? */
+function checkSwap() {
+  for (const g of made) {
+    if (!g.parent || g.userData.swapped || !g.userData.looksLike) continue;
+    let d = g.rotation.z - g.userData.cutYaw;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    if (Math.abs(d) > SWAP_AT) swapToModel(g);
+  }
 }
 
 // ------------------------------------------------------------------ keep the cut-outs facing you
@@ -374,6 +433,7 @@ const _q = new THREE.Quaternion(), _want = new THREE.Quaternion(), _e = new THRE
 function faceTheCamera() {
   const w = window.walkin;
   if (!w || !w.camera || !made.length) return;
+  checkSwap();
   for (const g of made) {
     const card = g.userData.card;
     if (!card || !g.parent) continue;
@@ -400,5 +460,6 @@ export function clearRealFurniture() {
   window.walkin.realFurniture = realFurniture;
   window.walkin.clearRealFurniture = clearRealFurniture;
   window.walkin.labelRealFurniture = labelRealFurniture;
+  window.walkin.swapRealFurniture = swapToModel;
   if (window.walkin.beforeRender) window.walkin.beforeRender.add(faceTheCamera);
 })();

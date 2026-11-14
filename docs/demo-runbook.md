@@ -128,8 +128,9 @@ and it moves easily — or run this beat on a room you haven't staged. (Why the 
 it out of the way: #57.)
 
 **Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
-La Mirada has three out of twenty-two: the 2.50 m opening into the dining room (too wide, nothing to
-prove), one at 0.98 m into the dining room, and **the 1.15 m doorway off the living room — the one
+La Mirada has three out of twenty-two: the 2.50 m opening between the living and dining rooms (too
+wide, nothing to prove), one at 0.98 m **into a bathroom** off the hallway — the sofa does go through
+it, but think about what that looks like — and **the 1.15 m doorway off the living room — the one
 the sentence below quotes**. It is at model `(2.81, 0.02)`; stand at **scan point 37**, 0.47 m away,
 and you are looking straight through it. At the other nineteen the sofa doesn't fit turned either, so
 John correctly says *"it won't fit through at all"* and the beat goes nowhere.
@@ -277,6 +278,8 @@ Other houses, measured the same way on today's `main`:
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
 | the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move, the way it behaved before A6. `&a6=round` only swaps the wall proxy back and **still blinks** on long jumps, so `off` is the only full rollback |
+| John answers but has no voice | expected — there is no ElevenLabs key, so `/api/tts` 404s and he falls back to the **browser voice**. Verified on the live tunnel; the doorway sentence is spoken. Don't "fix" the 404 by removing the fallback |
+| John goes quiet after a `git pull` | restart `serve.py`. It is read once at startup, so a pull leaves the old process serving and `/api/health` 404s. `preflight` names this one |
 | the house won't load | `python3 prep_house.py zvKHR9DHNjJ` again and reload — since #75 a re-prepped house shows up at once; or `?m=fixture` after `python3 tools/fake_house.py`, which needs no keys at all and does the whole run, beat 5 included |
 
 ## Console equivalents for every beat

@@ -50,4 +50,4 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 | everything looks wrong | `walkin.clearLayout()` then **⋯ → ⌂ Stage room** |
 | the house won't load | re-prep it and reload, or `?m=fixture` after `python3 tools/fake_house.py` — needs no keys, does the whole run |
 | the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move. `&a6=round` is *not* a full rollback: it still blinks |
-| you changed `serve.py` | restart it. It is read once at startup |
+| you changed **or pulled** `serve.py` | restart it — it is read once at startup, so a `git pull` leaves the old one serving. If the John row says *"is serve.py the one you just pulled?"*, that is this |

@@ -1,7 +1,7 @@
 // S3 — walkin.stageRoom(room, style): furnish a whole room in one go.
 // Puts the big piece against the best wall, arranges the rest around it, and checks every placement
 // with fit.js, so what comes back is a set that actually fits with the doors still usable.
-import { FURNITURE } from './furniture.js';
+import { FURNITURE, PLANTS, applyStyle, setStyle, STYLES, getStyle } from './furniture.js';
 import { fitReport, fitLine, openings, overlaps, pointInPoly } from './fit.js';
 
 const WALL_GAP = 0.06;          // a piece stands this far off the wall
@@ -44,7 +44,7 @@ function wallsFor(edges, width, { avoidWindows = false } = {}) {
 }
 
 // ------------------------------------------------------------------ putting pieces down
-function makePlacer(room, floorZ, floor) {
+function makePlacer(room, floorZ, floor, style) {
   const w = window.walkin;
   const placed = [];
   const skipped = [];
@@ -61,6 +61,7 @@ function makePlacer(room, floorZ, floor) {
       it.position.set(c.x, c.y, floorZ + (FURNITURE[kind].flat ? 0.002 : 0.004));
       it.rotation.z = c.rot;
       it.userData.floor = floor;
+      if (style) applyStyle(it, style);
       placed.push({ kind, name: FURNITURE[kind].name, x: +c.x.toFixed(2), y: +c.y.toFixed(2), item });
       return it;
     }
@@ -147,9 +148,12 @@ const PLANS = {
     if (!placedSofa) { P.skipped.push({ kind: 'sofa', name: sofa.name, why: 'no wall long enough without a door' }); return; }
     P.tryPlace('rug', [inFrontOf(placedSofa, 1.25)], { optional: true });
     P.tryPlace('coffeetable', [inFrontOf(placedSofa, 1.0), inFrontOf(placedSofa, 0.85)], { optional: true });
+    const side = FURNITURE.sofa.w / 2 + FURNITURE.armchair.w / 2 + 0.35;
     P.tryPlace('armchair', [
-      { ...inFrontOf(placedSofa, 1.1, 1.5), rot: placedSofa.rotation.z - Math.PI / 2 },
-      { ...inFrontOf(placedSofa, 1.1, -1.5), rot: placedSofa.rotation.z + Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 0.9, side), rot: placedSofa.rotation.z - Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 0.9, -side), rot: placedSofa.rotation.z + Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 1.4, side * 0.8), rot: placedSofa.rotation.z - Math.PI / 2 },
+      { ...inFrontOf(placedSofa, 1.4, -side * 0.8), rot: placedSofa.rotation.z + Math.PI / 2 },
     ], { optional: true });
     // the television goes on the wall the sofa looks at
     const opposite = edges.filter((e) => Math.cos(e.facing - placedSofa.rotation.z) < -0.5)
@@ -265,7 +269,8 @@ export function stageRoom(room, style = 'modern') {
   const floor = r.floor || (w.current && w.current.floor);
   const floorZ = (w.current && w.current.floorZ) || 0;
   const edges = edgesOf(r, w.house);
-  const P = makePlacer(r, floorZ, floor);
+  const styleName = STYLES[style] ? style : getStyle();
+  const P = makePlacer(r, floorZ, floor, styleName);
   plan(r, edges, P, floorZ, style);
 
   if (w.select) w.select(null);
@@ -276,7 +281,7 @@ export function stageRoom(room, style = 'modern') {
       + (P.skipped.length ? `. No room for the ${list(P.skipped.map((s) => lower(s.name)))} — ${P.skipped[0].why}.` : '. Everything fits, doors clear.')
     : `I couldn't fit a ${lower(r.label)} set in there: ${(P.skipped[0] || {}).why || 'the room is too small'}`;
 
-  return { room: r, style, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
+  return { room: r, style: styleName, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
 }
 
 /** "a sofa, a rug and 4 chairs" */
@@ -305,11 +310,118 @@ export function describeRoom(room) {
     + (bad.length ? ` — ${bad.map((b) => fitLine(b.r)).join('; ')}` : ' — all of it fits');
 }
 
+
+// ------------------------------------------------------------------ S5: one small object at a point
+// Things you can stand something on. A lamp or a plant put on one of these goes on top of it.
+const SUPPORTS = ['table', 'desk', 'coffeetable', 'sidetable', 'nightstand', 'tvstand', 'bookcase'];
+
+/** The piece whose top (x, y) lands on, if any. */
+function supportAt(x, y, floor) {
+  const w = window.walkin;
+  return (w.furniture ? w.furniture.children : []).find((o) => o.userData.kind
+    && SUPPORTS.includes(o.userData.kind)
+    && (floor === undefined || o.userData.floor === floor)
+    && pointInPoly(x, y, footprintOf(o)));
+}
+
+function footprintOf(o) {
+  const spec = FURNITURE[o.userData.kind];
+  const c = Math.cos(o.rotation.z), sn = Math.sin(o.rotation.z);
+  const hw = spec.w / 2, hd = spec.d / 2;
+  return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]]
+    .map(([px, py]) => [o.position.x + px * c - py * sn, o.position.y + px * sn + py * c]);
+}
+
+/** Pull (x, y) far enough inside a support's top that the object doesn't hang over the edge. */
+function clampOnto(support, x, y, spec) {
+  const rot = support.rotation.z, c = Math.cos(rot), sn = Math.sin(rot);
+  const s = FURNITURE[support.userData.kind];
+  const dx = x - support.position.x, dy = y - support.position.y;
+  let lx = dx * c + dy * sn, ly = -dx * sn + dy * c;         // into the support's own frame
+  lx = Math.max(-1, Math.min(1, lx / Math.max(1e-6, s.w / 2 - spec.w / 2))) * Math.max(0, s.w / 2 - spec.w / 2);
+  ly = Math.max(-1, Math.min(1, ly / Math.max(1e-6, s.d / 2 - spec.d / 2))) * Math.max(0, s.d / 2 - spec.d / 2);
+  return { x: support.position.x + lx * c - ly * sn, y: support.position.y + lx * sn + ly * c };
+}
+
+/**
+ * Put one small object down: a plant, a lamp, a rug, anything in the catalog.
+ *   walkin.placeObject('plant')                 where you are pointing, or 2 m ahead
+ *   walkin.placeObject('plantsmall', x, y)      at a spot in model coordinates
+ * If the spot is on a table, desk, nightstand or shelf, the object goes on top of it.
+ * Returns { kind, name, x, y, z, on, fits, why, say }.
+ */
+export function placeObject(kind, x, y, opts = {}) {
+  const w = window.walkin;
+  if (!w) return { fits: false, say: 'the viewer is not ready' };
+  if (!FURNITURE[kind]) return { fits: false, say: `I don't have a ${kind}` };
+  const spec = FURNITURE[kind];
+  const floor = opts.floor !== undefined ? opts.floor : (w.current && w.current.floor);
+  const floorZ = (w.current && w.current.floorZ) || 0;
+
+  if (x == null || y == null) {                              // where is the user looking?
+    const p = w.pointer && w.pointer.point;
+    if (p && w.pointer.room) { x = p[0]; y = p[1]; }
+    else {
+      const yaw = (w.view && w.view.yaw) || 0;
+      x = w.current.pos[0] + Math.cos(yaw) * 2;
+      y = w.current.pos[1] + Math.sin(yaw) * 2;
+    }
+  }
+
+  const support = opts.onFloor ? null : supportAt(x, y, floor);
+  const rot = opts.rot != null ? opts.rot
+    : (support ? support.rotation.z : ((w.view && w.view.yaw) || 0) - Math.PI / 2);
+
+  let spot = { x, y }, z = floorZ + (spec.flat ? 0.002 : 0.004), on = 'the floor', fits = true, why = '';
+  if (support) {
+    spot = clampOnto(support, x, y, spec);
+    z = support.position.z + FURNITURE[support.userData.kind].h;
+    on = `the ${lower(FURNITURE[support.userData.kind].name)}`;
+  } else {
+    // on the floor: take the first spot that passes the fit check, searching outwards from the ask
+    const ring = [[0, 0]];
+    for (let r = 0.3; r <= 1.2; r += 0.3) {
+      for (let a = 0; a < 8; a++) ring.push([Math.cos((a * Math.PI) / 4) * r, Math.sin((a * Math.PI) / 4) * r]);
+    }
+    let found = null;
+    for (const [ox, oy] of ring) {
+      const r = fitReport({ kind, x: x + ox, y: y + oy, rot, floor });
+      if (r.ok) { found = { x: x + ox, y: y + oy }; break; }
+      if (!why) why = r.room ? r.reasons[0] : 'that spot is not in a room';
+    }
+    if (found) { spot = found; why = ''; } else { fits = false; }
+  }
+
+  if (!fits) {
+    return { kind, name: spec.name, fits: false, why, say: `I can't put a ${lower(spec.name)} there - ${why}` };
+  }
+
+  w.addFurniture(kind);
+  const it = w.furniture.children[w.furniture.children.length - 1];
+  it.position.set(spot.x, spot.y, z);
+  it.rotation.z = rot;
+  it.userData.floor = floor;
+  it.userData.on = support ? support.uuid : null;
+  if (w.select) w.select(it);
+
+  const room = w.roomAt(spot.x, spot.y, floor);
+  return { kind, name: spec.name, x: +spot.x.toFixed(2), y: +spot.y.toFixed(2), z: +z.toFixed(3),
+    on, room: room ? room.label : null, fits: true, item: it,
+    say: `${spec.name} on ${on}${room ? ` in the ${lower(room.label)}` : ''}` };
+}
+
+/** The plants in the catalog, for the agent to choose from. */
+export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].name, h: FURNITURE[k].h }));
+
 (function start(tries = 0) {
   if (!window.walkin) {
     if (tries < 600) return setTimeout(() => start(tries + 1), 50);
     return;
   }
   window.walkin.stageRoom = stageRoom;
+  window.walkin.setStyle = (style) => setStyle(style, window.walkin.furniture);
+  window.walkin.styles = () => Object.keys(STYLES);
   window.walkin.describeRoom = describeRoom;
+  window.walkin.placeObject = placeObject;
+  window.walkin.plants = plants;
 })();

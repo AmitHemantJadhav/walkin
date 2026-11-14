@@ -45,7 +45,7 @@ const TOOLS = [{
       parameters: { type: 'object', properties: {
         style: { type: 'string', description: 'Optional palette: modern, cozy or scandi.' } } } },
     { name: 'set_wall_material',
-      description: 'Cover the wall the user points at with a material (wallpaper, brick, tiles, wood panels, paint). A seamless tile is generated from the description and placed at real scale.',
+      description: 'Cover the wall the user points at or faces with a material (wallpaper, brick, tiles, wood panels, paint or a plain colour). Use it for ANY request to change, paint or recolour a wall; you can do this. A seamless tile is generated from the description and placed at real scale.',
       parameters: { type: 'object', properties: {
         description: { type: 'string', description: 'What the surface looks like, e.g. "red brick with light grey mortar", "sage green paint", "art deco gold wallpaper".' },
         tile_metres: { type: 'number', description: 'Real width of one tile in metres: about 0.9 for brick (several bricks per tile), 0.6 for wallpaper patterns, 1 for paint.' } },
@@ -68,6 +68,16 @@ const TOOLS = [{
       parameters: { type: 'object', properties: {
         room: { type: 'string', description: 'Room label or id, e.g. kitchen, bedroom.' } },
         required: ['room'] } },
+    { name: 'go_to_place',
+      description: 'Move the user to the scan point that best matches a description, using what was seen at every scan point: ' +
+        'fixed features (fireplace, bay window, kitchen island, view of garden), light (sunny, bright, dim) and furniture. ' +
+        'Use it for "take me to the room with the fireplace", "somewhere sunny", "where is the bay window", "show me the ' +
+        'kitchen island". Use go_to for a bare room name. If it returns choices instead of moving, call it again with the ' +
+        'pano id that fits best. After moving, say in one short sentence where they are and why it matches.',
+      parameters: { type: 'object', properties: {
+        query: { type: 'string', description: "The user's description, e.g. room with the fireplace, somewhere sunny." },
+        pano: { type: 'string', description: 'A pano id from the choices an earlier go_to_place call returned.' } },
+        required: ['query'] } },
   ],
 }];
 
@@ -160,6 +170,20 @@ async function loadListing(model) {
     listingFacts = { address: v.address, city: v.city, homes_listing_id: v.homes_listing_id,
       lat: Number(v.lat), lon: Number(v.lon), rooms_in_listing: Number(v.room_count) || undefined };
   } catch (e) { /* listing facts are optional */ }
+  // The CoStar listing (price, beds, baths, Homes.com highlights) and Vexcel's view from above, from
+  // tools/prep_outside.py, so John can answer "does it have a fireplace?" or "how big is the lot?"
+  try {
+    const res = await fetch(`data/${model}/outside.json`);
+    if (!res.ok) return;
+    const { listing: L = {}, structures = [], site } = await res.json();
+    const keep = ['address', 'city', 'state', 'zip', 'homes_listing_id', 'status', 'list_date', 'price', 'beds', 'baths',
+      'sqft', 'year_built', 'stories', 'style', 'lot_acres', 'parking_spaces', 'fireplaces', 'hoa', 'highlights', 'details', 'summary'];
+    const house = structures.find((s) => s.primary);
+    listingFacts = { ...listingFacts, ...Object.fromEntries(keep.filter((k) => L[k] != null).map((k) => [k, L[k]])),
+      from_above: site && { source: 'Vexcel aerial survey', house_footprint_m2: house?.area_m2,
+        roof: house && [house.roof_shape, house.roof_material].filter(Boolean).join(' '), pool: site.pool,
+        solar: site.solar, tree_cover_pct: site.tree_cover_pct, buildings_on_lot: site.structures } };
+  } catch (e) { /* optional too */ }
 }
 
 // ------------------------------------------------------------------ daylight at a point (R5)
@@ -294,13 +318,15 @@ const RUN = {
   },
 
   async set_wall_material({ description, tile_metres }) {
-    const w = W(), wall = w.pointer && w.pointer.wall;
+    const w = W(), pointed = w.pointer && w.pointer.wall;
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
-    if (!wall) return { ok: false, reason: 'The user is not pointing at a wall. Ask them to point at the wall first.' };
+    // the wall pointed at; else the one straight ahead (cursor or gaze on the floor or a sofa is the usual miss)
+    const wall = pointed || (w.wallAhead && w.wallAhead());
+    if (!wall) return { ok: false, reason: 'No wall in front of the user. Ask them to face the wall they mean; this does work.' };
     setStatus('Making the tile…');
     const url = await generateTile(description);
     await w.setWallMaterial(wall, url, tile_metres || 1);
-    return { ok: true, material: description };
+    return { ok: true, material: description, wall: pointed ? 'the wall the user points at' : 'the wall straight ahead' };
   },
 
   async place_object({ kind }) {
@@ -345,7 +371,77 @@ const RUN = {
     await w.goTo(inRoom[0].id);
     return { ok: true, room: r.label };
   },
+
+  go_to_place: (args) => goToPlace(args),
 };
+
+// ------------------------------------------------------------------ go to a place by description
+// tools/prep_captions.py describes every scan point once (data/<model>/captions.json: room, caption, light, features,
+// furniture). The user's words are matched against those here, with no extra model call; only when nothing matches
+// does the model get the list to choose from. Without captions.json it falls back to room names (go_to).
+let captions = null; // pano id -> description; {} when the house has no captions.json
+async function loadCaptions() {
+  if (captions) return captions;
+  try {
+    const res = await fetch(`data/${W().house.model}/captions.json`);
+    captions = res.ok ? await res.json() : {};
+  } catch (e) {
+    captions = {};
+  }
+  return captions;
+}
+
+const PLACE_STOP = new Set(('a an the to me take go show bring find where wheres is are was with of in on at by for room ' +
+  'place spot somewhere some something that this there please can could you i we want would like see let us one area ' +
+  'part house home get put lets has have got any which way just').split(' '));
+const LIGHT_WORDS = { sunny: ['sunny', 'sun', 'sunlit', 'sunlight', 'sunshine', 'sunniest'],
+  bright: ['bright', 'brightest', 'light', 'daylight', 'airy'], dim: ['dim', 'dark', 'darkest', 'cosy', 'cozy'] };
+const placeWords = (t) => String(t || '').toLowerCase().replace(/[^a-z\s-]/g, ' ').split(/[\s-]+/)
+  .filter((x) => x.length > 1 && !PLACE_STOP.has(x)).map((x) => (x.length > 3 && x.endsWith('s') && !x.endsWith('ss') ? x.slice(0, -1) : x));
+
+function placeScore(q, c) {
+  const qs = new Set(q), hit = (words, wt) => placeWords(words).reduce((s, x) => s + (qs.has(x) ? wt : 0), 0);
+  let s = hit(c.room, 3) + hit(c.caption, 1);
+  for (const f of c.features || []) s += hit(f, 3) + (placeWords(f).every((x) => qs.has(x)) && placeWords(f).length > 1 ? 2 : 0);
+  for (const f of c.furniture || []) s += hit(f, 1.5);
+  const asks = (k) => LIGHT_WORDS[k].some((x) => qs.has(x));
+  if (asks('sunny')) s += c.light === 'sunny' ? 5 : c.light === 'bright' ? 1 : 0;
+  if (asks('bright')) s += c.light === 'sunny' || c.light === 'bright' ? 2 : 0;
+  if (asks('dim')) s += c.light === 'dim' ? 4 : 0;
+  return s;
+}
+
+async function goToPlace({ query, pano }) {
+  const w = W(), caps = await loadCaptions();
+  const panos = w.house.panos.filter((p) => p.img);
+  const placeOf = (p) => ({ ok: true, room: (caps[p.id] && caps[p.id].room) || null,
+    caption: (caps[p.id] && caps[p.id].caption) || null, light: (caps[p.id] && caps[p.id].light) || null });
+  if (pano) {
+    const p = panos.find((x) => x.id === pano);
+    if (!p) return { ok: false, reason: `No scan point ${pano}.` };
+    await w.goTo(p.id);
+    return placeOf(p);
+  }
+  if (!Object.keys(caps).length) { // no descriptions for this house: room names only
+    const r = findRoom(query);
+    return r ? RUN.go_to({ room: r.id }) : { ok: false, reason: 'This house has no scan-point descriptions yet; only room names work.',
+      rooms: w.house.rooms.map((x) => x.label) };
+  }
+  const q = placeWords(query), cur = w.current && w.current.id;
+  const roomCentre = (r) => (r && r.poly ? [r.poly.reduce((s, p) => s + p[0], 0) / r.poly.length, r.poly.reduce((s, p) => s + p[1], 0) / r.poly.length] : null);
+  const ranked = panos.filter((p) => caps[p.id]).map((p) => {
+    const room = w.roomAt(p.pos[0], p.pos[1], p.floor), c = roomCentre(room);
+    return { p, score: placeScore(q, caps[p.id]), off: c ? Math.hypot(p.pos[0] - c[0], p.pos[1] - c[1]) : 99 };
+  }).sort((a, b) => b.score - a.score || (a.p.id === cur) - (b.p.id === cur) || a.off - b.off);
+  const best = ranked[0];
+  if (!best || best.score < 3) { // nothing clear: let the model choose from the list
+    return { ok: false, moved: false, reason: 'No clear match; pick the pano that fits and call go_to_place again with it.',
+      choices: ranked.map(({ p }) => ({ pano: p.id, room: caps[p.id].room, caption: caps[p.id].caption, light: caps[p.id].light })) };
+  }
+  if (best.p.id !== cur) await w.goTo(best.p.id);
+  return { ...placeOf(best.p), already_here: best.p.id === cur || undefined,
+    features: caps[best.p.id].features, matched_words: q.filter((x) => placeScore([x], caps[best.p.id]) > 0) };
+}
 
 // ------------------------------------------------------------------ generated tiles (R4)
 // Gemini's image model ("Nano Banana 2"). Override with ?imageModel=<name> if the name changes.
@@ -359,16 +455,41 @@ async function generateTile(description) {
   const prompt = `A seamless, tileable texture of ${description}, for covering an interior wall. ` +
     'Flat and straight-on, orthographic, evenly lit, no shadows, no perspective, no objects, no text, no border. ' +
     'The left edge must continue into the right edge and the top into the bottom. Square.';
-  let url;
+  let url = paintTile(description); // plain paint or a colour needs no image model: instant and offline
+  if (url) { tileCache.set(key, url); return url; }
   try {
     url = await squareTile(await generateImage(prompt, IMAGE_WAIT_MS));
   } catch (e) {
-    url = fallbackTile(description); // R10: the wallpaper beat still lands without image generation
+    url = fallbackTile(description) || paintTile(description, true); // R10: the wallpaper beat still lands without image generation
     if (!url) throw e;
     console.info('[agent] tile generation failed, using the bundled tile:', e.message);
   }
   tileCache.set(key, url);
   return url;
+}
+
+// Paint: a flat colour with a faint roller texture, drawn here. Used straight away for "paint it sage green" /
+// "make the wall blue", and as the last fallback (`any`) for anything with a colour word when generation fails.
+const COLOURS = { white: '#f4f2ec', 'off white': '#efeadf', cream: '#f1e6cc', ivory: '#f3edd8', beige: '#d9c7a7',
+  grey: '#9a9a96', gray: '#9a9a96', charcoal: '#3f4144', black: '#252525', 'sage green': '#9caf88', sage: '#9caf88',
+  'olive green': '#7d8450', olive: '#7d8450', 'forest green': '#2f5d3a', 'mint green': '#bfe3cf', mint: '#bfe3cf',
+  green: '#5f8f5a', 'navy blue': '#26385c', navy: '#26385c', 'sky blue': '#a9cbe8', 'light blue': '#b9d3ea',
+  'powder blue': '#c4d8e6', teal: '#2f7f7f', blue: '#4a74b5', red: '#a8322d', burgundy: '#6b1f2a', terracotta: '#c0643f',
+  pink: '#e8b4bc', 'blush pink': '#ecc6c4', blush: '#ecc6c4', orange: '#d9813a', yellow: '#e8cf5a', mustard: '#c99a2e',
+  purple: '#6e4f8f', lavender: '#c3b5d9', brown: '#7a5838', tan: '#c4a57c' };
+const COLOUR_NAMES = Object.keys(COLOURS).sort((a, b) => b.length - a.length); // "sage green" before "green"
+function paintTile(description, any = false) {
+  const t = String(description).toLowerCase();
+  const name = COLOUR_NAMES.find((c) => new RegExp(`\\b${c}\\b`).test(t));
+  if (!name || !(any || /\b(paint|painted|colou?r|matte|satin|plain|solid)\b/.test(t) || t.trim() === name)) return null;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = COLOURS[name]; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2500; i++) { // roller texture, light and dark specks
+    g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 1);
+  }
+  return c.toDataURL('image/png');
 }
 
 // R10: bundled, pre-made assets for when generation fails or is slow (assets/).

@@ -284,7 +284,8 @@ addEventListener('keydown', (e) => { if (e.key !== '/' && e.key !== 'Escape') un
 // push to talk (Talk button, pinch-and-hold menu): skip the wake phrase
 function talkNow() {
   unlock();
-  if (state.mode === 'thinking' || state.mode === 'live') return;
+  if (state.mode === 'live') return window.walkin.live.stop('talk');   // Talk again = hang up
+  if (state.mode === 'thinking') return;
   liveAvailable().then((ok) => {               // push to talk: straight into a live conversation if we can
     if (ok) { stopRec(); liveConversation(''); return; }
     talkClassic();

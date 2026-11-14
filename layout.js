@@ -14,8 +14,20 @@ const r2 = (v) => Math.round(v * 1000) / 1000;
  * every reload, so a stored uuid means nothing afterwards. Without it a restored television and its
  * stand each report the other as a collision and neither can be picked up.
  */
+/** The home's own furniture: cut out of its photos or its mesh, not part of anyone's layout. */
+function isReal(w, o) {
+  return !!(o.userData.kind && (w.FURNITURE[o.userData.kind] || {}).real);
+}
+
 function items(w) {
-  const kids = w.furniture.children.filter((o) => o.userData.kind);
+  // The home's own furniture is left out on purpose. Those pieces are derived from the house itself —
+  // a pano cut-out or a lump of MatterPak mesh — and the only thing a layout can store about a piece
+  // is its `kind`, which `loadLayout` hands to `buildFurniture`. There is no model behind a `real`
+  // kind, so restoring one gives a default box standing where their sofa was, and a roomful of boxes
+  // reads as "70 of 75 pieces are stuck in something" on the next preflight. `walkin.realFurniture()`
+  // and `walkin.meshFurniture()` rebuild them from the house in well under a second, so there is
+  // nothing to save.
+  const kids = w.furniture.children.filter((o) => o.userData.kind && !isReal(w, o));
   const at = new Map(kids.map((o, i) => [o.uuid, i]));
   return kids.map((o) => {
     const row = {
@@ -71,7 +83,10 @@ export function loadLayout(data, { replace = true, anyHouse = false } = {}) {
         + 'its positions mean nothing here - pass { anyHouse: true } if you meant to' }] };
   }
 
-  if (replace) for (const o of [...w.furniture.children]) w.furniture.remove(o);
+  // Leave the home's own furniture where it is. It is not in `doc.items` — `items()` skips it — so
+  // clearing it here would mean every restore quietly deleted it, which is how preflight's save/run/
+  // put-it-back cycle was wiping `meshFurniture()` a second after it ran.
+  if (replace) for (const o of [...w.furniture.children]) if (!isReal(w, o)) w.furniture.remove(o);
 
   const skipped = [];
   const made = [];                             // same order as doc.items, null where one was skipped
@@ -135,8 +150,11 @@ function whenWalls(cb, tries = 0) {
 export function clearLayout() {
   const w = window.walkin;
   if (!w) return 0;
-  const n = w.furniture.children.length;
-  for (const o of [...w.furniture.children]) w.furniture.remove(o);
+  // Same reasoning as loadLayout: this clears the layout, and the home's own furniture is not part of
+  // one. walkin.clearRealFurniture() and walkin.clearMeshFurniture() take those away.
+  const gone = w.furniture.children.filter((o) => !isReal(w, o));
+  const n = gone.length;
+  for (const o of gone) w.furniture.remove(o);
   if (typeof w.clearAllWallMaterials === 'function') w.clearAllWallMaterials();
   if (w.select) w.select(null);
   store(null);

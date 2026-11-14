@@ -39,10 +39,13 @@ async function available() {
 }
 
 // ------------------------------------------------------------------ audio out: 24 kHz PCM16 chunks, played gap-free
-function prime() {
+function prime() {                             // call inside a tap: iOS only starts audio contexts made in a gesture
   try {
-    playCtx = playCtx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: OUT_RATE });
+    const AC = window.AudioContext || window.webkitAudioContext;
+    playCtx = playCtx || new AC({ sampleRate: OUT_RATE });
     if (playCtx.state === 'suspended') playCtx.resume();
+    micCtx = micCtx || new AC();                 // made here too, so the mic worklet isn't born suspended later
+    if (micCtx.state === 'suspended') micCtx.resume();
   } catch (e) { /* no audio */ }
 }
 
@@ -105,26 +108,32 @@ function toB64(buf) {
   return btoa(s);
 }
 
+let workletCtx = null, micSource = null;        // the processor is registered once per context
 async function startMic() {
   micStream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-  micCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
-  await micCtx.audioWorklet.addModule(url);
-  URL.revokeObjectURL(url);
+  if (!micCtx || micCtx.state === 'closed') micCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (micCtx.state === 'suspended') await micCtx.resume();   // Safari starts it suspended outside a tap
+  if (workletCtx !== micCtx) {
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+    await micCtx.audioWorklet.addModule(url);
+    URL.revokeObjectURL(url);
+    workletCtx = micCtx;
+  }
   micNode = new AudioWorkletNode(micCtx, 'walkin-down');
   micNode.port.onmessage = (e) => {
     if (!session || ending) return;
     try { session.sendRealtimeInput({ audio: { data: toB64(e.data), mimeType: `audio/pcm;rate=${IN_RATE}` } }); } catch (err) { /* closing */ }
   };
-  micCtx.createMediaStreamSource(micStream).connect(micNode);
+  micSource = micCtx.createMediaStreamSource(micStream);
+  micSource.connect(micNode);
 }
 
-function stopMic() {
-  try { micNode && micNode.disconnect(); } catch (e) { /* gone */ }
-  try { micCtx && micCtx.close(); } catch (e) { /* gone */ }
-  if (micStream) micStream.getTracks().forEach((t) => t.stop());
-  micStream = micCtx = micNode = null;
+function stopMic() {                             // keep micCtx: it was unlocked by a tap, and iOS won't redo that later
+  try { micSource && micSource.disconnect(); } catch (e) { /* gone */ }
+  try { micNode && micNode.disconnect(); micNode.port.onmessage = null; } catch (e) { /* gone */ }
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());   // the mic light goes off between calls
+  micStream = micNode = micSource = null;
 }
 
 // ------------------------------------------------------------------ tools: John's own actions (agent.js)
@@ -213,18 +222,24 @@ async function start({ firstText = '' } = {}) {
         onclose: (e) => { if (!ending) { console.info('[live] closed', e && (e.reason || e.code)); stop('closed'); } },
       },
     });
+    if (ending || !active) {                     // it failed or was stopped while connecting: don't keep the socket
+      try { session.close(); } catch (e) { /* already closed */ }
+      session = null;
+      return false;
+    }
     emit({ kind: 'state', state: 'live' });
     touch();
     if (firstText) {                             // what was said after "Hey John" is the first turn: send it now,
       emit({ kind: 'user', text: firstText });   // don't make it wait for the microphone to come up
       session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: firstText }] }], turnComplete: true });
     }
-    try {                                        // then open the mic; a mic that never comes up mustn't hang John
-      await Promise.race([startMic(), new Promise((_, no) => setTimeout(() => no(new Error('mic timed out')), 5000))]);
-    } catch (e) {
-      console.warn('[live] microphone unavailable:', e && (e.message || e));
-      emit({ kind: 'state', state: 'nomic' });
-    }
+    const mine = session;                        // then open the mic in the background: a slow or missing mic
+    Promise.race([startMic(), new Promise((_, no) => setTimeout(() => no(new Error('mic timed out')), 5000))])
+      .then(() => { if (session !== mine || ending) stopMic(); })   // hung up meanwhile: let go of the mic
+      .catch((e) => {
+        console.warn('[live] microphone unavailable:', e && (e.message || e));
+        if (session === mine && !ending) emit({ kind: 'state', state: 'nomic' });
+      });
   } catch (e) {
     console.warn('[live] could not start:', e && (e.message || e));
     emit({ kind: 'state', state: 'failed', reason: String(e && e.message || e) });

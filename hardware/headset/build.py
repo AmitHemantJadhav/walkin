@@ -120,7 +120,7 @@ def body():
         t = i / 4
         w = (OUT_W - 2 * SHELL) * (1 - t) + win_w * t
         h = (OUT_H - 2 * SHELL) * (1 - t) + win_h * t
-        z = Z_SCREEN - 2.5 + 2.5 * t
+        z = Z_SCREEN - 3.1 + 2.5 * t      # stair ends where the window box starts (review #120)
         m = m - box(-w / 2, w / 2, -h / 2, h / 2, z - 0.01, z + 0.65)
     m = m - box(-win_w / 2, win_w / 2, -win_h / 2, win_h / 2, Z_SCREEN - 3, Z_SCREEN + 0.1)
     m = m - box(-POCKET_L / 2, OUT_W / 2 + 1, -POCKET_W / 2, POCKET_W / 2, Z_SCREEN, Z_RIM)       # pocket, open at +X

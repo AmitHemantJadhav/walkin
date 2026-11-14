@@ -354,17 +354,44 @@ export function stageRoom(room, style = 'modern') {
   return { room: r, style: styleName, cleared, placed: P.placed.map(({ item, ...rest }) => rest), skipped: P.skipped, fits, say };
 }
 
-/** "a sofa, a rug and 4 chairs" */
+/** "a sofa, a rug and 4 chairs" — duplicates are counted wherever they appear, not only side by side. */
 function list(items) {
   const counted = [];
   for (const it of items) {
-    const last = counted[counted.length - 1];
-    if (last && last.name === it) last.n++;
+    const seen = counted.find((c) => c.name === it);
+    if (seen) seen.n++;
     else counted.push({ name: it, n: 1 });
   }
-  const words = counted.map(({ name, n }) => (n > 1 ? `${n} ${name}s` : name));
+  const words = counted.map(({ name, n }) => (n > 1 ? `${n} ${name.replace(/y$/, 'ie')}s` : name));
   if (words.length <= 1) return words[0] || 'nothing';
   return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+/**
+ * Furnish every room in the house that has a set. Returns a per-room summary and one sentence.
+ * "Furnish the whole house" is a fair thing for someone to ask, and doing it room by room from the
+ * agent costs a round trip each; this is one call and about two seconds.
+ */
+export function stageHouse(style) {
+  const w = window.walkin;
+  if (!w) return { rooms: [], placed: 0, say: 'the viewer is not ready' };
+  const rooms = [];
+  let placed = 0;
+  for (const room of w.house.rooms) {
+    if (!room.poly || room.poly.length < 3) continue;
+    if (!PLAN_FOR(room.label) && ((room.dims || {}).areaFloor || 0) < 20) continue;   // kitchens, bathrooms, halls
+    const res = stageRoom(room, style);
+    if (!res.placed.length) continue;
+    placed += res.placed.length;
+    rooms.push({ room: room.label, area: +((room.dims || {}).areaFloor || 0).toFixed(1),
+      placed: res.placed.map((p) => p.kind), fits: res.fits });
+  }
+  if (w.select) w.select(null);
+  const say = rooms.length
+    ? `I furnished ${rooms.length} room${rooms.length === 1 ? '' : 's'} with ${placed} pieces`
+      + ` — ${list(rooms.map((r) => lower(r.room)))}`
+    : 'there is nothing here I have a set for';
+  return { rooms, placed, style: rooms.length ? undefined : style, say };
 }
 
 /** Check a staged room after the fact (handy from the console and for the agent). */
@@ -489,6 +516,7 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
     return;
   }
   window.walkin.stageRoom = stageRoom;
+  window.walkin.stageHouse = stageHouse;
   window.walkin.setStyle = (style) => setStyle(style, window.walkin.furniture);
   window.walkin.styles = () => Object.keys(STYLES);
 

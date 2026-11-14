@@ -194,6 +194,9 @@ const lower = (s) => (s || 'room').toLowerCase();
  *   { ok, room, reasons: ['blocks the bedroom door'], warnings: [...] }
  * Pass `{ item }` for a piece already in the scene, or `{ kind, x, y, rot, floor }` for a trial position.
  * `{ on: <the piece it stands on> }` and `{ ignore: [...] }` both drop pieces from the overlap test.
+ * `{ quick: true }` skips the walkway raster, which is ~1.8 ms in a 29 m2 room on a laptop and several
+ * times that on a phone. Everything else - the room, overlaps, the doorway zones - is microseconds, so
+ * the viewer runs quick checks while you drag and the full one once you stop.
  */
 export function fitReport(opts = {}) {
   const w = window.walkin;
@@ -234,8 +237,13 @@ export function fitReport(opts = {}) {
     if (overlaps(poly, itemPoly(o))) reasons.push(`overlaps the ${lower(FURNITURE[ok].name)}`);
   }
 
-  // doorways and walkways, with this piece in place
-  if (!isFlat(kind)) {
+  // standing in a doorway is cheap to test and always worth saying, so it runs even in a quick check
+  if (!isFlat(kind) && opts.quick) {
+    const doors = doorways(room, w.house);
+    if (doors.some((d) => overlaps(poly, d.zone))) reasons.push(`blocks the ${lower(room.label)} door`);
+  }
+
+  if (!isFlat(kind) && !opts.quick) {
     const blockers = others.filter((o) => !isFlat(o.userData.kind) && !isOnSomething(o)
       && w.roomAt(o.position.x, o.position.y, floor) === room)
       .map((o) => itemPoly(o));
@@ -303,21 +311,30 @@ export function checkRoom(room) {
   extra.style.cssText = 'margin-top:2px;font-size:12px;color:#ffb199';
   host.after(extra);
 
-  // the walkway test rasterises the room, so recompute at most ~7 times a second, not every frame
-  let lastKey = '', lastRun = 0;
+  // While a piece is moving, run the cheap checks (room, overlaps, doorways) at ~7 Hz; the walkway
+  // raster only runs once it has been still for a moment, so dragging on a phone stays smooth.
+  const show = (r) => {
+    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
+    extra.textContent = say.join(' · ');   // app.js already says "outside a room" on the line above
+  };
+  let lastKey = '', lastRun = 0, settleTimer = null;
   (function tick() {
     requestAnimationFrame(tick);
     const sel = window.walkin.selected;
-    if (!sel) { if (lastKey) { extra.textContent = ''; lastKey = ''; } return; }
+    if (!sel) {
+      if (lastKey) { extra.textContent = ''; lastKey = ''; clearTimeout(settleTimer); }
+      return;
+    }
     const key = `${sel.id}|${sel.position.x.toFixed(2)}|${sel.position.y.toFixed(2)}|${sel.rotation.z.toFixed(2)}`
       + `|${window.walkin.furniture.children.length}`;
     const now = performance.now();
     if (key === lastKey || now - lastRun < 140) return;
     lastKey = key;
     lastRun = now;
-    const r = fitReport({ item: sel });
-    // app.js already says "outside a room" on the line above; don't say it twice
-    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
-    extra.textContent = say.join(' · ');
+    show(fitReport({ item: sel, quick: true }));
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      if (window.walkin.selected === sel) show(fitReport({ item: sel }));
+    }, 300);
   })();
 })();

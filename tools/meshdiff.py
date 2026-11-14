@@ -289,6 +289,15 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
 
     house = json.load(open(os.path.join('data', model, 'house.json')))
     floor_z = float(np.median([p['floorZ'] for p in house['panos'] if p.get('floorZ') is not None]))
+    # Each floor's own height, so a piece can say which storey it is on. Without this the viewer stands
+    # every piece on the floor of whichever pano you happen to be at, and in a two-storey house the
+    # upstairs furniture lands downstairs. Amit's catch on #108; La Mirada is one storey so it never bit.
+    floors = []
+    for f in house.get('floors') or []:
+        zs = [q['floorZ'] for q in house['panos']
+              if q.get('floor') == f.get('id') and q.get('floorZ') is not None]
+        if zs:
+            floors.append((f['id'], float(np.median(zs))))
 
     pieces = []
     for i in range(n):
@@ -324,7 +333,7 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
 
     if not export:
         return pieces
-    return write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut)
+    return write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors)
 
 
 def _room_of(x, y, house):
@@ -343,7 +352,7 @@ def _room_of(x, y, house):
     return None
 
 
-def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut):
+def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors=()):
     """One binary of geometry plus a JSON index and a small texture per piece."""
     pak = os.path.join('data', model, 'pak')
     out_dir = os.path.join('data', model)
@@ -413,6 +422,7 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut):
             size=[round(float(hi[0] - lo[0]), 3), round(float(hi[1] - lo[1]), 3), round(float(hi[2] - lo[2]), 3)],
             floorGap=round(float(lo[2] - floor_z), 3),
             room=_room_of(float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2), house),
+            floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
             pos=[offset, len(parts[0])],
             uv=[offset + len(parts[0]), len(parts[1])],

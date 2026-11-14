@@ -483,13 +483,15 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
       map.flipY = true;
     }
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-      map, vertexColors: !map && !!p.col, color: map ? 0xffffff : 0xffffff,
+      map, vertexColors: !map && !!p.col,
       roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
     mesh.renderOrder = 2;
     const grp = new THREE.Group();
     grp.add(mesh);
-    // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands here
-    grp.position.set(p.at[0], p.at[1], floorZ);
+    // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands at the
+    // height it was measured at. Using the current pano's floor instead would put every piece on the
+    // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).
+    grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
     const kind = `mesh${++seq}`;
     FURNITURE[kind] = { name: p.room ? `${p.room.toLowerCase()} piece` : 'piece the home already had',
                         real: true, mesh: true,
@@ -497,8 +499,10 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
     grp.userData.kind = kind;
     grp.userData.real = true;
     grp.userData.meshPiece = true;
-    grp.userData.z0 = floorZ;
-    grp.userData.floor = w.current && w.current.floor;     // physics finds walls and neighbours by floor
+    grp.userData.z0 = grp.position.z;
+    // physics finds a piece's walls and its neighbours by floor, so a piece upstairs must not collide
+    // with a wall downstairs. meshdiff works this out from the piece's own height.
+    grp.userData.floor = p.floor || (w.current && w.current.floor);
     w.furniture.add(grp);
     meshMade.push(grp);
     placed.push({ kind, room: p.room, size: p.size, tris: p.tris });

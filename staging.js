@@ -145,6 +145,14 @@ function beside(c, side) {
   return { x: c.x + Math.cos(c.rot) * side, y: c.y + Math.sin(c.rot) * side, rot: c.rot };
 }
 
+/** Beside a piece and a little in front of it, where a lamp or a plant goes next to a sofa. */
+function beside2(item, side) {
+  const rot = item.rotation.z;
+  const fx = Math.sin(rot), fy = -Math.cos(rot);
+  return { x: item.position.x + Math.cos(rot) * side + fx * 0.1,
+    y: item.position.y + Math.sin(rot) * side + fy * 0.1, rot };
+}
+
 /** Beside a piece, on its own x axis. */
 function besideOf(item, side) {
   const rot = item.rotation.z;
@@ -176,8 +184,9 @@ const PLANS = {
     const placedBed = P.tryPlace(bed, [best.c], { optional: true });
     for (const s of best.sides) P.tryPlace('nightstand', [beside(best.c, reach * s)], { optional: true });
     void placedBed;
-    P.tryPlace('floorlamp', spotsFor(room, edges, 'floorlamp'), { optional: true });
-    P.tryPlace('plant', spotsFor(room, edges, 'plant').reverse(), { optional: true });
+    const bedAt = placedBed ? [placedBed.position.x, placedBed.position.y] : null;
+    P.tryPlace('floorlamp', spotsFor(room, edges, 'floorlamp', bedAt), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant', bedAt), { optional: true });
   },
 
   living(room, edges, P) {
@@ -208,7 +217,12 @@ const PLANS = {
         break;
       }
     }
-    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
+    // a plant at the end of the sofa first - that is where a stager puts one - then the corners
+    const beside = FURNITURE.sofa.w / 2 + FURNITURE.plant.w / 2 + 0.15;
+    P.tryPlace('plant', [
+      beside2(placedSofa, beside), beside2(placedSofa, -beside),
+      ...spotsFor(room, edges, 'plant', [placedSofa.position.x, placedSofa.position.y]),
+    ], { optional: true });
   },
 
   dining(room, edges, P) {
@@ -229,7 +243,7 @@ const PLANS = {
         rot: rot + turn,
       }], { optional: true });
     }
-    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant', [table.position.x, table.position.y]), { optional: true });
   },
 
   office(room, edges, P) {
@@ -243,7 +257,7 @@ const PLANS = {
     for (const e of wallsFor(edges, FURNITURE.bookcase.w)) {
       if (P.tryPlace('bookcase', alongWall(e, 'bookcase', [0, 1.0, -1.0]), { optional: true })) break;
     }
-    P.tryPlace('plant', spotsFor(room, edges, 'plant'), { optional: true });
+    P.tryPlace('plant', spotsFor(room, edges, 'plant', [desk.position.x, desk.position.y]), { optional: true });
   },
 };
 
@@ -273,7 +287,7 @@ function cornersOf(room, kind) {
  * floor. The placer takes the first one that passes, so a lamp still lands somewhere sensible in a room
  * whose corners are all taken or too tight.
  */
-function spotsFor(room, edges, kind) {
+function spotsFor(room, edges, kind, near) {
   const spec = FURNITURE[kind] || { w: 0.5, d: 0.5 };
   const out = cornersOf(room, kind);
   for (const e of edges) {
@@ -289,6 +303,14 @@ function spotsFor(room, edges, kind) {
     for (let gy = Math.min(...ys) + 0.5; gy < Math.max(...ys); gy += 0.7) {
       out.push({ x: gx, y: gy, rot: 0 });
     }
+  }
+  // A lamp or a plant belongs beside the furniture it lights, not in whichever corner happens to be first
+  // in the polygon. Keep corners ahead of walls ahead of open floor, but prefer the ones near the set.
+  if (near) {
+    const d2 = (c) => (c.x - near[0]) ** 2 + (c.y - near[1]) ** 2;
+    const corners = out.slice(0, room.poly.length).sort((a, b) => d2(a) - d2(b));
+    const rest = out.slice(room.poly.length).sort((a, b) => d2(a) - d2(b));
+    return [...corners, ...rest];
   }
   return out;
 }

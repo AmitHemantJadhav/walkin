@@ -33,7 +33,9 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 ### Six things that will bite you
 
 - **Only one doorway works for beat 5.** 19 of La Mirada's 22 are too narrow for a sofa even turned.
-- **Go in square.** ±8 cm is the real clearance; past that it lines up and stops in the gap.
+- **Go in square — the angle matters more than the sideways position.** ±**10 cm** off the centre line
+  still goes through, but only ±**7°** off square. Stops *in* the gap → you are off sideways; stops a metre
+  *short* of it → you are off angle.
 - **Move the coffee table first.**
 - **Don't stand at scan point 38 or 16** — the scan gives those rooms no outline, so staging refuses.
 - **`&layout=none`** or last night's furniture comes back.
@@ -48,4 +50,5 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 | furniture won't move | `walkin.physics.enabled = false` |
 | everything looks wrong | `walkin.clearLayout()` then **⋯ → ⌂ Stage room** |
 | the house won't load | re-prep it and reload, or `?m=fixture` after `python3 tools/fake_house.py` — needs no keys, does the whole run |
+| the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move. `&a6=round` is *not* a full rollback: it still blinks |
 | you changed `serve.py` | restart it. It is read once at startup |

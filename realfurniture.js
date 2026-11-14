@@ -448,6 +448,10 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   }
   const t0 = performance.now();
   const floorZ = (w.current && w.current.floorZ) ?? meta.floorZ ?? 0;
+  const texLoader = new THREE.TextureLoader();
+  // Anisotropy is what keeps a sofa sharp when you see it at a glancing angle, which in a walkthrough
+  // is most of the time.
+  const maxAniso = w.renderer ? Math.min(8, w.renderer.capabilities.getMaxAnisotropy()) : 1;
   const placed = [];
   for (const p of meta.pieces) {
     if (placed.length >= max) break;
@@ -456,13 +460,31 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
 
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, p.pos[0], p.pos[1] / 4), 3));
-    const col = new Uint8Array(buf, p.col[0], p.col[1]);
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
+    if (p.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, p.uv[0], p.uv[1] / 4), 2));
+    else if (p.col) {
+      // older furniture.bin, before the atlases: a colour per vertex
+      g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(buf, p.col[0], p.col[1]), 3, true));
+    }
     g.setIndex(new THREE.BufferAttribute(new Uint32Array(buf, p.idx[0], p.idx[1] / 4), 1));
     g.computeVertexNormals();
 
+    // The atlas holds only the parts of the house's textures this piece sits on, at a resolution that
+    // suits its real size. A colour per vertex was only ever as sharp as the mesh is dense, and that
+    // runs from 33 to 399 vertices per square metre across one house — fine on a sofa the scanner saw
+    // well, mush on anything in a far corner.
+    let map = null;
+    if (p.tex) {
+      map = texLoader.load(base + 'furniture-tex/' + p.tex);
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.anisotropy = maxAniso;
+      map.generateMipmaps = true;
+      map.minFilter = THREE.LinearMipmapLinearFilter;
+      map.magFilter = THREE.LinearFilter;
+      map.flipY = true;
+    }
     const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-      vertexColors: true, roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+      map, vertexColors: !map && !!p.col, color: map ? 0xffffff : 0xffffff,
+      roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
     mesh.renderOrder = 2;
     const grp = new THREE.Group();
     grp.add(mesh);
@@ -492,7 +514,12 @@ export function clearMeshFurniture() {
   let n = 0;
   for (const g of meshMade.splice(0)) {
     if (g.parent) { g.parent.remove(g); n++; }
-    g.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+    g.traverse((o) => {
+      if (!o.isMesh) return;
+      o.geometry.dispose();
+      if (o.material.map) o.material.map.dispose();
+      o.material.dispose();
+    });
   }
   return n;
 }

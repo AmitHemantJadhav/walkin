@@ -177,6 +177,92 @@ def bake_colours(V, F, T, Ftf, Fmat, mats, pak, verts_wanted):
     return acc
 
 
+# How much texture a piece deserves, in pixels per metre of its longest side. 512 means a 2 m sofa gets
+# a 1024 px sheet and a 10 cm ornament gets 64 — the first version sized the sheet from the source texels
+# instead, and gave that ornament 1413 x 1546 and 357 KB, which is most of where 8.2 MB of atlases went.
+PX_PER_M = 512
+ATLAS_MIN, ATLAS_MAX = 64, 1024
+
+
+def build_atlas(piece_tris, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=ATLAS_MAX, pad=2):
+    """One small texture per piece, holding only the parts of the MatterPak's textures it actually uses.
+
+    Baking a colour per vertex was the first attempt and it is only as sharp as the mesh is dense — which
+    varies from 33 to 399 vertices per square metre across this house, so a sofa the scanner saw well looks
+    right and one in a bedroom corner turns to mush. The texels exist; the mesh just has nowhere to put them.
+
+    So instead: for each texture a piece touches, take the bounding box of the UVs that use it, crop that
+    region at source resolution, and shelf-pack the crops into one image. UVs are rewritten into atlas
+    space, so the piece still draws in a single call. A sofa typically touches 3 textures and uses a small
+    part of each, so its atlas is a few hundred pixels across rather than 3 × 2048².
+    """
+    from PIL import Image
+    groups = {}
+    for fi in piece_tris:
+        mi = int(Fmat[fi])
+        if 0 <= mi < len(mats):
+            groups.setdefault(mi, []).append(fi)
+
+    crops = []
+    for mi, fis in groups.items():
+        name = os.path.basename(mats[mi])
+        if name not in cache:
+            path = os.path.join(pak, name)
+            cache[name] = Image.open(path).convert('RGB') if os.path.exists(path) else None
+        im = cache[name]
+        if im is None:
+            continue
+        uv = Tf[np.asarray([Ftf[f] for f in fis], np.int32).reshape(-1)]
+        u0, v0 = np.clip(uv.min(axis=0), 0, 1)
+        u1, v1 = np.clip(uv.max(axis=0), 0, 1)
+        W, H = im.width, im.height
+        # v is bottom-up in OBJ and top-down in an image
+        x0 = max(0, int(u0 * W) - pad); x1 = min(W, int(np.ceil(u1 * W)) + pad)
+        y0 = max(0, int((1 - v1) * H) - pad); y1 = min(H, int(np.ceil((1 - v0) * H)) + pad)
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            continue
+        crops.append(dict(mi=mi, fis=fis, box=(x0, y0, x1, y1),
+                          w=x1 - x0, h=y1 - y0, img=im.crop((x0, y0, x1, y1)),
+                          uv0=(x0 / W, 1 - y1 / H), uv1=(x1 / W, 1 - y0 / H)))
+    if not crops:
+        return None
+
+    # shelf pack, tallest first, into a square-ish sheet
+    crops.sort(key=lambda c: -c['h'])
+    total = sum(c['w'] * c['h'] for c in crops)
+    sheet_w = max(c['w'] for c in crops)
+    sheet_w = min(max(sheet_w, int(np.sqrt(total) * 1.15)), max_side)
+    x = y = shelf = 0
+    for c in crops:
+        if x + c['w'] > sheet_w and x > 0:
+            x = 0; y += shelf; shelf = 0
+        c['x'], c['y'] = x, y
+        x += c['w']; shelf = max(shelf, c['h'])
+    sheet_h = y + shelf
+    scale = 1.0
+    if max(sheet_w, sheet_h) > max_side:                  # one piece should never need a huge sheet
+        scale = max_side / max(sheet_w, sheet_h)
+    atlas_img = Image.new('RGB', (max(1, int(sheet_w * scale)), max(1, int(sheet_h * scale))), (150, 145, 140))
+    for c in crops:
+        im = c['img']
+        if scale != 1.0:
+            im = im.resize((max(1, int(c['w'] * scale)), max(1, int(c['h'] * scale))))
+        atlas_img.paste(im, (int(c['x'] * scale), int(c['y'] * scale)))
+    return dict(image=atlas_img, crops=crops, sheet=(sheet_w, sheet_h), scale=scale)
+
+
+def atlas_uv(uv, crops_by_face, fi, sheet):
+    """A source UV, moved into the piece's atlas."""
+    c = crops_by_face[fi]
+    sw, sh = sheet
+    u = (uv[0] - c['uv0'][0]) / max(1e-9, c['uv1'][0] - c['uv0'][0])
+    v = (uv[1] - c['uv0'][1]) / max(1e-9, c['uv1'][1] - c['uv0'][1])
+    u = np.clip(u, 0, 1); v = np.clip(v, 0, 1)
+    px = c['x'] + u * c['w']
+    py = c['y'] + (1 - v) * c['h']
+    return (px / sw, 1 - py / sh)
+
+
 def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
     full, empty = paths(model)
     t0 = time.time()
@@ -217,6 +303,14 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
             continue
         if lo[2] > floor_z + 1.6:
             continue                       # hanging high up: a light or a picture, not furniture
+        # Furniture stands on a floor, inside the house. Something that belongs to no room *and* floats
+        # well clear of the floor is reconstruction noise — on La Mirada those were two lumps at y=5.07
+        # and y=-6.04, outside the floor plan's -5.8..4.9 and hanging 0.8-0.9 m up: foliage and fence
+        # seen through the windows. A roomless piece that sits ON the floor is kept, because the room
+        # polygons don't cover thresholds and hallway corners.
+        cx, cy = float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2)
+        if _room_of(cx, cy, house) is None and lo[2] - floor_z > 0.5:
+            continue
         pieces.append(dict(tris=tri, lo=lo, hi=hi, n=len(tri)))
 
     pieces.sort(key=lambda p: -p['n'])
@@ -250,43 +344,78 @@ def _room_of(x, y, house):
 
 
 def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut):
-    """One binary of geometry plus a JSON index, so the browser does no work beyond a fetch."""
+    """One binary of geometry plus a JSON index and a small texture per piece."""
     pak = os.path.join('data', model, 'pak')
     out_dir = os.path.join('data', model)
-    t0 = time.time()
-    wanted = np.unique(np.concatenate([np.unique(Ff[p['tris']]) for p in pieces]))
-    colours = bake_colours(Vf, Ff, Tf, Ftf, Fmat, mats, pak, wanted)
-    print(f'baked {len(colours):,} vertex colours in {time.time()-t0:.1f}s')
+    tex_dir = os.path.join(out_dir, 'furniture-tex')
+    os.makedirs(tex_dir, exist_ok=True)
+    for f in os.listdir(tex_dir):
+        os.remove(os.path.join(tex_dir, f))
 
     blobs, index = [], []
     offset = 0
+    cache = {}
+    t0 = time.time()
+    tex_bytes = 0
     for i, p in enumerate(pieces):
-        tri = Ff[p['tris']]
-        vids = np.unique(tri)
-        remap = {int(v): k for k, v in enumerate(vids)}
-        pos = Vf[vids].astype(np.float32)
-        # stand the piece on its own origin: the viewer places it by position like any other piece
+        tri_ids = p['tris']
+        tri = Ff[tri_ids]
+        longest = float(max(p['hi'][0] - p['lo'][0], p['hi'][1] - p['lo'][1], p['hi'][2] - p['lo'][2]))
+        side = int(np.clip(round(longest * PX_PER_M), ATLAS_MIN, ATLAS_MAX))
+        built = build_atlas(tri_ids, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=side)
         lo, hi = p['lo'], p['hi']
         centre = np.array([(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]], np.float32)
-        pos = pos - centre
-        col = np.zeros((len(vids), 3), np.uint8)
-        for k, v in enumerate(vids):
-            c = colours.get(int(v))
-            col[k] = c if c is not None else (170, 165, 160)
-        idx = np.array([[remap[int(a)] for a in t] for t in tri], np.uint32)
-        # Pad each section to 4 bytes. Colours are 3 bytes a vertex, so without this the index array
-        # can start on an odd offset and a Uint32Array view over it throws in the browser.
+
+        # A vertex can sit on two textures at once, so the atlas forces one vertex per (vertex, face-group).
+        # Splitting them is cheaper than it sounds: the mesh is already dense and this only duplicates the
+        # seams. Without it a seam vertex would read from whichever crop happened to win.
+        crops_by_face = {}
+        if built:
+            for c in built['crops']:
+                for fi in c['fis']:
+                    crops_by_face[fi] = c
+        pos_list, uv_list, idx_list = [], [], []
+        seen = {}
+        for k, fi in enumerate(tri_ids):
+            c = crops_by_face.get(fi)
+            face = []
+            for corner in range(3):
+                vi = int(tri[k][corner])
+                key = (vi, id(c))
+                if key not in seen:
+                    seen[key] = len(pos_list)
+                    pos_list.append(Vf[vi] - centre)
+                    if c is not None and built:
+                        face_uv = Tf[Ftf[fi][corner]]
+                        uv_list.append(atlas_uv(face_uv, crops_by_face, fi, built['sheet']))
+                    else:
+                        uv_list.append((0.5, 0.5))
+                face.append(seen[key])
+            idx_list.append(face)
+
+        pos = np.asarray(pos_list, np.float32)
+        uv = np.asarray(uv_list, np.float32)
+        idx = np.asarray(idx_list, np.uint32)
+
+        tex_name = None
+        if built:
+            tex_name = f'p{i}.jpg'
+            path = os.path.join(tex_dir, tex_name)
+            built['image'].save(path, quality=85, optimize=True)
+            tex_bytes += os.path.getsize(path)
+
         def pad4(b):
             return b + b'\x00' * ((4 - len(b) % 4) % 4)
-        parts = [pad4(pos.tobytes()), pad4(col.tobytes()), pad4(idx.tobytes())]
+        parts = [pad4(pos.tobytes()), pad4(uv.tobytes()), pad4(idx.tobytes())]
         rec = dict(
-            i=i, verts=int(len(vids)), tris=int(len(tri)),
+            i=i, verts=int(len(pos)), tris=int(len(idx)),
             at=[round(float(centre[0]), 3), round(float(centre[1]), 3), round(float(centre[2]), 3)],
             size=[round(float(hi[0] - lo[0]), 3), round(float(hi[1] - lo[1]), 3), round(float(hi[2] - lo[2]), 3)],
             floorGap=round(float(lo[2] - floor_z), 3),
             room=_room_of(float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2), house),
+            tex=tex_name,
             pos=[offset, len(parts[0])],
-            col=[offset + len(parts[0]), len(parts[1])],
+            uv=[offset + len(parts[0]), len(parts[1])],
             idx=[offset + len(parts[0]) + len(parts[1]), len(parts[2])],
         )
         offset += sum(len(b) for b in parts)
@@ -298,13 +427,14 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut):
         for b in blobs:
             f.write(b)
     meta = dict(model=model, built=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                cut=cut, floorZ=round(float(floor_z), 3), pieces=index)
+                cut=cut, floorZ=round(float(floor_z), 3), textured=True, pieces=index)
     with open(os.path.join(out_dir, 'furniture.json'), 'w') as f:
         json.dump(meta, f)
     mb = os.path.getsize(bin_path) / 1e6
-    print(f'wrote {bin_path} ({mb:.1f} MB) and furniture.json, {len(index)} pieces')
-    named = sum(1 for r in index if r['room'])
-    print(f'  {named}/{len(index)} inside a room on the floor plan')
+    print(f'built {len(index)} atlases in {time.time()-t0:.1f}s')
+    print(f'wrote {bin_path} ({mb:.1f} MB) + {tex_bytes/1e6:.1f} MB of textures, {len(index)} pieces')
+    print(f'  {sum(1 for r in index if r["room"])}/{len(index)} inside a room on the floor plan')
+    print(f'  {sum(1 for r in index if r["tex"])}/{len(index)} have a texture')
     return pieces
 
 

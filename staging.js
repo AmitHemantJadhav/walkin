@@ -341,6 +341,8 @@ function spotsFor(room, edges, kind, near) {
 // garage is worse than an empty garage, because John says it out loud. Asking by name still overrides.
 const NOT_LIVING = /garage|basement|utility|laundry|storage|attic|crawl|mechanical|closet|bath|stair|porch|patio|deck/;
 const ASKED_LIVING = /living|lounge|family|sitting|great ?room/;
+/** "furnish the whole house", "every room", "all the rooms" - not "this room, like the rest of the house". */
+const WHOLE_HOUSE = /\b(?:whole|entire|all(?: of)? the|every)\s+(?:house|home|place|flat|apartment|rooms?)\b/;
 
 const PLAN_FOR = (label) => {
   const l = lower(label);
@@ -360,6 +362,22 @@ const PLAN_FOR = (label) => {
 export function stageRoom(room, style = 'modern') {
   const w = window.walkin;
   if (!w) return { placed: [], skipped: [], fits: false, say: 'the viewer is not ready' };
+
+  // "Furnish the whole house" is beat 7 of the demo, and John has no stage_house tool (#56): the only
+  // staging tool he has is this one, so the request arrives here with the whole sentence as the style
+  // and furnishes the one room you happen to be standing in. Until the tool exists, honour what was
+  // actually asked for. Shaped like a stageRoom result so agent.js needs no change at all.
+  if (WHOLE_HOUSE.test(lower(style))) {
+    // Take the phrase out before delegating: stageHouse calls back into this function for every room,
+    // and leaving "the whole house" in the style would have each of those ask for the whole house
+    // again. (It did, and the recursion came back with nothing placed and no error anyone could see.)
+    const rest = lower(style).replace(WHOLE_HOUSE, ' ').replace(/\b(furnish|stage|do|please|it|this)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const h = stageHouse(rest || getStyle());
+    return { room: null, style, cleared: [], skipped: [], fits: true, wholeHouse: true,
+      placed: h.rooms.flatMap((r) => r.placed.map((kind) => ({ kind, name: FURNITURE[kind].name }))),
+      say: h.say };
+  }
 
   let r = room;
   if (!r) r = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);

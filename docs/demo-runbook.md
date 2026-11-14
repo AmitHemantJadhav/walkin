@@ -18,8 +18,8 @@ Each one is explained where it belongs below; this is the list to read on the wa
    through a coffee table: dragged straight at the door it travels 24 cm and stops.
 4. **Beat 5 is silent unless #54 is merged.** `physics.js` computes the sentence; the only thing that
    speaks it is eleven lines in `agent.js` on that PR.
-5. **Beat 7 needs the button.** John has no `stage_house` tool, so *"furnish the whole house"*
-   furnishes one room. `walkin.stageHouse('modern')`.
+5. **Beat 7 works by voice again** — *"furnish the whole house"* does the house, not the room you
+   are in. `walkin.stageHouse('modern')` is the fallback if the voice path misbehaves.
 6. **Don't stand at scan point 38 or 16.** They are inside rooms the scan gives no outline, so
    staging refuses — and 38 is 0.63 m from the doorway beat 5 needs.
 
@@ -65,7 +65,7 @@ good as the real thing and two beats need help. Run end to end against the mock 
 | 2 furnish | *"stage this as a cosy living room"* | **works** — 7 pieces, television included, and John reads the sentence back |
 | 4 wallpaper | *"put red brick wallpaper on this wall"* | **works** — tile generated and laid at real scale, 3.9 s end to end |
 | 6 the plant | *"what plant should go here?"* | stops after reading the light: *"Mock reply: done (light_here)"*. Use `walkin.suggestPlant()` |
-| 7 the close | *"furnish the whole house"* | furnishes **one room**, not six — and that is true with a real key too, see beat 7 |
+| 7 the close | *"furnish the whole house"* | **works** — 6 rooms, 32 pieces, and he reads back what he did |
 
 **Start from a clean house:** `…/?m=zvKHR9DHNjJ&layout=none` — otherwise last night's furniture
 is still there, because layouts persist on purpose.
@@ -180,16 +180,18 @@ and always lands.
 
 > **"Hey John — furnish the whole house."**
 
-**Say it, but press the button.** John has eight tools and `stage_house` is not one of them, so
-"furnish the whole house" lands on `stage_room` and furnishes the room you are standing in — one
-room, not six. That is true with a real key as much as in mock mode: the model can only call what it
-has. Until the tool exists (#56), do the close from the console or the dock:
+Six rooms, 32 pieces, and John reads it back:
 
-```js
-walkin.stageHouse('modern')      // six rooms, 32 pieces, about a fifth of a second
-```
+> *"I furnished 6 rooms with 32 pieces — 2 dining rooms, 2 living rooms and 2 bedrooms."*
 
 Then walk through it.
+
+**Why this works, since John still has no `stage_house` tool (#56):** his only staging tool is
+`stage_room`, so the request arrives at `stageRoom` with the whole sentence as the style. Rather than
+furnish the one room you happen to be standing in and call that an answer, `staging.js` honours what
+was asked — *whole house*, *entire home*, *every room*, *all the rooms* — and does the house. "Stage
+this room like the rest of the house" is not that, and stages one room. `walkin.stageHouse('modern')`
+is still there if you'd rather press something.
 
 Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
 halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass

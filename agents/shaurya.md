@@ -29,7 +29,7 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ---
 
-## State of this lane (updated Sat 06:45 ET by the overnight agent)
+## State of this lane (updated Sat 07:40 ET by the overnight agent)
 
 **All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
 
@@ -71,6 +71,19 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
   stores the link as an index into the saved list and puts it back; `walkin.supportUnder(item)` works it out from
   the geometry for anything saved before that. Without it a restored television and its stand each read the other
   as a collision and neither can be picked up.
+- **`userData.on` is written when a piece is placed and almost nothing else looks at it.** That one fact
+  produced three separate bugs in one morning: a restored television and its stand reading each other as a
+  collision, a television left hanging in the air when its stand was deleted, and a television left behind
+  when its stand was dragged. If you add anything that moves, removes or reloads a piece, ask what happens
+  to whatever is standing on it. `carry()` and the dangling-support drop in `physics.js` cover the loop;
+  `layout.js` covers save and load.
+- **The previous position of a piece has to come from `st`, not from the item.** A mouse drag and the ⟳
+  button write `item.position` / `item.rotation` themselves, so inside the frame loop those already hold
+  the new value and any difference you compute against them is zero. `st.x`, `st.y`, `st.rot` still hold
+  last frame's. This cost twenty minutes: riders followed a hand drag perfectly and ignored the ⟳ button.
+- **"The nearest door" is not "the door you are pushing at".** La Mirada's 1.15 m doorway has a 0.77 m one
+  a metre and a half away, and `doorReason` quoting the nearest produced a confident, specific, wrong
+  sentence a second before the sofa went through the other door. Choose by direction, as `doorAhead` does.
 - **Big and unlabelled is not the same as living space.** `PLANS.living` refuses garages, basements, laundries and
   the rest unless the style string asks for a living room by name. A sofa in the garage is worse than an empty
   garage, because John says it out loud.
@@ -83,6 +96,13 @@ all"), one 2.50 m opening it just walks through, and **exactly one** — 1.15 m,
 verified at that door against `main`, king bed included. `walkin.doorsFor('sofa')` answers this for any house;
 314 Gale St has one usable door, the 1.50 m living/dining one at scan point 5. Run it before rehearsing anywhere
 new.
+
+### Run `await walkin.preflight()` before anything else
+
+Eight checks with the number behind each — the house, John, staging, whether this house even has a door the
+sofa beat works at, physics, the wallpaper tiles, the hand hooks, the frame rate. It saves the room first and
+puts it back. It is also the fastest way to find out whether a change broke something: 8/8 on La Mirada
+standing in the living room.
 
 ### Measured, so nobody has to guess
 

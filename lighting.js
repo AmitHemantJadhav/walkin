@@ -16,7 +16,7 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 const cache = new Map();               // pano url -> light description
 
 /** local (pano) direction -> model direction, the same matrix app.js builds for the sphere shader. */
-function localToModel(pano, cal) {
+export function localToModel(pano, cal) {
   const q = new THREE.Quaternion();
   if (pano.rot && cal.qMode) {
     q.set(pano.rot[0], pano.rot[1], pano.rot[2], pano.rot[3]).normalize();

@@ -1,0 +1,376 @@
+// S8 — furniture that has weight and can't walk through walls.
+//
+// Not a physics engine: a constraint layer. Whatever moves a piece - the mouse drag in app.js, a hand
+// in hands.js, stageRoom, the agent - sets its position as usual, and every frame this module takes that
+// as a *target* and moves the piece there under collision. So a sofa pushed at a wall stops at the wall,
+// a sofa carried at a doorway narrower than it won't go through until you turn it, and letting go while
+// moving lets it slide and settle on friction.
+//
+// Why not Rapier, which the issue asked for: everything our furniture does happens in plan. Pieces stay
+// upright, never stack and never topple, so the whole problem is an oriented rectangle sliding among wall
+// segments - about 200 lines against geometry fit.js already has, instead of a 2 MB wasm download that we
+// would also have to vendor (#40) and that can jitter a staged room. The API below is exactly the one the
+// issue specified, so if we do want a real solver later it swaps underneath without touching the callers.
+//
+// Units: metres, Z up. walkin.physics.enabled = false, or ?physics=off, turns it all off.
+import { FURNITURE } from './furniture.js';
+import { footprint, overlaps } from './fit.js';
+
+// kg. Only the ratios matter: they set how much a piece lags behind your hand and how far it slides.
+const MASS = {
+  sofa: 60, armchair: 28, queen: 55, king: 65, table: 25, desk: 22, chair: 7, nightstand: 12,
+  sidetable: 9, coffeetable: 16, tvstand: 20, tv: 12, bookcase: 35, floorlamp: 6,
+  rug: 4, ruground: 4, plant: 8, plantsmall: 1.5, plantfern: 1.5, plantsucculent: 1.5,
+  cactus: 3, cactustall: 5,
+};
+const DEFAULT_MASS = 15;
+// Telling a placement from a push. Distance alone isn't enough: hold a sofa against a wall and the hand
+// keeps going, so the gap grows past any threshold and the piece would teleport through the wall. A
+// placement is a jump that happens when nothing was pushing the piece a moment ago.
+const TELEPORT = 0.5;          // metres
+const SETTLED = 300;           // ms since the last push before a jump counts as a placement
+const MAX_LAG = 0.3;           // how far a piece may fall behind the hand while it is moving freely
+const SKIN = 0.012;            // shrink the footprint slightly so a piece doesn't stick to a wall it touches
+const FRICTION = 0.6;          // floor friction, as a deceleration of mu * g
+const G = 9.81;
+const STOP = 0.06;             // below this speed a sliding piece is parked
+const MAX_V = 6;               // m/s, so a wild hand can't fling a sofa across the house
+const MAX_STEP = 0.6;          // metres a piece may travel in one frame, however far the hand has run off
+
+const mass = (kind) => MASS[kind] || DEFAULT_MASS;
+// how long a piece takes to catch up with your hand: a plant is immediate, a sofa drags
+const lagOf = (kind) => 0.02 + mass(kind) / 420;
+
+const state = new Map();       // item -> { x, y, rot, vx, vy, still, sliding }
+let segCache = null;           // { floor, segs: [{poly, a, b}], doors: [{x, y, width, a, b}] }
+
+const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, lastHit: null };
+
+export const physics = {
+  enabled: true,
+  MASS,
+  stats,
+  grab, moveTarget, release, shove,
+  segments: () => (segCache ? segCache.segs.length : 0),
+  /** What would be in the way if this piece stood at (x, y, rot)? For debugging and for the Debug overlay. */
+  probe(item, x, y, rot) {
+    const walls = wallsOf(item.userData.floor);
+    const hit = blockedBy(fp(item, x, y, rot === undefined ? item.rotation.z : rot), item, walls);
+    return { hit: hit ? hit.kind : null, segs: walls.segs.length,
+      dir: hit && hit.dir ? hit.dir.map((v) => +v.toFixed(3)) : null,
+      seg: hit && hit.seg ? hit.seg.poly.map((q) => q.map((v) => +v.toFixed(2))) : null };
+  },
+  get bodies() { return state.size; },
+};
+
+// ------------------------------------------------------------------ the walls, as things to bump into
+/** Wall segments for a floor with the doorways left open, plus the doorways themselves. */
+function wallsOf(floorId) {
+  if (segCache && segCache.floor === floorId) return segCache;
+  const w = window.walkin;
+  const f = (w.house.floors || []).find((x) => x.id === floorId) || (w.house.floors || [])[0];
+  const segs = [], doors = [];
+  for (const wall of (f && f.walls) || []) {
+    if (wall.type !== 'wall') continue;
+    const ax = wall.a[0], ay = wall.a[1];
+    const len = Math.hypot(wall.b[0] - ax, wall.b[1] - ay);
+    if (len < 0.1) continue;
+    const dx = (wall.b[0] - ax) / len, dy = (wall.b[1] - ay) / len;
+    const th = Math.max(0.06, wall.thickness || 0.12);
+    // everything we own is shorter than a door head, so a doorway is simply a gap
+    const gaps = (wall.openings || [])
+      .filter((o) => o && o.at != null && (o.bottom || 0) < 0.3 && (o.type !== 'window'))
+      .map((o) => {
+        const half = (o.width || 0.9) / 2, c = o.at * len;
+        doors.push({ x: ax + dx * c, y: ay + dy * c, width: o.width || 0.9, dx, dy });
+        return [Math.max(0, c - half), Math.min(len, c + half)];
+      })
+      .sort((p, q) => p[0] - q[0]);
+    let cursor = 0;
+    const pieces = [];
+    for (const [g0, g1] of gaps) {
+      if (g0 > cursor + 0.02) pieces.push([cursor, g0]);
+      cursor = Math.max(cursor, g1);
+    }
+    if (cursor < len - 0.02) pieces.push([cursor, len]);
+    for (const [s0, s1] of pieces) {
+      const nx = -dy * (th / 2), ny = dx * (th / 2);
+      segs.push({
+        poly: [[ax + dx * s0 + nx, ay + dy * s0 + ny], [ax + dx * s1 + nx, ay + dy * s1 + ny],
+          [ax + dx * s1 - nx, ay + dy * s1 - ny], [ax + dx * s0 - nx, ay + dy * s0 - ny]],
+        dir: [dx, dy],
+      });
+    }
+  }
+  segCache = { floor: floorId, segs, doors };
+  return segCache;
+}
+
+/** The pieces a given item can bump into (not itself, not rugs, not things standing on something). */
+function neighbours(item) {
+  const w = window.walkin;
+  return w.furniture.children.filter((o) => o !== item && o.userData.kind
+    && !(FURNITURE[o.userData.kind] || {}).flat && !(o.userData || {}).on
+    && o.userData.floor === item.userData.floor);
+}
+
+/** Is this footprint clear of walls and of other pieces? Returns null, or what it hit. */
+function blockedBy(poly, item, walls) {
+  for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
+  for (const o of neighbours(item)) {
+    const p = footprint(o.userData.kind, o.position.x, o.position.y, o.rotation.z, -SKIN);
+    if (overlaps(poly, p)) return { kind: 'piece', item: o };
+  }
+  return null;
+}
+
+const fp = (item, x, y, rot) => footprint(item.userData.kind, x, y, rot, -SKIN);
+
+/**
+ * Move a piece from where it is towards (tx, ty, trot), stopping at whatever is in the way and sliding
+ * along it. The move is swept in sub-steps: testing only the destination lets a fast piece tunnel clean
+ * through a wall, which is exactly what happened the first time - a sofa held against a wall while the
+ * hand kept going built up a 2.3 m step and reappeared in the next room.
+ * Returns what it hit, or null.
+ */
+function step(item, st, tx, ty, trot, walls) {
+  let hit = null;
+
+  if (trot !== st.rot) {                                  // turning on the spot: only if it has room
+    if (!blockedBy(fp(item, st.x, st.y, trot), item, walls)) st.rot = trot;
+    else hit = { kind: 'rotate' };
+  }
+
+  let dx = tx - st.x, dy = ty - st.y;
+  let dist = Math.hypot(dx, dy);
+  if (dist < 1e-5) return hit;
+  if (dist > MAX_STEP) { dx *= MAX_STEP / dist; dy *= MAX_STEP / dist; dist = MAX_STEP; }
+
+  const spec = FURNITURE[item.userData.kind];
+  const sub = Math.max(0.03, Math.min(spec.w, spec.d) * 0.3);   // never step more than a third of the piece
+  const n = Math.max(1, Math.ceil(dist / sub));
+
+  /** Walk along (ax, ay) in n sub-steps, stopping before the first one that is blocked. */
+  function sweep(ax, ay, steps) {
+    const sx = ax / steps, sy = ay / steps;
+    let moved = 0, blocked = null;
+    for (let i = 0; i < steps; i++) {
+      const b = blockedBy(fp(item, st.x + sx, st.y + sy, st.rot), item, walls);
+      if (b) { blocked = b; break; }
+      st.x += sx;
+      st.y += sy;
+      moved++;
+    }
+    return { moved, blocked };
+  }
+
+  const first = sweep(dx, dy, n);
+  if (!first.blocked) return hit;
+  hit = first.blocked;
+
+  // slide what is left of the move along whatever stopped it
+  const left = 1 - first.moved / n;
+  if (left > 0.01 && first.blocked.kind === 'wall') {
+    const [ux, uy] = first.blocked.dir;
+    const along = (dx * ux + dy * uy) * left;
+    if (Math.abs(along) > 1e-4) sweep(ux * along, uy * along, Math.max(1, Math.ceil(Math.abs(along) / sub)));
+  }
+  return hit;
+}
+
+/**
+ * Why a doorway is refusing a piece. The number that matters is how wide the piece is *as you are holding
+ * it* - its footprint measured across the doorway - not its narrowest side, which is what it would be if
+ * you turned it. That difference is the whole beat: "turn it and it goes through".
+ */
+function doorReason(item, st, walls) {
+  const spec = FURNITURE[item.userData.kind];
+  let best = null;
+  for (const d of walls.doors) {
+    const dist = Math.hypot(d.x - st.x, d.y - st.y);
+    if (dist < 1.4 && (!best || dist < best.dist)) best = { d, dist };
+  }
+  if (!best) return null;
+  const { d } = best;
+  // the footprint's extent along the wall the door is in
+  const c = Math.cos(st.rot), sn = Math.sin(st.rot);
+  const across = Math.abs((spec.w / 2) * (d.dx * c + d.dy * sn))
+    + Math.abs((spec.d / 2) * (-d.dx * sn + d.dy * c));
+  const width = across * 2;
+  if (width <= d.width - 0.02) return null;                 // it isn't the door's fault
+  const narrow = Math.min(spec.w, spec.d);
+  const name = spec.name.toLowerCase();
+  return {
+    door: +d.width.toFixed(2), across: +width.toFixed(2),
+    turnable: narrow <= d.width - 0.02,
+    text: `the ${name} is ${width.toFixed(2)} m across the way you're holding it and that door is `
+      + `${d.width.toFixed(2)} m`
+      + (narrow <= d.width - 0.02 ? ` — turn it and it goes through` : ` — it won't fit through at all`),
+  };
+}
+
+let lastBlocked = 0;
+function sayBlocked(item, info) {
+  const now = performance.now();
+  if (now - lastBlocked < 1200) return;                   // one message per beat, not per frame
+  lastBlocked = now;
+  const detail = { item, kind: item.userData.kind, ...info };
+  window.dispatchEvent(new CustomEvent('walkin:blocked', { detail }));
+  if (window.walkin) window.walkin.lastBlocked = detail;
+}
+
+// ------------------------------------------------------------------ the API the hands use (A2)
+const hands = new Map();        // handId -> { item, target, yaw }
+
+/** Attach a piece to a hand. The piece follows with the lag its mass gives it. */
+export function grab(item, handId = 'hand', worldPoint = null) {
+  if (!item || !item.userData.kind) return false;
+  hands.set(handId, { item, target: worldPoint ? [worldPoint[0], worldPoint[1]] : [item.position.x, item.position.y],
+    yaw: item.rotation.z });
+  const st = ensure(item);
+  st.sliding = false;
+  return true;
+}
+
+/** Where the hand is now. */
+export function moveTarget(handId, point, yaw) {
+  const h = hands.get(handId);
+  if (!h || !point) return false;
+  h.target = [point[0], point[1]];
+  if (typeof yaw === 'number') h.yaw = yaw;
+  return true;
+}
+
+/** Let go, with the hand's velocity: the piece slides and stops on friction. */
+export function release(handId, velocity) {
+  const h = hands.get(handId);
+  if (!h) return false;
+  const st = ensure(h.item);
+  if (velocity) {
+    const v = Math.min(MAX_V, Math.hypot(velocity[0], velocity[1]));
+    const n = Math.hypot(velocity[0], velocity[1]) || 1;
+    st.vx = (velocity[0] / n) * v;
+    st.vy = (velocity[1] / n) * v;
+    st.sliding = v > STOP;
+  }
+  hands.delete(handId);
+  return true;
+}
+
+/** An open palm pushes whatever it touches. */
+export function shove(point, velocity, radius = 0.35) {
+  const w = window.walkin;
+  if (!w || !physics.enabled) return 0;
+  let n = 0;
+  const speed = Math.min(MAX_V, Math.hypot(velocity[0], velocity[1]));
+  for (const o of w.furniture.children) {
+    if (!o.userData.kind || (FURNITURE[o.userData.kind] || {}).flat) continue;
+    const d = Math.hypot(o.position.x - point[0], o.position.y - point[1]);
+    if (d > radius + Math.max(FURNITURE[o.userData.kind].w, FURNITURE[o.userData.kind].d) / 2) continue;
+    const st = ensure(o);
+    const push = (speed * 12) / mass(o.userData.kind);    // a light chair skates, a sofa barely shifts
+    const len = Math.hypot(velocity[0], velocity[1]) || 1;
+    st.vx += (velocity[0] / len) * push;
+    st.vy += (velocity[1] / len) * push;
+    st.sliding = Math.hypot(st.vx, st.vy) > STOP;
+    n++;
+  }
+  return n;
+}
+
+function ensure(item) {
+  let st = state.get(item);
+  if (!st) {
+    st = { x: item.position.x, y: item.position.y, rot: item.rotation.z, vx: 0, vy: 0, still: 0, sliding: false };
+    state.set(item, st);
+  }
+  return st;
+}
+
+// ------------------------------------------------------------------ the frame
+let lastT = performance.now();
+function frame() {
+  requestAnimationFrame(frame);
+  const w = window.walkin;
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
+  if (!w || !w.furniture || !physics.enabled) return;
+  stats.frames++;
+
+  const live = new Set();
+  for (const item of w.furniture.children) {
+    if (!item.userData.kind) continue;
+    live.add(item);
+    const spec = FURNITURE[item.userData.kind];
+    const st = ensure(item);
+    if (spec.flat || item.userData.on) {                  // rugs and things on tables don't collide
+      st.x = item.position.x; st.y = item.position.y; st.rot = item.rotation.z;
+      continue;
+    }
+    const walls = wallsOf(item.userData.floor);
+
+    // whatever moved the piece this frame (mouse, hand, agent) is the target
+    const held = [...hands.values()].find((h) => h.item === item);
+    let tx = held ? held.target[0] : item.position.x;
+    let ty = held ? held.target[1] : item.position.y;
+    let trot = held && typeof held.yaw === 'number' ? held.yaw : item.rotation.z;
+
+    const jump = Math.hypot(tx - st.x, ty - st.y);
+    const pushing = now - (st.pushT || 0) < SETTLED;
+    if (jump > TELEPORT && !pushing) {                    // a placement, not a push: take it as given
+      stats.teleports++;
+      st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;
+      item.position.x = st.x; item.position.y = st.y; item.rotation.z = st.rot;
+      continue;
+    }
+
+    if (jump > 1e-4 || trot !== st.rot) {
+      st.pushT = now;
+      // heavier pieces lag further behind the hand, but never by more than MAX_LAG
+      let k = 1 - Math.exp(-dt / lagOf(item.userData.kind));
+      if (jump * (1 - k) > MAX_LAG) k = 1 - MAX_LAG / jump;
+      const nx = st.x + (tx - st.x) * k, ny = st.y + (ty - st.y) * k;
+      const before = [st.x, st.y];
+      const hit = step(item, st, nx, ny, trot, walls);
+      stats.moved++;
+      if (hit) { stats.blocked++; stats.lastHit = hit.kind; }
+      st.vx = (st.x - before[0]) / dt;
+      st.vy = (st.y - before[1]) / dt;
+      st.sliding = false;
+      if (hit && hit.kind === 'wall') {
+        const door = doorReason(item, st, walls);
+        if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
+      }
+    } else if (st.sliding) {
+      const v = Math.hypot(st.vx, st.vy);
+      if (v < STOP) { st.sliding = false; st.vx = st.vy = 0; } else {
+        const drop = Math.min(v, FRICTION * G * dt);      // friction takes the speed off
+        const s = (v - drop) / v;
+        st.vx *= s; st.vy *= s;
+        const hit = step(item, st, st.x + st.vx * dt, st.y + st.vy * dt, st.rot, walls);
+        if (hit) { st.vx *= 0.3; st.vy *= 0.3; }          // bumping something kills most of the speed
+      }
+    }
+    item.position.x = st.x;
+    item.position.y = st.y;
+    item.rotation.z = st.rot;
+  }
+  for (const item of state.keys()) if (!live.has(item)) state.delete(item);
+}
+
+(function start(tries = 0) {
+  if (!window.walkin) {
+    if (tries < 600) return setTimeout(() => start(tries + 1), 50);
+    return;
+  }
+  if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
+  window.walkin.physics = physics;
+  // the wall list is per floor and cheap, but drop it when the house or floor changes
+  let lastFloor = null;
+  setInterval(() => {
+    const f = window.walkin.current && window.walkin.current.floor;
+    if (f !== lastFloor) { lastFloor = f; segCache = null; }
+  }, 1000);
+  frame();
+})();

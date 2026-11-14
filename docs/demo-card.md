@@ -19,7 +19,10 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 
 ### Beat 5, in order
 
-1. **Move the coffee table out of the way first** — one grab, it's light. A sofa can't pass through it.
+1. **Run beat 5 before beat 2** and skip the problem. Scan point 37 is the **front porch**, so
+   **⋯ → + Add → Sofa** drops it 1.5 m from the **front door** with nothing in the way — and *"will it fit
+   through the front door"* is the better line anyway. After beat 2 it takes three drags (coffee table,
+   armchair, tv stand) or the sofa travels 24 cm and stops.
 2. Stand at **scan point 37**. The doorway you want is the **1.15 m** one, 0.47 m away.
 3. Carry the sofa at it **broadside**. It stops dead, John says it, and the same sentence appears
    under the room card:
@@ -35,7 +38,8 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 - **Only one doorway works for beat 5.** 19 of La Mirada's 22 are too narrow for a sofa even turned.
 - **Go in square.** About **10 cm** off the centre line still goes through — not symmetric, so don't lean
   on it. By 16 cm it squares up to the gap and **stops in it**: back off half a metre and go again.
-- **Move the coffee table first.**
+- **Clear three pieces first, not one** — coffee table, armchair *and* tv stand. With all seven staged the
+  sofa travels 24 cm and stops. Simplest: **do beat 5 before beat 2**, in the empty room.
 - **Don't stand at scan point 38 or 16** — the scan gives those rooms no outline, so staging refuses.
 - **`&layout=none`** or last night's furniture comes back.
 - **Paint walls in the Empty view**, not "As scanned".

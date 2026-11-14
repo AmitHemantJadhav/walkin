@@ -437,16 +437,33 @@ function frame() {
     const spec = FURNITURE[item.userData.kind];
     const st = ensure(item);
     if (spec.flat || item.userData.on) {                  // rugs and things on tables don't collide
-      st.x = item.position.x; st.y = item.position.y; st.rot = item.rotation.z;
+      st.x = st.tx = item.position.x; st.y = st.ty = item.position.y; st.rot = st.trot = item.rotation.z;
+      st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
       continue;
     }
     const walls = wallsOf(item.userData.floor);
 
-    // whatever moved the piece this frame (mouse, hand, agent) is the target
+    // Whatever moved the piece this frame - mouse, hand, agent - is the target. It has to be remembered
+    // rather than re-read, because this loop writes the constrained position back to the item: re-reading
+    // it would make the target equal the current position the moment the user stops moving, and a piece
+    // lagging behind by its mass would simply stay there. A mouse drag left a sofa 30 cm short of the drop.
     const held = [...hands.values()].find((h) => h.item === item);
-    let tx = held ? held.target[0] : item.position.x;
-    let ty = held ? held.target[1] : item.position.y;
-    let trot = held && typeof held.yaw === 'number' ? held.yaw : item.rotation.z;
+    const movedOutside = st.wroteX === undefined
+      || Math.abs(item.position.x - st.wroteX) > 1e-6 || Math.abs(item.position.y - st.wroteY) > 1e-6;
+    if (held) {
+      st.tx = held.target[0];
+      st.ty = held.target[1];
+      if (typeof held.yaw === 'number') st.trot = held.yaw;
+    } else if (movedOutside) {
+      st.tx = item.position.x;
+      st.ty = item.position.y;
+    }
+    if (!held && Math.abs(item.rotation.z - (st.wroteRot === undefined ? item.rotation.z : st.wroteRot)) > 1e-6) {
+      st.trot = item.rotation.z;
+    }
+    if (st.tx === undefined) { st.tx = item.position.x; st.ty = item.position.y; }
+    if (st.trot === undefined) st.trot = item.rotation.z;
+    const tx = st.tx, ty = st.ty, trot = st.trot;
 
     const jump = Math.hypot(tx - st.x, ty - st.y);
     const pushing = !!held || now - (st.pushT || 0) < SETTLED || now - (st.blockT || 0) < HOLD_BLOCK;
@@ -454,6 +471,7 @@ function frame() {
       stats.teleports++;
       st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;
       item.position.x = st.x; item.position.y = st.y; item.rotation.z = st.rot;
+      st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
       continue;
     }
 
@@ -492,6 +510,7 @@ function frame() {
     item.position.x = st.x;
     item.position.y = st.y;
     item.rotation.z = st.rot;
+    st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
   }
   for (const item of state.keys()) if (!live.has(item)) state.delete(item);
 }

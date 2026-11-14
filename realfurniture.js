@@ -433,7 +433,8 @@ function checkSwap() {
 const meshMade = [];
 
 /** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
-export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {}) {
+export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
+                                     maxFold = null, maxCaptured = null } = {}) {
   const w = window.walkin;
   if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
   const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
@@ -453,10 +454,18 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   // is most of the time.
   const maxAniso = w.renderer ? Math.min(8, w.renderer.capabilities.getMaxAnisotropy()) : 1;
   const placed = [];
+  const skipped = [];
   for (const p of meta.pieces) {
     if (placed.length >= max) break;
     if (Math.max(p.size[0], p.size[1]) < minSize) continue;
     if (room && p.room !== room) continue;
+    // Photogrammetry reconstructs a bed well and a dining chair badly, and tools/meshquality.py
+    // measures the difference: fold is the mean angle between neighbouring triangles (a flat table
+    // top should be near zero), captured is surface area over hull area (above 1 means the surface
+    // wanders past its own hull, which is noise, not detail). Neither is on by default - a caller
+    // that wants only the pieces that hold up asks for it.
+    if (maxFold != null && p.fold != null && p.fold > maxFold) { skipped.push(p.i); continue; }
+    if (maxCaptured != null && p.captured != null && p.captured > maxCaptured) { skipped.push(p.i); continue; }
 
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, p.pos[0], p.pos[1] / 4), 3));
@@ -513,6 +522,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   }
   return { ok: true, ms: Math.round(performance.now() - t0), built: meta.built,
            available: meta.pieces.length, placed: placed.length, items: placed,
+           skipped: skipped.length, skippedPieces: skipped,
            say: placed.length ? `I put back ${placed.length} pieces of the home's own furniture, as real objects.`
                               : 'I found no mesh furniture to place.' };
 }

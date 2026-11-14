@@ -16,6 +16,7 @@ import time
 import numpy as np
 
 import meshclose
+import meshquality
 
 
 def load_obj(path, want_uv=False):
@@ -444,6 +445,9 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         # turning it shows the inside of its front. Cap the holes on their own planes and give the new
         # faces a UV that lands on a typical pixel of this piece's atlas, so a capped sofa reads as
         # that sofa's fabric. Caps are new vertices: nothing already built here is disturbed.
+        # Measure the piece as scanned, before any caps go on: a flat lid meeting a crumpled rim
+        # reads as a huge fold angle and would hide the thing we actually want to know.
+        captured, fold, _, _ = meshquality.measure(pos.astype(np.float64), idx)
         if close_holes:
             cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx)
         else:
@@ -475,6 +479,8 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
             capped=int(len(cap_idx)) if close_holes else 0,
+            fold=(None if fold != fold else round(float(fold), 1)),
+            captured=(None if captured != captured else round(float(captured), 3)),
             closed=bool(close_holes and open_after == 0),
             pos=[offset, len(parts[0])],
             uv=[offset + len(parts[0]), len(parts[1])],

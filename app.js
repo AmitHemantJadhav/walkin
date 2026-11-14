@@ -115,19 +115,41 @@ const panoMat = new THREE.ShaderMaterial({
   uniforms: {
     texA: { value: null }, texB: { value: null }, invA: { value: new THREE.Matrix3() }, invB: { value: new THREE.Matrix3() },
     mixAB: { value: 0 },
+    // A6: depth-aware move. depthAB = 1 while walking between two panos on the same floor: camP is the moving camera,
+    // posA / posB where the two photos were taken, proxy = (floor z, ceiling z, wall radius, -), mid = centre of the walls.
+    depthAB: { value: 0 }, camP: { value: new THREE.Vector3() }, posA: { value: new THREE.Vector3() },
+    posB: { value: new THREE.Vector3() }, proxy: { value: new THREE.Vector4(0, 2.6, 3, 0) }, mid: { value: new THREE.Vector2() },
   },
   vertexShader: `varying vec3 vDir;
     void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB; varying vec3 vDir;
+  fragmentShader: `uniform sampler2D texA, texB; uniform mat3 invA, invB; uniform float mixAB, depthAB;
+    uniform vec3 camP, posA, posB; uniform vec4 proxy; uniform vec2 mid; varying vec3 vDir;
     vec4 pano(sampler2D t, mat3 inv, vec3 d) {
       vec3 l = normalize(inv * d);
       float lon = atan(l.x, l.z);
       float lat = asin(clamp(l.y, -1.0, 1.0));
       return texture2D(t, vec2(lon / 6.28318530718 + 0.5, 0.5 + lat / 3.14159265359));
     }
+    // Where this pixel's ray from the moving camera meets a simple room: floor and ceiling planes and a round wall
+    // around the path. Each photo is then read from where it was taken, so the floor slides under you like walking.
+    vec3 hitRoom(vec3 d) {
+      float t = 1000.0;
+      if (d.z < -0.0001) t = (proxy.x - camP.z) / d.z;
+      else if (d.z > 0.0001) t = (proxy.y - camP.z) / d.z;
+      vec2 o = camP.xy - mid, h = d.xy;
+      float a = dot(h, h);
+      if (a > 0.000001) {
+        float b = dot(h, o), c = dot(o, o) - proxy.z * proxy.z;
+        t = min(t, (-b + sqrt(max(b * b - a * c, 0.0))) / a);
+      }
+      return camP + d * max(t, 0.01);
+    }
     void main() {
-      vec4 a = pano(texA, invA, vDir);
-      gl_FragColor = mixAB > 0.001 ? mix(a, pano(texB, invB, vDir), mixAB) : a;
+      vec3 dA = vDir, dB = vDir;
+      if (depthAB > 0.5) { vec3 P = hitRoom(normalize(vDir)); dA = P - posA; dB = P - posB; }
+      if (mixAB <= 0.001) gl_FragColor = pano(texA, invA, dA);
+      else if (mixAB >= 0.999) gl_FragColor = pano(texB, invB, dB);
+      else gl_FragColor = mix(pano(texA, invA, dA), pano(texB, invB, dB), mixAB);
     }`,
   side: THREE.BackSide, depthTest: false, depthWrite: false,
 });
@@ -301,18 +323,33 @@ async function moveTo(p, instant) {
     panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
     camPos.copy(to);
   } else {
-    panoMat.uniforms.texB.value = tex; panoMat.uniforms.invB.value = inv;
-    const t0 = performance.now(), dur = 550;
+    const U = panoMat.uniforms;
+    U.texB.value = tex; U.invB.value = inv;
+    // A6: on the same floor, walk through a simple room (floor, ceiling, walls around the path) instead of
+    // cross-fading two flat photos, and take longer for a longer step. Stairs and ?a6=off keep the plain fade.
+    const dist = from.distanceTo(to), deep = !floorChanged && dist > 0.05 && dist < 10 && params.get('a6') !== 'off';
+    if (deep) {
+      const room = roomAt(to.x, to.y, p.floor) || roomAt(from.x, from.y, p.floor), d = room?.dims || {};
+      const ceil = Math.max(p.floorZ + (d.height > 1.8 && d.height < 6 ? d.height : 2.6), Math.max(from.z, to.z) + 0.3);
+      const wallR = THREE.MathUtils.clamp(d.width && d.depth ? Math.hypot(d.width, d.depth) / 2 : 3, 2.5, 8);
+      U.proxy.value.set(p.floorZ, ceil, Math.max(wallR, dist / 2 + 1), 0);
+      U.mid.value.set((from.x + to.x) / 2, (from.y + to.y) / 2);
+      U.posA.value.copy(from); U.posB.value.copy(to); U.camP.value.copy(from);
+    }
+    U.depthAB.value = deep ? 1 : 0;
+    const t0 = performance.now(), dur = THREE.MathUtils.clamp(420 + 160 * dist, 550, 950);
     await new Promise((done) => {
       const step = () => {
         const k = Math.min(1, (performance.now() - t0) / dur), e = k * k * (3 - 2 * k);
         camPos.lerpVectors(from, to, e);
-        panoMat.uniforms.mixAB.value = e;
+        U.camP.value.copy(camPos);
+        // with the photos lined up on the room, hold each one longer and swap in the middle (less ghosting)
+        U.mixAB.value = deep ? THREE.MathUtils.smoothstep(e, 0.2, 0.8) : e;
         if (k < 1) requestAnimationFrame(step); else done();
       };
       step();
     });
-    panoMat.uniforms.texA.value = tex; panoMat.uniforms.invA.value = inv; panoMat.uniforms.mixAB.value = 0;
+    U.texA.value = tex; U.invA.value = inv; U.mixAB.value = 0; U.depthAB.value = 0;
   }
   current = p;
   buildPucks(p);

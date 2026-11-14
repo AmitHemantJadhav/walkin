@@ -2,6 +2,20 @@
 // Three questions the room-outline check in app.js can't answer: does it stick out of the room, does it
 // overlap something else, and can you still walk round it and through the doors.
 // Pure geometry on top of window.walkin (house, rooms, walls with `openings`). Units: metres.
+//
+// What it checks, so nobody has to claim more than it does:
+//   - the piece is inside the room's own polygon
+//   - it doesn't overlap another piece AT THE SAME HEIGHT (a lamp on a table is fine)
+//   - it doesn't stand in the DOOR_CLEAR metres of floor in front of a doorway
+//   - a WALK-wide walkway still reaches everywhere: rasterise at CELL, erode by a WALK disc, flood fill
+//
+// What it does not know about:
+//   - WINDOWS. `doorways()` filters the API's openings down to doors, so nothing stops a sofa across one.
+//   - CEILING HEIGHT. A 1.8 m bookcase under a sloped ceiling passes.
+//   - A DOOR'S SWING ARC. We keep a rectangle clear in front of a doorway, not the quarter-circle.
+//   - ANYTHING THE WALL GRAPH DOESN'T HAVE - a chimney breast, a radiator, a bay window. The graph is
+//     idealised; the defurnished scan mesh knows about those and this never looks at it. Same root as
+//     #61, where the wallpaper clips on a 314 Gale St wall: both want the mesh, not the graph.
 import { FURNITURE } from './furniture.js';
 
 export const WALK = 0.6;        // a walkway has to be this wide

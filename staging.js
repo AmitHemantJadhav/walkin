@@ -214,8 +214,11 @@ const PLANS = {
     for (const e of opposite) {
       const stand = P.tryPlace('tvstand', alongWall(e, 'tvstand', [0]), { optional: true });
       if (stand) {
-        const on = besideOf(stand, 0);
-        P.tryPlace('tv', [{ x: on.x, y: on.y, rot: stand.rotation.z }], { optional: true });
+        // The television goes ON the stand, so it needs placeObject, which knows about surfaces.
+        // tryPlace puts everything on the floor, and a floor-level TV inside a floor-level stand
+        // fails its own overlap check - which is why no staged room has ever had a television.
+        const tv = placeObject('tv', stand.position.x, stand.position.y, { rot: stand.rotation.z });
+        if (tv.fits) P.placed.push({ kind: 'tv', name: FURNITURE.tv.name, x: tv.x, y: tv.y });
         break;
       }
     }

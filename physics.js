@@ -63,6 +63,10 @@ export const physics = {
   segments: () => (segCache ? segCache.segs.length : 0),
   /** What would be in the way if this piece stood at (x, y, rot)? For debugging and for the Debug overlay. */
   probe(item, x, y, rot) {
+    // the frame loop ignores rugs and anything standing on something else, so the probe must too,
+    // or a television on a stand against a wall reads as stuck in it
+    const spec = FURNITURE[item.userData.kind] || {};
+    if (spec.flat || (item.userData || {}).on) return { hit: null, skipped: true };
     const walls = wallsOf(item.userData.floor);
     const hit = blockedBy(fp(item, x, y, rot === undefined ? item.rotation.z : rot), item, walls);
     return { hit: hit ? hit.kind : null, segs: walls.segs.length,

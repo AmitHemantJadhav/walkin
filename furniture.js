@@ -27,24 +27,46 @@ const M = {
   sheet: mat(0xf3f0ea), pillow: mat(0xe7e2d8), top: mat(0x6e4a33, 0.5),
 };
 
+// ------------------------------------------------------------------ contact shadow
+// A soft blob under each piece, not a shadow map: phones can't afford one, and the photo already
+// contains the room's real shadows. lighting.js sets the strength from how bright the pano is.
 let shadowTex;
-function shadow(w, d) {
+const shadows = new Set();
+let shadowOpacity = 0.45;
+
+function shadowTexture() {
   if (!shadowTex) {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
     const g = c.getContext('2d');
-    const grad = g.createRadialGradient(64, 64, 10, 64, 64, 64);
-    grad.addColorStop(0, 'rgba(0,0,0,0.55)');
+    const grad = g.createRadialGradient(64, 64, 8, 64, 64, 64);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.45, 'rgba(0,0,0,0.62)');   // dark right under the piece, then falls off fast
     grad.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = grad;
     g.fillRect(0, 0, 128, 128);
     shadowTex = new THREE.CanvasTexture(c);
   }
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.25, d * 1.25),
-    new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false }));
+  return shadowTex;
+}
+
+function shadow(w, d) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w * 1.22, d * 1.22),
+    new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: shadowOpacity }));
   m.position.z = 0.002;
   m.renderOrder = 1;
+  shadows.add(m);
   return m;
+}
+
+/** How dark the contact shadows are (lighting.js calls this with the room's brightness). */
+export function setContactShadow({ opacity }) {
+  if (opacity == null) return;
+  shadowOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
+  for (const m of shadows) {
+    if (m.parent) m.material.opacity = shadowOpacity;
+    else shadows.delete(m);                       // the piece was deleted
+  }
 }
 
 function box(group, w, d, h, x, y, z, material) {

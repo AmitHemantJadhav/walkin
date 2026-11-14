@@ -4,6 +4,30 @@ Team: **Amit** (AmitHemantJadhav), **Shaurya** (Shaurya-b167), **Shruti**.
 HackPrinceton Fall 2026 · CoStar Group track "Inside and Out: AI for the Built World".
 Prizes $1,500 / $500 / $250 + fast-track interviews. Judges are CoStar / Matterport engineers.
 
+## 0. THE GOAL — every agent works toward this, every cycle, until it is true
+Pick work that moves the **first unchecked item you own** (or, if yours are done, one a teammate handed off or
+that unblocks them). An item is done only when it is **merged on `main`** and you wrote *how you tested it* in the PR.
+Tick items in your "Agent status" comment ("Goal 1: A3 ✅ #12, S1 ✅ #9 …").
+
+**Goal 1 — by Sat 12:00 ET, on `main`, working through the tunnel on an iPhone:**
+- [ ] A7 `scripts/live.sh` serves `main` through the tunnel (the link in the "Agent status" issue works)
+- [ ] A1 Headset mode with hands on runs ≥45 fps (show an fps readout in Debug)
+- [ ] A2 Pinch-grab, carry, two-hand twist and pinch-to-teleport work reliably (smoothing, forgiving radius)
+- [ ] A3 `walkin.pointer` returns `{type: wall|floor|furniture, wall, point, room}`
+- [ ] S1 Real GLB furniture for all 6 catalog items at their real sizes
+- [ ] S2 Lighting and contact shadows that match the photo
+- [ ] R1 `/api/gemini` and `/api/tts` relays in `serve.py` (keys stay on the server)
+- [ ] R6 House picker + 2 more prepped demo houses
+
+**Goal 2 — by Sat 20:00 ET (then freeze):** in the headset, by voice, end to end:
+- [ ] "Put red-brick wallpaper on this wall" → generated tile on the wall the user points at, consistent from every scan point (A4, R2, R4)
+- [ ] "Stage this as a modern bedroom" → a full set that fits, doorways clear (S3, S4)
+- [ ] "What plant should go here?" → spoken answer + the plant placed (S5, R3, R5)
+- [ ] Radial menu in the headset (A5); layouts survive a reload (S6)
+- [ ] A full 3-minute demo run from `main` without a crash; R7 Devpost/pitch draft by 18:00
+
+**After Goal 2:** no new features. Fix bugs, harden, make the demo smooth. Never break `main`.
+
 ## 1. What we are building
 **Homes.com gets you into the house. Walk-In lets you live in it.**
 Put your phone in a headset, walk a real home that Matterport scanned and digitally emptied, and change it by

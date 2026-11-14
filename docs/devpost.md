@@ -2,6 +2,10 @@
 
 > Draft. Lines marked **[check]** describe features that are planned for Saturday and must be confirmed on `main`
 > before submitting. Cut anything that isn't working in the demo.
+>
+> **Numbers:** only quote figures from [`pitch-facts.md`](pitch-facts.md) (each one says how it was measured,
+> and "Things to say carefully" lists what hasn't been tested yet). The beats and fallbacks are in
+> [`demo-card.md`](demo-card.md).
 
 **Tagline:** Homes.com gets you into the house. Walk-In lets you live in it.
 

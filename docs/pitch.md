@@ -2,6 +2,10 @@
 
 > Draft. Judges are CoStar / Matterport engineers: lead with the demo, name their open problem, be exact about
 > what the data gave us. Cut any beat whose feature isn't working on `main`.
+>
+> **Numbers:** only quote figures from [`pitch-facts.md`](pitch-facts.md) (each one says how it was measured,
+> and "Things to say carefully" lists what hasn't been tested yet). The beats and fallbacks are in
+> [`demo-card.md`](demo-card.md).
 
 **One line:** Homes.com gets you into the house. Walk-In lets you live in it.
 

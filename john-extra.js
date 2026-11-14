@@ -2,7 +2,7 @@
 //   add_object(description)  "add a fireplace / piano / crib / treadmill": the closest catalog piece, or an honest,
 //                            real-size procedural stand-in (labelled) when the catalog has nothing like it
 //   undo                     "undo that", "go back", "never mind": reverts John's last change (one spoken request)
-//   estimate_cost            "how much would this cost": typical retail ranges for what is placed, clearly rough
+//   estimate_cost            "how much would this cost": the total for what is placed (suggest.js prices), clearly rough
 // Registered through window.walkinTools like furniture-tools.js and decor.js, so live.js gets them too.
 // Talks to the viewer only through window.walkin. Units are metres, z up; a piece's front faces -y.
 import * as THREE from 'three';
@@ -466,31 +466,26 @@ function guardAll() {
   for (const n of MUTATING) if (typeof R[n] === 'function') R[n] = guard(n, R[n]);
 }
 
-// ------------------------------------------------------------------ rough cost (typical US retail, mid-range)
-const PRICE = { sofa: [700, 2000], armchair: [300, 900], queen: [600, 1800], king: [800, 2500], table: [400, 1500], desk: [200, 800],
-  chair: [80, 300], nightstand: [100, 400], sidetable: [80, 300], coffeetable: [150, 600], tvstand: [200, 700], tv: [400, 1200],
-  bookcase: [120, 500], floorlamp: [60, 250], rug: [150, 700], ruground: [120, 500], plant: [40, 150], plantsmall: [15, 50],
-  plantfern: [15, 50], plantsucculent: [10, 40], cactus: [20, 80], cactustall: [40, 150], piano: [3000, 8000],
-  grandpiano: [15000, 60000], fireplace: [2000, 8000], crib: [200, 700], bunkbed: [400, 1200], dresser: [300, 1200],
-  wardrobe: [300, 1500], sectional: [1500, 4000], christmastree: [80, 300], cattree: [60, 200], treadmill: [700, 2500],
-  floormirror: [100, 400], tablelamp: [40, 150] };
+// ------------------------------------------------------------------ rough cost of what is placed
+// Catalog pieces use suggest.js's prices (the same numbers as the price tags); stand-ins use these mid-market guesses.
+const STAND_IN_USD = { piano: 5000, grandpiano: 30000, fireplace: 4500, crib: 399, bunkbed: 699, dresser: 699, wardrobe: 799,
+  sectional: 2499, christmastree: 149, cattree: 99, treadmill: 1299, floormirror: 199, tablelamp: 79 };
 function estimateCost() {
-  const w = W(), lines = new Map();
-  let lo = 0, hi = 0, unknown = [];
+  const w = W(), byName = new Map(), notPriced = [];
+  let total = 0;
   for (const o of pieces()) {
-    const spec = w.FURNITURE[o.userData.kind] || {};
-    const p = PRICE[o.userData.kind] || PRICE[spec.proc];
-    if (!p) { unknown.push(lower(spec.name || o.userData.kind)); continue; }
-    lo += p[0]; hi += p[1];
-    const n = lower(spec.name || o.userData.kind);
-    lines.set(n, (lines.get(n) || 0) + 1);
+    const spec = w.FURNITURE[o.userData.kind] || {}, n = lower(spec.name || o.userData.kind);
+    const p = (w.suggest && w.suggest.priceOf(o.userData.kind)) || STAND_IN_USD[spec.proc];
+    if (!p) { notPriced.push(n); continue; }
+    total += p;
+    byName.set(n, (byName.get(n) || 0) + 1);
   }
-  const paints = (w.wallMaterials ? w.wallMaterials().length : 0);
-  if (paints) { lo += paints * 150; hi += paints * 600; }
-  const round = (v) => Math.round(v / 50) * 50;
-  return { ok: true, pieces: Object.fromEntries(lines), painted_walls: paints, low_usd: round(lo), high_usd: round(hi),
-    not_priced: unknown, basis: 'typical US retail ranges for mid-range pieces, plus about $150-600 per wall painted or papered by a pro; a rough guide, not a quote',
-    house_price: 'the listing price is in describe_house (listing.price), if the user meant the house' };
+  const walls = w.wallMaterials ? w.wallMaterials().length : 0;
+  const paint = walls * 350;                           // a pro painting one wall, roughly
+  return { ok: true, pieces: Object.fromEntries(byName), furniture_usd: total, painted_walls: walls, paint_usd: paint,
+    total_usd: total + paint, not_priced: notPriced,
+    price_note: (w.suggest && w.suggest.PRICE_NOTE) || 'illustrative mid-market retail estimates, not quotes',
+    house_price: 'the listing price is listing.price in describe_house, if the user meant the house' };
 }
 
 // ------------------------------------------------------------------ paint a whole room (or every room)
@@ -572,7 +567,7 @@ const declarations = [
     description: 'Undo John\'s last change (the last request: pieces added, moved, turned, recoloured or removed, wall paint, pictures, staging). Call again to go further back. Use for "undo", "undo that", "go back", "never mind", "put it back how it was", "I preferred it before".',
     parameters: { type: 'object', properties: {} } },
   { name: 'estimate_cost',
-    description: 'A rough cost range (USD, typical retail) for the furniture placed and the walls painted, for "how much would this cost / all this furniture". Not the house price: that is listing.price in describe_house.',
+    description: 'A rough total (USD, mid-market retail estimates) for the furniture placed and the walls painted, for "how much would this cost / all this furniture". Not the house price: that is listing.price in describe_house.',
     parameters: { type: 'object', properties: {} } },
 ];
 
@@ -580,7 +575,7 @@ const rules = `- Anything not in the catalog (fireplace, piano, crib, bunk bed, 
 - "Swap / replace the X with a Y": remove_furniture the X, then add_object (or add_furniture) the Y, in the same turn.
 - "Paint everything / the whole room / all the walls X" -> paint_room (room "all" for the whole house). One wall -> set_wall_material.
 - "Undo", "undo that", "go back", "never mind", "put it back" -> undo (not remove_decor). Say what it reverted from its result.
-- "How much would this cost" (furniture, the makeover) -> estimate_cost and give the range as rough; "what's the price of the house" -> listing.price from describe_house.
+- "How much would this cost" (furniture, the makeover) -> estimate_cost and say "about" the total; "what's the price of the house" -> listing.price from describe_house.
 - Things no tool can do (switch lights on/off, knock down or move walls, add windows or doors, build outside, change the floor plan): say so in one short sentence and offer the closest thing you CAN do (a floor lamp or somewhere dimmer for lights; an open-plan furniture layout or the room size for walls; a mirror or plants for brightness).
 - Vague wishes are design requests, not questions: "make it feel bigger / brighter" = paint_room in a light warm white plus add_object "floor mirror" (and fewer, lower pieces if it is crowded); "make it romantic / like a hotel" = decorate_room with that theme; "set up an office in X" = stage_room with style "home office" in X. Act, then say what you did.`;
 

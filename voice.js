@@ -196,8 +196,17 @@ async function finishCommand() {
   showCaption(command, '', 'user');
   setMode('thinking');
   stopRec();                                 // the agent's filler and reply will be spoken now
+  const live = await liveConversation(command);  // a real two-way conversation (live.js) when there's a Gemini key
+  if (live === true) return;
+  // Live is off or just failed (quota, network): the classic pipeline answers, so voice never goes silent
+  await classicAnswer((live && live.text) || command);
+}
+
+/** Speech-to-text already done: typed agent (Gemini, else OpenRouter) -> spoken reply, then back to listening. */
+async function classicAnswer(command) {
   const w = window.walkin;
-  if (await liveConversation(command)) return;   // a real two-way conversation (live.js) when there's a Gemini key
+  setMode('thinking');
+  stopRec();
   try {
     if (!w || !w.agent) throw new Error('agent not ready');
     await w.agent.ask(command);             // speaks a filler at once, then the reply (captioned via walkin:speech)
@@ -228,20 +237,37 @@ async function liveAvailable() {
   return liveOk;
 }
 
-/** Hand the mic to Gemini Live for a back-and-forth; resolves true when it ran, false to use the old pipeline. */
+/**
+ * Hand the mic to Gemini Live for a back-and-forth. Resolves true when it ran to the end; false (Live off, or it
+ * could not connect) or { text } (it died mid-turn: these words still need an answer) to use the classic pipeline.
+ */
 async function liveConversation(firstText) {
   if (!(await liveAvailable())) return false;
   setMode('live');
   startPulse && startPulse();
-  const ran = await window.walkin.live.start({ firstText });
-  if (ran === false) {                         // couldn't connect (token, network): fall back for this command
+  let ran;
+  try { ran = await window.walkin.live.start({ firstText }); } catch (e) { ran = false; }
+  if (ran === false || (ran && ran.fallback)) {   // no connection, quota, or the socket died: the backup voice answers
     setMode('thinking');
-    liveOk = false;                            // don't retry on every command: try Live again in a minute
+    liveOk = false;                            // don't retry on every command (live.js also keeps itself off a while)
     setTimeout(() => { liveOk = null; }, 60000);
-    return false;
+    await backupNotice();
+    const text = ran && ran.text ? ran.text : firstText;
+    if (!text) { backToListening(); return true; }   // nothing left unanswered: listen the classic way
+    return { text };
   }
   backToListening();
   return true;
+}
+
+// Said once per page: the backup voice sounds different, so the user knows why.
+let noticed = false;
+async function backupNotice() {
+  if (noticed) return;
+  noticed = true;
+  showHint('Live voice is unavailable: using the backup voice.', 4000);
+  const a = window.walkin && window.walkin.agent;
+  if (a && a.speak) { try { await a.speak('Switching to my backup voice.'); } catch (e) { /* no audio */ } }
 }
 
 addEventListener('walkin:live', (e) => {
@@ -297,9 +323,13 @@ function talkNow() {
   unlock();
   if (state.mode === 'live') return window.walkin.live.stop('talk');   // Talk again = hang up
   if (state.mode === 'thinking') return;
-  liveAvailable().then((ok) => {               // push to talk: straight into a live conversation if we can
-    if (ok) { stopRec(); liveConversation(''); return; }
-    talkClassic();
+  liveAvailable().then(async (ok) => {         // push to talk: straight into a live conversation if we can
+    if (!ok) return talkClassic();
+    stopRec();
+    const r = await liveConversation('');
+    if (r === true) return;
+    if (r && r.text) return classicAnswer(r.text);
+    talkClassic();                             // Live failed before anything was said: listen the classic way
   });
 }
 

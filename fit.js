@@ -316,6 +316,8 @@ export function checkRoom(room) {
     lastKey = key;
     lastRun = now;
     const r = fitReport({ item: sel });
-    extra.textContent = [...r.reasons, ...r.warnings].join(' · ');
+    // app.js already says "outside a room" on the line above; don't say it twice
+    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
+    extra.textContent = say.join(' · ');
   })();
 })();

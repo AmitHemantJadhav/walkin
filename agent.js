@@ -762,7 +762,9 @@ function buildUI() {
   buildUI();
   loadListing(window.walkin.house.model);
   window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere, isSpeaking: () => talking > 0,
-    isBusy: () => busy };
+    isBusy: () => busy, runTool,
+    // for live.js (Gemini Live voice): the same instructions and tools as the typed pipeline
+    system: SYSTEM, declarations: TOOLS[0].functionDeclarations };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 

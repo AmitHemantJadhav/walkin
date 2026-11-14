@@ -40,10 +40,10 @@ Open `…/?m=zvKHR9DHNjJ`, **stand inside a room**, and run one line in the cons
 await walkin.preflight()
 ```
 
-Eight ✓ or ✗ with the number behind each: the house, whether John answers, staging, whether this
-house even has a door the sofa beat works at, physics, the wallpaper fallback tiles, the hand hooks
-and the frame rate. It saves whatever is in the room first and puts it back, so it costs you nothing
-to run it twice. On La Mirada, standing in the living room, all eight should be green.
+Nine ✓ or ✗ with the number behind each: the house, whether John answers, staging, whether this
+house even has a door the sofa beat works at, physics, the wallpaper fallback tiles, whether a layout
+from an earlier session is waiting to come back, the hand hooks and the frame rate. It saves whatever is in the room first and puts it back, so it costs you nothing
+to run it twice. On La Mirada, standing in the living room with `&layout=none`, all nine are green.
 
 Two it cannot check for you: **the camera** (press ✋ and look at your own hand) and **the headset**.
 
@@ -262,7 +262,7 @@ walkin.stageHouse('modern')                 // the whole house: 6 rooms, 32 piec
 walkin.setStyle('cozy')                     // restyle everything already placed
 walkin.clearLayout()
 walkin.doorsFor('sofa')                     // every doorway, and whether a sofa gets through it
-await walkin.preflight()                    // all of the above as eight pass/fail lines
+await walkin.preflight()                    // all of the above as nine pass/fail lines
 ```
 
 `doorsFor` is how the door above was found, and it is the first thing to run on a house you have not

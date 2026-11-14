@@ -106,6 +106,17 @@ export async function preflight({ quiet = false } = {}) {
     } catch (e) { rows.push(no('wallpaper', `models/textures/ unreachable: ${e.message || e}`)); }
   }
 
+  // ---------------------------------------------------------------- what is already stored for this house
+  // The single most likely surprise on stage is last night's furniture reappearing, because layouts
+  // persist on purpose. Say so before it happens rather than after.
+  const stored = typeof w.storedLayout === 'function' ? w.storedLayout(w.house.model) : null;
+  const n0 = stored && stored.items ? stored.items.length : 0;
+  const w0 = stored && stored.walls ? stored.walls.length : 0;
+  rows.push(!n0 && !w0
+    ? ok('stored layout', 'nothing stored for this house: it opens empty')
+    : no('stored layout', `${n0} piece${n0 === 1 ? '' : 's'}${w0 ? ` and ${w0} wall${w0 === 1 ? '' : 's'}` : ''} `
+      + 'from an earlier session will come back on a reload — open with &layout=none to start clean'));
+
   // ---------------------------------------------------------------- hands and the headset
   rows.push(typeof w.hands === 'object' || typeof w.handRay === 'function'
     ? ok('hands', 'hooks are there — this does NOT prove the camera works, press ✋ and look')

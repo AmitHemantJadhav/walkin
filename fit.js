@@ -45,6 +45,22 @@ export function overlaps(a, b) {
 
 const itemPoly = (it, pad = 0) => footprint(it.userData.kind, it.position.x, it.position.y, it.rotation.z, pad);
 const isFlat = (kind) => !!(FURNITURE[kind] || {}).flat;     // a rug is walked on, not round
+// placeObject records what a small object was stood on; neither of the pair should fault the other
+const standsOn = (a, b) => !!(a && b && ((a.userData || {}).on === b.uuid || (b.userData || {}).on === a.uuid));
+const isOnSomething = (o) => !!(o.userData || {}).on;
+
+/** The z span a piece occupies, from its own origin (its footprint sits on whatever holds it up). */
+function zSpan(o) {
+  const h = (FURNITURE[o.userData.kind] || {}).h || 0;
+  return [o.position.z, o.position.z + h];
+}
+
+/** Two pieces at different heights - a lamp on a table and a chair under it - can share a footprint. */
+function sameHeight(a, b, floorZ) {
+  const [a0, a1] = a.isObject3D ? zSpan(a) : [floorZ, floorZ + ((FURNITURE[a.kind] || {}).h || 0)];
+  const [b0, b1] = zSpan(b);
+  return a1 > b0 + 0.02 && b1 > a0 + 0.02;
+}
 
 // ------------------------------------------------------------------ doors
 /**
@@ -177,6 +193,7 @@ const lower = (s) => (s || 'room').toLowerCase();
  * `warnings` are things worth saying but not worth refusing.
  *   { ok, room, reasons: ['blocks the bedroom door'], warnings: [...] }
  * Pass `{ item }` for a piece already in the scene, or `{ kind, x, y, rot, floor }` for a trial position.
+ * `{ on: <the piece it stands on> }` and `{ ignore: [...] }` both drop pieces from the overlap test.
  */
 export function fitReport(opts = {}) {
   const w = window.walkin;
@@ -184,14 +201,18 @@ export function fitReport(opts = {}) {
   const kind = opts.kind || (item && item.userData.kind);
   if (!w || !kind) return { ok: false, reasons: ['nothing selected'], warnings: [], room: null };
 
+  if (!item && (opts.x == null || opts.y == null)) {
+    return { ok: false, room: null, reasons: ['no position given'], warnings: [] };
+  }
   const x = opts.x != null ? opts.x : item.position.x;
   const y = opts.y != null ? opts.y : item.position.y;
-  const rot = opts.rot != null ? opts.rot : item.rotation.z;
+  const rot = opts.rot != null ? opts.rot : (item ? item.rotation.z : 0);   // a trial position may omit it
   const floor = opts.floor !== undefined ? opts.floor : (item && item.userData.floor);
   const spec = FURNITURE[kind];
   const reasons = [], warnings = [];
 
   const room = w.roomAt(x, y, floor);
+  const zFloor = item ? item.position.z : ((w.current && w.current.floorZ) || 0);
   const poly = footprint(kind, x, y, rot);
   if (!room) {
     return { ok: false, room: null, reasons: ['not inside a room'], warnings: [] };
@@ -208,12 +229,15 @@ export function fitReport(opts = {}) {
   for (const o of others) {
     const ok = o.userData.kind;
     if (isFlat(kind) || isFlat(ok)) continue;                     // you can stand furniture on a rug
+    if (standsOn(item, o) || (opts.on && opts.on === o)) continue; // a lamp on a table isn't in the table's way
+    if (!sameHeight(item || { kind }, o, zFloor)) continue;        // nor is anything else at a different height
     if (overlaps(poly, itemPoly(o))) reasons.push(`overlaps the ${lower(FURNITURE[ok].name)}`);
   }
 
   // doorways and walkways, with this piece in place
   if (!isFlat(kind)) {
-    const blockers = others.filter((o) => !isFlat(o.userData.kind) && w.roomAt(o.position.x, o.position.y, floor) === room)
+    const blockers = others.filter((o) => !isFlat(o.userData.kind) && !isOnSomething(o)
+      && w.roomAt(o.position.x, o.position.y, floor) === room)
       .map((o) => itemPoly(o));
     blockers.push(poly);
     const g = walkGrid(room, blockers);
@@ -245,10 +269,10 @@ export function fitReport(opts = {}) {
 
 /** One line a person (or the agent) can read. */
 export function fitLine(report) {
+  const all = [...(report.reasons || []), ...(report.warnings || [])];
+  if (all.length) return all.join(', ');
   if (!report.room) return "it isn't in a room";
-  const all = [...report.reasons, ...report.warnings];
-  if (!all.length) return `fits in the ${lower(report.room.label)}`;
-  return all.join(', ');
+  return `fits in the ${lower(report.room.label)}`;
 }
 
 /** Every piece in a room, checked. Used by staging.js and by the agent. */
@@ -292,6 +316,8 @@ export function checkRoom(room) {
     lastKey = key;
     lastRun = now;
     const r = fitReport({ item: sel });
-    extra.textContent = [...r.reasons, ...r.warnings].join(' · ');
+    // app.js already says "outside a room" on the line above; don't say it twice
+    const say = [...r.reasons, ...r.warnings].filter((t) => t !== 'not inside a room');
+    extra.textContent = say.join(' · ');
   })();
 })();

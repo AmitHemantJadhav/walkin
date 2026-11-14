@@ -1,0 +1,154 @@
+/* R8 — floating glass UI (Vision Pro style). Loaded after the inline styles in index.html, so it wins on equal
+   specificity. Element ids and handlers bound by app.js are unchanged; only the look and grouping are. */
+
+:root {
+  --glass: rgba(30, 30, 34, 0.35);
+  --glass-strong: rgba(30, 30, 34, 0.55);
+  --glass-edge: rgba(255, 255, 255, 0.35);
+  --glass-hover: rgba(255, 255, 255, 0.16);
+  --glass-press: rgba(255, 255, 255, 0.24);
+  --glass-on: rgba(255, 255, 255, 0.88);
+  --on-fg: #16161a;
+  --fg: #f7f6f3;
+  --muted: rgba(247, 246, 243, 0.68);
+  --shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  --blur: blur(24px) saturate(160%);
+  --radius: 28px;
+  --gap: max(16px, env(safe-area-inset-bottom));
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+@media (prefers-color-scheme: light) {
+  :root { --glass: rgba(255, 255, 255, 0.14); --glass-strong: rgba(255, 255, 255, 0.24); }
+}
+
+html, body { font-family: system-ui, -apple-system, "SF Pro Text", "Inter", "Segoe UI", sans-serif; }
+body { -webkit-font-smoothing: antialiased; }
+
+/* ------------------------------------------------------------------ glass surfaces */
+.panel, .glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 1px solid transparent;
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--glass-edge);
+  color: var(--fg);
+}
+
+/* ------------------------------------------------------------------ buttons */
+.panel button, .glass button {
+  background: transparent;
+  color: var(--fg);
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font: 500 14px/1.1 system-ui, -apple-system, "SF Pro Text", sans-serif;
+  letter-spacing: .01em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color .2s var(--ease), color .2s var(--ease), transform .15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.panel button:hover, .glass button:hover { background: var(--glass-hover); }
+.panel button:active, .glass button:active { background: var(--glass-press); transform: scale(.96); }
+.panel button.on, .glass button.on { background: var(--glass-on); color: var(--on-fg); }
+.panel button:focus-visible, .glass button:focus-visible { outline: 2px solid var(--glass-edge); outline-offset: 2px; }
+
+/* ------------------------------------------------------------------ the dock */
+#bar.dock {
+  left: 50%;
+  bottom: var(--gap);
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  padding: 6px;
+  border-radius: var(--radius);
+  max-width: calc(100vw - 32px);
+  transition: opacity .3s var(--ease), transform .3s var(--ease);
+  z-index: 5;
+}
+#bar.dock.idle { opacity: .35; transform: translateX(-50%) scale(.94); }
+#bar.dock .dock-btn[aria-expanded="true"] { background: var(--glass-press); }
+
+/* ------------------------------------------------------------------ popovers above the dock */
+.pop {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--gap) + 66px);
+  transform: translateX(-50%) translateY(6px) scale(.98);
+  opacity: 0;
+  padding: 10px;
+  border-radius: 24px;
+  max-width: calc(100vw - 32px);
+  z-index: 6;
+  transition: opacity .22s var(--ease), transform .22s var(--ease);
+  pointer-events: none;
+}
+.pop[hidden] { display: block; visibility: hidden; }
+.pop.open { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); pointer-events: auto; visibility: visible; }
+.pop-title { font: 600 13px/1 system-ui, sans-serif; color: var(--muted); padding: 4px 8px 8px; letter-spacing: .02em; }
+.pop-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+#morePop .pop-grid { grid-template-columns: repeat(5, auto); }
+.pop-grid button { padding: 10px 12px; border-radius: 16px; font-size: 13.5px; text-align: center; }
+
+/* ------------------------------------------------------------------ info card (top left) */
+#info.panel {
+  top: max(16px, env(safe-area-inset-top));
+  left: 16px;
+  border-radius: 22px;
+  padding: 12px 16px;
+}
+#info h1 { font: 600 15px/1.2 system-ui, sans-serif; letter-spacing: .01em; }
+#info .sub { font: 500 12.5px/1.35 system-ui, sans-serif; color: var(--muted); margin-top: 2px; }
+#room { font: 600 14px/1.3 system-ui, sans-serif; margin-top: 8px; }
+#fit { font: 500 13px/1.35 system-ui, sans-serif; }
+#picker {
+  appearance: none; -webkit-appearance: none;
+  background: var(--glass-hover) !important; color: var(--fg) !important;
+  border: 0; border-radius: 999px !important; padding: 6px 12px !important; margin-top: 10px !important;
+  font: 500 12.5px/1.2 system-ui, sans-serif !important; max-width: 100%;
+}
+
+/* ------------------------------------------------------------------ agent panel (Ask / Talk), from agent.js */
+#agent.panel {
+  left: 16px;
+  bottom: var(--gap);
+  width: min(360px, calc(100vw - 32px));
+  border-radius: 24px;
+  padding: 12px;
+}
+#agent.panel #agentSay { font: 500 14px/1.4 system-ui, sans-serif; margin: 2px 4px 10px; }
+#agent.panel form { gap: 4px; align-items: center; }
+#agent.panel input {
+  background: var(--glass-hover); border-radius: 999px; padding: 9px 14px;
+  font: 500 14px/1.2 system-ui, sans-serif; color: var(--fg);
+}
+#agent.panel input::placeholder { color: var(--muted); }
+#agent.panel #agentPreview { border-radius: 16px; background: var(--glass-hover); }
+
+/* the debug readout and the camera preview follow the same shape */
+#debug.panel { border-radius: 18px; top: max(16px, env(safe-area-inset-top)); right: 16px; }
+#handcam { border-radius: 18px; box-shadow: var(--shadow); top: max(16px, env(safe-area-inset-top)); right: 16px; }
+#exitvr { border-radius: 999px; background: var(--glass); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+  box-shadow: var(--shadow), inset 0 0 0 1px var(--glass-edge); color: var(--fg); padding: 8px 14px; }
+
+/* ------------------------------------------------------------------ narrow screens (phones) */
+@media (max-width: 1200px) {
+  /* the Ask panel sits above the dock instead of beside it */
+  #agent.panel { left: 50%; transform: translateX(-50%); bottom: calc(var(--gap) + 66px); }
+  .pop { bottom: calc(var(--gap) + 66px); }
+  body.pop-open #agent.panel { opacity: 0; pointer-events: none; }
+}
+@media (max-width: 430px) {
+  #bar.dock .dock-btn { padding: 9px 10px; font-size: 13px; }
+  .pop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #morePop .pop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #info.panel { max-width: calc(100vw - 32px); }
+}
+
+/* ------------------------------------------------------------------ headset: no DOM UI (it can't render in stereo) */
+body.vr #bar, body.vr .pop, body.vr #agent, body.vr #info, body.vr #debug { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  #bar.dock, .pop, .panel button, .glass button { transition: none; }
+}

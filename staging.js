@@ -647,6 +647,9 @@ export function suggestPlant(opts = {}) {
   const pick = opts.kind || { bright: 'cactustall', medium: 'plant', low: 'plantfern' }[level];
   const why = { bright: 'it takes direct sun', medium: 'it does well in indirect light',
     low: 'it is happy out of the sun' }[level];
+  // The catalogue calls the big one "Plant", which makes the advice read "A plant - that spot is
+  // medium light", and answering "what plant should go here" with "a plant" is not an answer.
+  const CALLED = { plant: 'tall potted plant', plantsmall: 'small potted plant' };
 
   // "here" means the room you are standing in. The pointer is only trusted when it lands in that same
   // room: aiming through an open door would otherwise put the plant in the closet next door.
@@ -664,7 +667,7 @@ export function suggestPlant(opts = {}) {
   return {
     ok: true, kind: pick, name: placed.name, light: level, room: room || placed.room,
     on: placed.on, x: placed.x, y: placed.y,
-    say: `A ${lower(placed.name)} — that spot is ${level} light`
+    say: `A ${CALLED[pick] || lower(placed.name)} — that spot is ${level} light`
       + (near ? `, ${near.distance_m} m from the nearest window` : '')
       + `, and ${why}.`,
   };

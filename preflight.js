@@ -154,10 +154,36 @@ function print(rows) {
   if (bad) console.log('%cWhat to do about each one is in docs/demo-runbook.md.', 'color:#888');
 }
 
+/**
+ * The same nine lines, on the screen instead of in the console — because the demo device is a phone
+ * in a headset and a phone has no console. `?preflight` in the URL runs it once the house is up and
+ * shows the result; tap it to dismiss. Everything else about it is unchanged, including putting back
+ * whatever furniture was in the room.
+ */
+function panel(rows) {
+  const bad = rows.filter((r) => !r.ok).length;
+  const el = document.createElement('div');
+  el.id = 'preflightPanel';
+  el.className = 'panel';
+  el.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:20;'
+    + 'max-width:min(560px,calc(100vw - 32px));max-height:calc(100vh - 64px);overflow:auto;'
+    + 'padding:16px 18px;border-radius:22px;font:500 13px/1.45 system-ui,sans-serif;cursor:pointer';
+  el.innerHTML = `<div style="font-weight:600;margin-bottom:8px;color:${bad ? '#ff5a5f' : '#3ccf8e'}">`
+    + `Walk-In preflight — ${rows.length - bad}/${rows.length} ok</div>`
+    + rows.map((r) => `<div style="margin:3px 0"><span style="color:${r.ok ? '#3ccf8e' : '#ff5a5f'};`
+      + `font-weight:600">${r.ok ? '✓' : '✗'} ${r.name}</span> <span style="opacity:.8">${r.note}</span></div>`).join('')
+    + '<div style="margin-top:10px;opacity:.6">tap to dismiss</div>';
+  el.addEventListener('click', () => el.remove());
+  document.body.appendChild(el);
+}
+
 (function start(tries = 0) {
   if (!window.walkin) {
     if (tries < 600) return setTimeout(() => start(tries + 1), 50);
     return;
   }
   window.walkin.preflight = preflight;
+  if (new URLSearchParams(location.search).has('preflight')) {
+    setTimeout(() => preflight().then(panel).catch((e) => console.warn('preflight:', e)), 1200);
+  }
 })();

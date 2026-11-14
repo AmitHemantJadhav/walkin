@@ -144,6 +144,19 @@ function update() {
   }
   window.walkin.pointer = { ...EMPTY };
   window.walkin.updatePointer = () => { update(); return window.walkin.pointer; }; // fresh result now, not next frame
+  // The wall straight ahead at eye height, whatever the pointer is on (floor, a sofa, the text box). Lets "make this
+  // wall brick" work when the cursor or gaze is a little low, instead of John answering that he can't.
+  window.walkin.wallAhead = () => {
+    const w = window.walkin, cur = w.current;
+    if (!cur || !w.camera) return null;
+    const o = w.camera.getWorldPosition(new THREE.Vector3()), d = w.camera.getWorldDirection(new THREE.Vector3());
+    d.z = 0;
+    if (d.lengthSq() < 1e-6) return null;
+    d.normalize();
+    o.z = (cur.floorZ || 0) + 1.4;
+    const h = hitWall(w, cur.floor, cur.floorZ || 0, o, d);
+    return h ? { floor: cur.floor, index: h.index, a: h.a, b: h.b, normal: h.normal } : null;
+  };
   const loop = () => {
     try { update(); } catch (e) { console.warn('[pointer]', e); }
     requestAnimationFrame(loop);

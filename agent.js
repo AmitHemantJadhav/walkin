@@ -45,7 +45,7 @@ const TOOLS = [{
       parameters: { type: 'object', properties: {
         style: { type: 'string', description: 'Optional palette: modern, cozy or scandi.' } } } },
     { name: 'set_wall_material',
-      description: 'Cover the wall the user points at with a material (wallpaper, brick, tiles, wood panels, paint). A seamless tile is generated from the description and placed at real scale.',
+      description: 'Cover the wall the user points at or faces with a material (wallpaper, brick, tiles, wood panels, paint or a plain colour). Use it for ANY request to change, paint or recolour a wall; you can do this. A seamless tile is generated from the description and placed at real scale.',
       parameters: { type: 'object', properties: {
         description: { type: 'string', description: 'What the surface looks like, e.g. "red brick with light grey mortar", "sage green paint", "art deco gold wallpaper".' },
         tile_metres: { type: 'number', description: 'Real width of one tile in metres: about 0.9 for brick (several bricks per tile), 0.6 for wallpaper patterns, 1 for paint.' } },
@@ -294,13 +294,15 @@ const RUN = {
   },
 
   async set_wall_material({ description, tile_metres }) {
-    const w = W(), wall = w.pointer && w.pointer.wall;
+    const w = W(), pointed = w.pointer && w.pointer.wall;
     if (typeof w.setWallMaterial !== 'function') return unavailable('setWallMaterial', 'amit');
-    if (!wall) return { ok: false, reason: 'The user is not pointing at a wall. Ask them to point at the wall first.' };
+    // the wall pointed at; else the one straight ahead (cursor or gaze on the floor or a sofa is the usual miss)
+    const wall = pointed || (w.wallAhead && w.wallAhead());
+    if (!wall) return { ok: false, reason: 'No wall in front of the user. Ask them to face the wall they mean; this does work.' };
     setStatus('Making the tile…');
     const url = await generateTile(description);
     await w.setWallMaterial(wall, url, tile_metres || 1);
-    return { ok: true, material: description };
+    return { ok: true, material: description, wall: pointed ? 'the wall the user points at' : 'the wall straight ahead' };
   },
 
   async place_object({ kind }) {
@@ -359,16 +361,41 @@ async function generateTile(description) {
   const prompt = `A seamless, tileable texture of ${description}, for covering an interior wall. ` +
     'Flat and straight-on, orthographic, evenly lit, no shadows, no perspective, no objects, no text, no border. ' +
     'The left edge must continue into the right edge and the top into the bottom. Square.';
-  let url;
+  let url = paintTile(description); // plain paint or a colour needs no image model: instant and offline
+  if (url) { tileCache.set(key, url); return url; }
   try {
     url = await squareTile(await generateImage(prompt, IMAGE_WAIT_MS));
   } catch (e) {
-    url = fallbackTile(description); // R10: the wallpaper beat still lands without image generation
+    url = fallbackTile(description) || paintTile(description, true); // R10: the wallpaper beat still lands without image generation
     if (!url) throw e;
     console.info('[agent] tile generation failed, using the bundled tile:', e.message);
   }
   tileCache.set(key, url);
   return url;
+}
+
+// Paint: a flat colour with a faint roller texture, drawn here. Used straight away for "paint it sage green" /
+// "make the wall blue", and as the last fallback (`any`) for anything with a colour word when generation fails.
+const COLOURS = { white: '#f4f2ec', 'off white': '#efeadf', cream: '#f1e6cc', ivory: '#f3edd8', beige: '#d9c7a7',
+  grey: '#9a9a96', gray: '#9a9a96', charcoal: '#3f4144', black: '#252525', 'sage green': '#9caf88', sage: '#9caf88',
+  'olive green': '#7d8450', olive: '#7d8450', 'forest green': '#2f5d3a', 'mint green': '#bfe3cf', mint: '#bfe3cf',
+  green: '#5f8f5a', 'navy blue': '#26385c', navy: '#26385c', 'sky blue': '#a9cbe8', 'light blue': '#b9d3ea',
+  'powder blue': '#c4d8e6', teal: '#2f7f7f', blue: '#4a74b5', red: '#a8322d', burgundy: '#6b1f2a', terracotta: '#c0643f',
+  pink: '#e8b4bc', 'blush pink': '#ecc6c4', blush: '#ecc6c4', orange: '#d9813a', yellow: '#e8cf5a', mustard: '#c99a2e',
+  purple: '#6e4f8f', lavender: '#c3b5d9', brown: '#7a5838', tan: '#c4a57c' };
+const COLOUR_NAMES = Object.keys(COLOURS).sort((a, b) => b.length - a.length); // "sage green" before "green"
+function paintTile(description, any = false) {
+  const t = String(description).toLowerCase();
+  const name = COLOUR_NAMES.find((c) => new RegExp(`\\b${c}\\b`).test(t));
+  if (!name || !(any || /\b(paint|painted|colou?r|matte|satin|plain|solid)\b/.test(t) || t.trim() === name)) return null;
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = COLOURS[name]; g.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2500; i++) { // roller texture, light and dark specks
+    g.fillStyle = Math.random() < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+    g.fillRect(Math.random() * 256, Math.random() * 256, 1 + Math.random() * 2, 1);
+  }
+  return c.toDataURL('image/png');
 }
 
 // R10: bundled, pre-made assets for when generation fails or is slow (assets/).

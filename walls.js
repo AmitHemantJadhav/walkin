@@ -18,6 +18,13 @@ const TOP_GAP = 0.04;           // stop just below the ceiling, so the offset be
 // every wall back on it.
 const OFFSET = FIT.floor;
 const WALLFIT = new URLSearchParams(location.search).get('wallfit') !== 'off';
+// #91: the paper stands a few cm proud of the scanned face, so at a doorway or window edge you can see past
+// its free edge to the trim behind it (La Mirada wall #1's 2.5 m doorway: paper at 25 cm, face at 21-24 cm).
+// Fold the paper back at every opening edge by this much, like paper wrapped round a jamb. Wall ends meet
+// the next wall at an inside corner, where the neighbour's face already hides the end, so they get none.
+// `?wallreturn=off` (or `?wallfit=off`) leaves the edges open, as before.
+const RETURN = 0.045;
+const RETURNS = WALLFIT && new URLSearchParams(location.search).get('wallreturn') !== 'off';
 const LIGHT_U = 24, LIGHT_V = 16; // resolution of the luminance map sampled off the pano
 
 const group = new THREE.Group();
@@ -84,7 +91,46 @@ export function wallPanels(wall, height = WALL_H) {
     cursor = Math.max(cursor, h.u1);
   }
   if (cursor < len - 0.02) panels.push({ u0: cursor, u1: len, v0: 0, v1: height });
-  return { panels, len };
+  return { panels, len, holes };
+}
+
+/**
+ * #91: the strips that fold the paper back into each opening, `depth` deep, as [{ pos, uv, uv1 }] quads in
+ * the wall's local frame (u along, v up, z out of the paper; z < 0 is toward the wall). Each one faces
+ * into its opening and carries on the paper's texture round the edge. An edge gets one only where there is
+ * paper on its far side: not at a wall end, the floor or the top, and not where two openings run together.
+ */
+export function openingReturns(holes, len, height, depth) {
+  const inHole = (u, self) => holes.some((h) => h !== self && u > h.u0 && u < h.u1);
+  const out = [];
+  for (const h of holes) {
+    const { u0, u1, v0, v1 } = h, d = depth;
+    if (u0 > 0.02 && !inHole(u0 - 0.02, h)) {          // left jamb, paper at u < u0, faces +u
+      out.push({ pos: [[u0, v0, 0], [u0, v0, -d], [u0, v1, -d], [u0, v1, 0]], uv: [[u0, v0], [u0 + d, v0], [u0 + d, v1], [u0, v1]] });
+    }
+    if (u1 < len - 0.02 && !inHole(u1 + 0.02, h)) {    // right jamb, paper at u > u1, faces -u
+      out.push({ pos: [[u1, v0, -d], [u1, v0, 0], [u1, v1, 0], [u1, v1, -d]], uv: [[u1 - d, v0], [u1, v0], [u1, v1], [u1 - d, v1]] });
+    }
+    if (v1 < height - 0.02) {                          // head of a door or window, paper above, faces down
+      out.push({ pos: [[u0, v1, 0], [u0, v1, -d], [u1, v1, -d], [u1, v1, 0]], uv: [[u0, v1], [u0, v1 - d], [u1, v1 - d], [u1, v1]] });
+    }
+    if (v0 > 0.02) {                                   // window sill, paper below, faces up
+      out.push({ pos: [[u0, v0, -d], [u0, v0, 0], [u1, v0, 0], [u1, v0, -d]], uv: [[u0, v0 + d], [u0, v0], [u1, v0], [u1, v0 + d]] });
+    }
+  }
+  for (const q of out) q.uv1 = q.pos.map(([u, v]) => [u / len, v / height]);
+  return out;
+}
+
+/** One #91 return strip as geometry, the texture at real scale like the panels. */
+function returnGeometry(q, tile) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(q.pos.flat(), 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(q.uv.flat().map((x) => x / tile), 2));
+  g.setAttribute('uv1', new THREE.Float32BufferAttribute(q.uv1.flat(), 2));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  g.computeVertexNormals();
+  return g;
 }
 
 /** One rectangle of wall as geometry: uv repeats at real scale, uv1 spans the whole wall for the shading. */
@@ -232,7 +278,7 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
   const room = w.roomAt((rec.a[0] + rec.b[0]) / 2 + pnx * 0.3, (rec.a[1] + rec.b[1]) / 2 + pny * 0.3,
     w.current && w.current.floor);
   const height = paperHeight(room);
-  const { panels, len } = wallPanels(rec, height);
+  const { panels, len, holes } = wallPanels(rec, height);
   if (!panels.length) return { ok: false, why: 'that wall is all doorway' };
 
   const from = (wall.normal && [(rec.a[0] + rec.b[0]) / 2 + wall.normal[0], (rec.a[1] + rec.b[1]) / 2 + wall.normal[1]])
@@ -262,6 +308,14 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
     m.renderOrder = 2;                       // after the depth-only occluders, like furniture
     mesh.add(m);
   }
+  // #91: fold the paper back at the opening edges (never past the centre line)
+  const returns = RETURNS ? openingReturns(holes, len, height, Math.min(RETURN, fit.offset)) : [];
+  for (const q of returns) {
+    const m = new THREE.Mesh(returnGeometry(q, tile), material);
+    m.renderOrder = 2;
+    m.name = 'return';
+    mesh.add(m);
+  }
   // local (u, v, 0) -> world: u along the wall, v up, pushed out along the normal
   mesh.matrixAutoUpdate = false;
   mesh.matrix.set(
@@ -277,7 +331,7 @@ export async function setWallMaterial(wall, textureUrl, tileMetres = 1) {
   applied.set(keyOf({ floor: found.floor.id, index: wall.index, a: rec.a, b: rec.b }),
     { mesh, wall: { floor: found.floor.id, index: wall.index, a: rec.a, b: rec.b }, url: textureUrl, tile });
   return { ok: true, wall: { floor: found.floor.id, index: wall.index, a: rec.a, b: rec.b },
-    tileMetres: tile, panels: panels.length, length: +len.toFixed(2), height: +height.toFixed(2),
+    tileMetres: tile, panels: panels.length, returns: returns.length, length: +len.toFixed(2), height: +height.toFixed(2),
     area: +area.toFixed(1), room: room ? room.label : null,
     // #61: where the paper went and how much of the scanned face is still in front of it (cut: 0..1, null = not measured)
     fit: { offset: fit.offset, how: fit.how, samples: fit.samples || 0, cut: fit.cut ?? null },

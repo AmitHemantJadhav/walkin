@@ -65,7 +65,7 @@ const walls = await load('walls.js');
 const off = await load('walls.js', '?wallfit=off');
 const H = 2.7 - 0.04;   // walls.js height with roomAt() unknown
 
-let fails = 0, faces = 0, moved = 0, maxDiff = 0;
+let fails = 0, faces = 0, moved = 0, maxDiff = 0, returns = 0;
 const bad = (what) => { fails++; if (fails <= 8) console.log('FAIL', what); };
 const t0 = Date.now();
 for (const [index, w] of f.walls.entries()) {
@@ -86,8 +86,23 @@ for (const [index, w] of f.walls.entries()) {
     // the quad really is there: its origin is a + normal * offset
     const m = scene.getObjectByName('wall-materials').children.at(-1).matrix.elements;
     if (Math.hypot(m[12] - (w.a[0] + normal[0] * r.fit.offset), m[13] - (w.a[1] + normal[1] * r.fit.offset)) > 1e-4) bad(`#${index}: quad not at the offset`);
+    // #91: every return strip faces into an opening (a step along its normal lands in a hole) and stays
+    // between the paper and the centre line
+    const { holes } = walls.wallPanels(w, r.height);
+    const rets = scene.getObjectByName('wall-materials').children.at(-1).children.filter((c) => c.name === 'return');
+    if (rets.length !== r.returns) bad(`#${index}: ${rets.length} return meshes, result says ${r.returns}`);
+    returns += rets.length;
+    for (const c of rets) {
+      const p = c.geometry.attributes.position, nn = c.geometry.attributes.normal;
+      let cu = 0, cv = 0, zmin = 0;
+      for (let i = 0; i < 4; i++) { cu += p.getX(i) / 4; cv += p.getY(i) / 4; zmin = Math.min(zmin, p.getZ(i)); }
+      const su = cu + nn.getX(0) * 0.03, sv = cv + nn.getY(0) * 0.03;
+      if (!holes.some((h) => su > h.u0 && su < h.u1 && sv > h.v0 && sv < h.v1)) bad(`#${index}: a return faces away from its opening`);
+      if (Math.abs(nn.getZ(0)) > 1e-6 || zmin < -Math.min(0.045, r.fit.offset) - 1e-6) bad(`#${index}: return off the paper edge (z ${zmin})`);
+    }
     const o = await off.setWallMaterial({ floor: f.id, index, normal }, 'tile.png', 1);
     if (o.fit.offset !== 0.08 || o.fit.how !== 'fixed') bad(`#${index}: ?wallfit=off gave ${JSON.stringify(o.fit)}`);
+    if (o.returns !== 0) bad(`#${index}: ?wallfit=off still folds the paper back (${o.returns})`);
   }
 }
 // the thickest wall, with the mesh and then without it (the wall-box occluders: stand just in front of the box face)
@@ -96,7 +111,7 @@ if (thick >= 0) {
   for (const s of [1, -1]) {
     const w = f.walls[thick], len = Math.hypot(w.b[0] - w.a[0], w.b[1] - w.a[1]);
     const r = await walls.setWallMaterial({ floor: f.id, index: thick, normal: [-(w.b[1] - w.a[1]) / len * s, (w.b[0] - w.a[0]) / len * s] }, 'tile.png', 1);
-    if (r.ok) console.log(`     wall #${thick} side ${s > 0 ? '+' : '-'} with the mesh: ${JSON.stringify(r.fit)}`);
+    if (r.ok) console.log(`     wall #${thick} side ${s > 0 ? '+' : '-'} with the mesh: ${JSON.stringify(r.fit)}, ${r.returns} returns`);
   }
 }
 // #61 step 3: walkin.wallFit() from every scan point, with app.js's roomAt (point in room polygon)
@@ -143,5 +158,6 @@ if (thick >= 0) {
 }
 walls.clearAllWallMaterials(); off.clearAllWallMaterials();
 console.log(`${fails ? 'FAIL' : 'ok  '} ${house.name}: ${faces} faces papered through walls.js, ${moved} moved out past 8 cm, `
+  + `${returns} returns at opening edges, `
   + `max difference from wallfit.js ${(maxDiff * 1000).toFixed(2)} mm, ${Date.now() - t0} ms`);
 process.exit(fails ? 1 : 0);

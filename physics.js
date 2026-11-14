@@ -57,6 +57,7 @@ const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, last
 
 export const physics = {
   enabled: true,
+  jambSlide: true,              // #55: slide along a doorway's jamb, not into it (?jambslide=off)
   MASS,
   stats,
   grab, moveTarget, release, shove,
@@ -272,8 +273,19 @@ function step(item, st, tx, ty, trot, walls) {
     ux = -ny2 / len2; uy = nx2 / len2;                    // perpendicular to the line between centres
   }
   const along = (dx * ux + dy * uy) * left;
+  const sx0 = st.x, sy0 = st.y;
   if (Math.abs(along) > 1e-4) {
     sweep(ux * along, uy * along, Math.max(1, Math.ceil(Math.abs(along) / sub)));
+  }
+  // #55: a wall segment has ends as well as sides, and at a doorway the ends are the jambs. A piece inside
+  // the opening that touches a jamb was slid "along the wall", which is straight into the jamb, so the
+  // forward half of the move was thrown away and the sofa sat pinned 11 cm off the centre line, half
+  // through the door, for as long as the hand held it. If sliding along the wall got nowhere, slide along
+  // the jamb face instead: through the doorway. ?jambslide=off restores the old behaviour.
+  if (physics.jambSlide && first.blocked.kind === 'wall' && Math.hypot(st.x - sx0, st.y - sy0) < 1e-3) {
+    const jx = -uy, jy = ux;
+    const thru = (dx * jx + dy * jy) * left;
+    if (Math.abs(thru) > 1e-4) sweep(jx * thru, jy * thru, Math.max(1, Math.ceil(Math.abs(thru) / sub)));
   }
   return hit;
 }
@@ -627,6 +639,7 @@ function frame() {
     return;
   }
   if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
+  if (new URLSearchParams(location.search).get('jambslide') === 'off') physics.jambSlide = false;
   window.walkin.physics = physics;
   // the wall list is per floor and cheap, but drop it when the house or floor changes
   let lastFloor = null;

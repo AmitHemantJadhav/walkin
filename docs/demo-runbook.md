@@ -6,6 +6,25 @@ something doesn't work yet it says so.
 Three minutes, in this order. The point of the order is that each beat answers a question the
 previous one raises.
 
+## The six things that will bite you
+
+Each one is explained where it belongs below; this is the list to read on the walk to the stage.
+
+1. **Beat 5 only works at one doorway** — the 1.15 m one off the living room, **scan point 37**. At
+   nineteen of La Mirada's twenty-two the sofa doesn't fit turned either, and John says so.
+2. **Go in square.** ±8 cm of the centre line goes through; past that the sofa lines up with the
+   doorway and stops in it. Back off half a metre, square up, go again.
+3. **Move the coffee table first.** Beat 2 puts one right in front of the sofa, and a sofa can't pass
+   through a coffee table: dragged straight at the door it travels 24 cm and stops.
+4. **Beat 5 is silent unless #54 is merged.** `physics.js` computes the sentence; the only thing that
+   speaks it is eleven lines in `agent.js` on that PR.
+5. **Beat 7 needs the button.** John has no `stage_house` tool, so *"furnish the whole house"*
+   furnishes one room. `walkin.stageHouse('modern')`.
+6. **Don't stand at scan point 38 or 16.** They are inside rooms the scan gives no outline, so
+   staging refuses — and 38 is 0.63 m from the doorway beat 5 needs.
+
+If the hands make furniture fly away from you, add **`&dgain=0`** to the URL.
+
 ---
 
 ## Before you start

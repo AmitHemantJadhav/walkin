@@ -60,6 +60,17 @@ Measured against `main` on Sat 14 Nov, La Mirada (`zvKHR9DHNjJ`) unless another 
   196 geometries, 61 materials, 7 textures, before and after. Nothing leaks: a piece is a clone of one
   cached glTF and the style materials are cached per (style, source material).
 
+## It runs on a laptop in a room with no internet
+
+- The whole front end has **two external URLs**, both in `hands.js`, both for MediaPipe — and both
+  have byte-identical local copies committed in `vendor/mediapipe/` (17 MB). Everything else —
+  three.js, the furniture models, the wall tiles, the house — is served from the same machine.
+- With no Matterport key and no Gemini key at all, the full three-minute run works on the synthetic
+  fixture house: verified on `main`, all seven beats, including the sofa through the 1.15 m doorway.
+- The only thing that leaves the machine is the agent, and only when there is a key: `/api/gemini`
+  and `/api/tts` are server-side relays, so the keys never reach the browser. On `GEMINI_MOCK=1`
+  nothing leaves at all.
+
 ## Things to say carefully
 
 - **Every number above is a laptop at 60 Hz.** As of this writing nobody has run it on a phone or in

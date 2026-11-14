@@ -29,7 +29,7 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 
 ---
 
-## State of this lane (updated Sat 07:40 ET by the overnight agent)
+## State of this lane (updated Sat 08:10 ET by the overnight agent)
 
 **All of S1–S8 plus A4 are built and on `main`** (A4 was handed to me from Amit on #5). What exists now:
 
@@ -45,7 +45,8 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 | `layout.js` | save / load / clear, localStorage autosave per house, `?layout=none`, and what each piece stands on | `saveLayout`, `loadLayout`, `clearLayout` |
 | `tools/fake_house.py` | a synthetic house into the git-ignored `data/fixture` so the viewer runs with **no Matterport keys** | `?m=fixture` |
 | `tools/make_tiles.py` | four seamless 1 m wall tiles so the wallpaper beat survives a missing Gemini key | |
-| `docs/demo-runbook.md` | the 3-minute run, rehearsed against `main` | |
+| `preflight.js` | `await walkin.preflight()` — nine pass/fail lines before you present, saves the room and puts it back | `preflight` |
+| `docs/demo-runbook.md` | the 3-minute run, rehearsed against `main`, opening with the six things that will bite you | |
 
 ### Things worth knowing before you change any of this
 
@@ -87,6 +88,15 @@ Do not edit `app.js` — request hooks from amit in an issue or PR comment.
 - **Big and unlabelled is not the same as living space.** `PLANS.living` refuses garages, basements, laundries and
   the rest unless the style string asks for a living room by name. A sofa in the garage is worse than an empty
   garage, because John says it out loud.
+
+### `stageRoom` answers "the whole house" with the whole house
+
+John has no `stage_house` tool (#56) — his only staging tool is `stage_room`, so beat 7 arrives here
+with the whole sentence as the style. `WHOLE_HOUSE` catches *whole house / entire home / every room /
+all the rooms* and delegates to `stageHouse`, returning a `stageRoom`-shaped result so `agent.js` and the
+mock need no change. **Strip the phrase before delegating** — `stageHouse` calls `stageRoom` for every
+room, and leaving it in made each of those ask for the whole house again: the recursion came back with
+nothing placed and no error anyone could see. Take this out the day a real tool lands.
 
 ### Beat 5 only works at one door, and this is the thing most likely to flatten the demo
 

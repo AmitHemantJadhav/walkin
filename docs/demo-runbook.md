@@ -75,6 +75,13 @@ window stays bright. Walk to another scan point: still the same wall.
 
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 
+**Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
+La Mirada has three out of twenty-two: the 2.50 m opening into the dining room (too wide, nothing to
+prove), one at 0.98 m into the dining room, and **the 1.15 m doorway off the living room — the one
+the sentence below quotes**. It is at model `(2.81, 0.02)`; stand at **scan point 37**, 0.47 m away,
+and you are looking straight through it. At the other nineteen the sofa doesn't fit turned either, so
+John correctly says *"it won't fit through at all"* and the beat goes nowhere.
+
 Grab the sofa and carry it at the doorway **broadside**. It stops dead, and the app says:
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
@@ -83,6 +90,10 @@ Turn it. It goes through — and you don't have to be precise about it: a piece 
 slid onto the doorway's centre line for you, because hands can't hold ±10 cm. A piece that genuinely
 doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it won't fit through at
 all"* instead.
+
+Both halves were run against `main` at that doorway, and the two sentences above are verbatim what
+came back: the sofa (2.10 × 0.95 m) stops 0.56 m short held broadside and crosses to the other side
+once turned; the king bed (1.95 × 2.15 m) gets the same answer at every angle and never goes through.
 
 This is the beat to land hardest. Nobody buying a house asks whether a render looks nice; they ask
 whether the sofa gets through the door.

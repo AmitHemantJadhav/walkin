@@ -175,6 +175,27 @@ sphere.frustumCulled = false;
 sphere.renderOrder = -10;
 scene.add(sphere);
 
+// A6 step 3: a black ball around the camera for the blink (both eyes are inside it in the headset). Drawn over the
+// pano, furniture and walls; the radial menu stays on top.
+const dimmer = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 8), new THREE.MeshBasicMaterial({
+  color: 0x000000, transparent: true, opacity: 0, side: THREE.BackSide, depthTest: false, depthWrite: false }));
+dimmer.renderOrder = 45;
+dimmer.frustumCulled = false;
+dimmer.visible = false;
+scene.add(dimmer);
+function dimTo(target, ms) {
+  const m = dimmer.material, start = m.opacity, t0 = performance.now();
+  dimmer.visible = true;
+  return new Promise((done) => {
+    const step = () => {
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      m.opacity = start + (target - start) * k * k * (3 - 2 * k);
+      if (k < 1) requestAnimationFrame(step); else { dimmer.visible = target > 0; done(); }
+    };
+    step();
+  });
+}
+
 // ------------------------------------------------------------------ occluders: the empty-house mesh (or walls) hide furniture behind walls
 const occluderMat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide });
 const occluderDebugMat = new THREE.MeshBasicMaterial({ color: 0x33ccff, wireframe: true, transparent: true, opacity: 0.06 });
@@ -315,18 +336,11 @@ const camPos = new THREE.Vector3();
 
 function imgFor(p) { return (showEmpty && p.imgEmpty) || p.img; }
 
-// A6 step 2: the solid wall pieces of a floor (doorways and dividers left open, windows kept: the photo shows them
-// on the wall), the ones nearest the path from -> to first, written into `out` as (ax, ay, bx, by). Returns how many.
-function wallSegsNear(floorId, from, to, out) {
-  const f = house.floors.find((x) => x.id === floorId);
-  if (!f) return 0;
-  const near = (px, py, ax, ay, bx, by) => { // distance from a point to a segment
-    const ex = bx - ax, ey = by - ay, L = ex * ex + ey * ey || 1;
-    const k = Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / L));
-    return Math.hypot(px - ax - k * ex, py - ay - k * ey);
-  };
-  const segs = [];
-  for (const w of f.walls) {
+// A6 step 2: the solid wall pieces of a floor as [ax, ay, bx, by] (doorways and dividers left open, windows kept:
+// the photo shows them on the wall).
+function solidWalls(floorId) {
+  const f = house.floors.find((x) => x.id === floorId), segs = [];
+  for (const w of f ? f.walls : []) {
     if (w.type !== 'wall') continue;
     const ax = w.a[0], ay = w.a[1], dx = w.b[0] - ax, dy = w.b[1] - ay, len = Math.hypot(dx, dy);
     if (len < 0.05) continue;
@@ -340,6 +354,28 @@ function wallSegsNear(floorId, from, to, out) {
     }
     piece(cursor, len);
   }
+  return segs;
+}
+
+// A6 step 3: does the straight path from -> to go through a solid wall piece (not a doorway)?
+function crossesWall(floorId, from, to) {
+  const hx = to.x - from.x, hy = to.y - from.y;
+  return solidWalls(floorId).some(([ax, ay, bx, by]) => {
+    const ex = bx - ax, ey = by - ay, den = hx * ey - hy * ex;
+    if (Math.abs(den) < 1e-9) return false;
+    const wx = ax - from.x, wy = ay - from.y, t = (wx * ey - wy * ex) / den, s = (wx * hy - wy * hx) / den;
+    return t > 0.02 && t < 0.98 && s > 0.02 && s < 0.98;
+  });
+}
+
+// A6 step 2: the wall pieces nearest the path from -> to first, written into `out` as (ax, ay, bx, by). Returns how many.
+function wallSegsNear(floorId, from, to, out) {
+  const near = (px, py, ax, ay, bx, by) => { // distance from a point to a segment
+    const ex = bx - ax, ey = by - ay, L = ex * ex + ey * ey || 1;
+    const k = Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / L));
+    return Math.hypot(px - ax - k * ex, py - ay - k * ey);
+  };
+  const segs = solidWalls(floorId);
   const pathGap = (s) => Math.min( // distance between a wall piece and the path (the camera only ever stands on it)
     near(from.x, from.y, ...s), near(to.x, to.y, ...s),
     near(s[0], s[1], from.x, from.y, to.x, to.y), near(s[2], s[3], from.x, from.y, to.x, to.y));
@@ -361,6 +397,7 @@ async function goTo(id, instant = false) {
     return false;
   } finally {
     transitioning = false; // a failed load must not freeze navigation
+    if (dimmer.material.opacity > 0.01) dimTo(0, 150); // ...or leave the screen dark mid-blink
   }
 }
 
@@ -376,9 +413,20 @@ async function moveTo(p, instant) {
     const U = panoMat.uniforms;
     U.texB.value = tex; U.invB.value = inv;
     // A6: on the same floor, walk through a simple room (floor, ceiling, walls around the path) instead of
-    // cross-fading two flat photos, and take longer for a longer step. Stairs and ?a6=off keep the plain fade.
-    const dist = from.distanceTo(to), deep = !floorChanged && dist > 0.05 && dist < 10 && params.get('a6') !== 'off';
-    if (deep) {
+    // cross-fading two flat photos, and take longer for a longer step. ?a6=off keeps the plain fade for every move.
+    // A6 step 3: stairs, 10 m+ jumps and moves through a wall (most of the agent's "go to the kitchen") blink instead:
+    // a quick dip to dark with the cut in the middle, the usual VR comfort teleport, so nothing slides through a wall.
+    const dist = from.distanceTo(to), a6 = params.get('a6') !== 'off';
+    const blink = a6 && (floorChanged || dist >= 10 || crossesWall(p.floor, from, to));
+    const deep = a6 && !blink && dist > 0.05;
+    if (blink) {
+      await dimTo(1, 150);
+      U.texA.value = tex; U.invA.value = inv; U.mixAB.value = 0; U.depthAB.value = 0;
+      camPos.copy(to);
+      buildPucks(p); // the new pano's pucks, not the old ones, while it fades in
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); // new photo on the GPU while dark
+      await dimTo(0, 220);
+    } else if (deep) {
       const room = roomAt(to.x, to.y, p.floor) || roomAt(from.x, from.y, p.floor), d = room?.dims || {};
       const ceil = Math.max(p.floorZ + (d.height > 1.8 && d.height < 6 ? d.height : 2.6), Math.max(from.z, to.z) + 0.3);
       const wallR = THREE.MathUtils.clamp(d.width && d.depth ? Math.hypot(d.width, d.depth) / 2 : 3, 2.5, 8);
@@ -390,7 +438,7 @@ async function moveTo(p, instant) {
     }
     U.depthAB.value = deep ? 1 : 0;
     const t0 = performance.now(), dur = THREE.MathUtils.clamp(420 + 160 * dist, 550, 950);
-    await new Promise((done) => {
+    if (!blink) await new Promise((done) => { // a blink has already cut to the new photo
       const step = () => {
         const k = Math.min(1, (performance.now() - t0) / dur), e = k * k * (3 - 2 * k);
         camPos.lerpVectors(from, to, e);
@@ -1049,6 +1097,7 @@ function frame() {
     camera.lookAt(_dir.add(camPos));
   }
   sphere.position.copy(camPos);
+  dimmer.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
   radial.layout(); // A5: keep an open menu where you pinched while the head turns

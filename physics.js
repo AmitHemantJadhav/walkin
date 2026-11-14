@@ -29,6 +29,9 @@ const DEFAULT_MASS = 15;
 // placement is a jump that happens when nothing was pushing the piece a moment ago.
 const TELEPORT = 0.5;          // metres
 const SETTLED = 300;           // ms since the last push before a jump counts as a placement
+const HOLD_BLOCK = 2000;       // ...and a piece that is stuck is never a placement, however long you pause:
+                               // hold a sofa at a door it won't fit through, think for a second, nudge it, and
+                               // the cursor is now a metre past the wall. That must not read as "put it there".
 const MAX_LAG = 0.3;           // how far a piece may fall behind the hand while it is moving freely
 const SKIN = 0.012;            // shrink the footprint slightly so a piece doesn't stick to a wall it touches
 const FRICTION = 0.6;          // floor friction, as a deceleration of mu * g
@@ -366,7 +369,7 @@ function frame() {
     let trot = held && typeof held.yaw === 'number' ? held.yaw : item.rotation.z;
 
     const jump = Math.hypot(tx - st.x, ty - st.y);
-    const pushing = !!held || now - (st.pushT || 0) < SETTLED;
+    const pushing = !!held || now - (st.pushT || 0) < SETTLED || now - (st.blockT || 0) < HOLD_BLOCK;
     if (jump > TELEPORT && !pushing) {                    // a placement, not a push: take it as given
       stats.teleports++;
       st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;
@@ -383,7 +386,7 @@ function frame() {
       const before = [st.x, st.y];
       const hit = step(item, st, nx, ny, trot, walls);
       stats.moved++;
-      if (hit) { stats.blocked++; stats.lastHit = hit.kind; }
+      if (hit) { stats.blocked++; stats.lastHit = hit.kind; st.blockT = now; }
       st.vx = (st.x - before[0]) / dt;
       st.vy = (st.y - before[1]) / dt;
       st.sliding = false;

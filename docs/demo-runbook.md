@@ -103,9 +103,18 @@ the sentence below quotes**. It is at model `(2.81, 0.02)`; stand at **scan poin
 and you are looking straight through it. At the other nineteen the sofa doesn't fit turned either, so
 John correctly says *"it won't fit through at all"* and the beat goes nowhere.
 
-Grab the sofa and carry it at the doorway **broadside**. It stops dead, and the app says:
+Grab the sofa and carry it at the doorway **broadside**. It stops dead, and John says:
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
+
+**Check #54 is merged before you rely on that.** `physics.js` computes the sentence and fires it as a
+`walkin:blocked` event; the only thing that listens is eleven lines at the end of `agent.js` in #54.
+Without them the sofa stops at the door **in silence** and the beat is half of what it should be. One
+line in the console tells you:
+
+```js
+addEventListener('walkin:blocked', e => console.log(e.detail.reason))   // then push the sofa at the door
+```
 
 Turn it and walk it through — **square on**. Measured at that doorway: up to about **8 cm off the
 centre line it goes straight through**, which is the real clearance a 0.95 m sofa has in a 1.15 m

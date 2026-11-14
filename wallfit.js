@@ -108,3 +108,65 @@ export function wallOffset(tris, wall, normal, floorZ, height, opts = {}) {
   const cutAt = (off) => +(d.filter((x) => x > off + 0.01).length / d.length).toFixed(3);
   return { offset: +offset.toFixed(3), samples: d.length, cut: cutAt(offset), fixedCut: cutAt(o.floor) };
 }
+
+/**
+ * Paint gaps: how high the ceiling is over one face of a wall, from the scan. Rays go straight up from
+ * `out` metres in front of the centre line (clear of the cornice) every `step` metres along the wall;
+ * the median hit, as a height above floorZ. The API's room height is the room's lowest ceiling (and the
+ * bedrooms on La Mirada have none), so paper cut to it stopped a few cm short and left a band of the old wall.
+ * null when fewer than 3 rays find a ceiling (no mesh over this wall).
+ */
+export function ceilingHeight(tris, wall, normal, floorZ, { out = 0.35, step = 0.3, from = 1.8, reach = 2.2, endTrim = 0.3 } = {}) {
+  const len = Math.hypot(wall.b[0] - wall.a[0], wall.b[1] - wall.a[1]);
+  const dx = (wall.b[0] - wall.a[0]) / (len || 1), dy = (wall.b[1] - wall.a[1]) / (len || 1);
+  const [nx, ny] = normal;
+  const z0 = floorZ + from;
+  const near = trianglesNearWall(tris, { a: [wall.a[0] + nx * out, wall.a[1] + ny * out], b: [wall.b[0] + nx * out, wall.b[1] + ny * out] },
+    z0, z0 + reach, 0.1);
+  const hits = [];
+  const trim = Math.min(endTrim, len / 3);
+  for (let u = trim; u <= len - trim + 1e-9; u += step) {
+    const t = rayHit(near, [wall.a[0] + dx * u + nx * out, wall.a[1] + dy * u + ny * out, z0], [0, 0, 1], reach);
+    if (Number.isFinite(t) && t < reach) hits.push(from + t);
+  }
+  if (hits.length < 3) return null;
+  hits.sort((a, b) => a - b);
+  return +hits[hits.length >> 1].toFixed(3);
+}
+
+/**
+ * Paint gaps: can `from` see these points on a papered face with nothing but the face's own bumps in the
+ * way? A ray to each point; the first scan surface it meets only counts as in the way if it is more than
+ * `slack` metres out from the face's plane (`plane` = { p: a point on it, n: unit normal into the room }).
+ * A sill, skirting or the wall itself is within slack; another room's wall is not.
+ * Returns the share of points seen (1 = all). Points the face turns its back on count as not seen.
+ */
+export function seenFrom(tris, from, points, plane, slack) {
+  if (!points.length) return 0;
+  let x0 = from[0], x1 = from[0], y0 = from[1], y1 = from[1], z0 = from[2], z1 = from[2];
+  for (const p of points) {
+    x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]);
+    z0 = Math.min(z0, p[2]); z1 = Math.max(z1, p[2]);
+  }
+  const box = [];
+  for (let i = 0; i < tris.length; i += 9) {
+    if (Math.max(tris[i], tris[i + 3], tris[i + 6]) < x0 || Math.min(tris[i], tris[i + 3], tris[i + 6]) > x1) continue;
+    if (Math.max(tris[i + 1], tris[i + 4], tris[i + 7]) < y0 || Math.min(tris[i + 1], tris[i + 4], tris[i + 7]) > y1) continue;
+    if (Math.max(tris[i + 2], tris[i + 5], tris[i + 8]) < z0 || Math.min(tris[i + 2], tris[i + 5], tris[i + 8]) > z1) continue;
+    for (let k = 0; k < 9; k++) box.push(tris[i + k]);
+  }
+  const { p: pp, n } = plane;
+  const side = (q) => (q[0] - pp[0]) * n[0] + (q[1] - pp[1]) * n[1] + (q[2] - pp[2]) * (n[2] || 0);
+  if (side(from) <= 0) return 0;
+  let seen = 0;
+  for (const p of points) {
+    const d = [p[0] - from[0], p[1] - from[1], p[2] - from[2]];
+    const dist = Math.hypot(d[0], d[1], d[2]);
+    if (dist < 1e-6) { seen++; continue; }
+    d[0] /= dist; d[1] /= dist; d[2] /= dist;
+    const t = rayHit(box, from, d, dist);
+    if (!Number.isFinite(t) || t >= dist) { seen++; continue; }
+    if (side([from[0] + d[0] * t, from[1] + d[1] * t, from[2] + d[2] * t]) <= slack) seen++;
+  }
+  return seen / points.length;
+}

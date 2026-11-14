@@ -36,6 +36,7 @@ const G = 9.81;
 const STOP = 0.06;             // below this speed a sliding piece is parked
 const MAX_V = 6;               // m/s, so a wild hand can't fling a sofa across the house
 const MAX_STEP = 0.6;          // metres a piece may travel in one frame, however far the hand has run off
+const ESCAPE = 0.08;           // how fast a piece that starts overlapped may crawl out of trouble
 
 const mass = (kind) => MASS[kind] || DEFAULT_MASS;
 // how long a piece takes to catch up with your hand: a plant is immediate, a sofa drags
@@ -160,7 +161,11 @@ function step(item, st, tx, ty, trot, walls) {
         return hit;
       }
     }
-    st.x += dx; st.y += dy;                                     // still stuck: go where it was asked
+    // Still stuck: creep, don't jump. Amit's catch on #44 - letting it take the whole step here means a
+    // piece overlapping another one can be dragged clean through a wall until the two separate.
+    const crawl = Math.min(1, ESCAPE / (dist || 1));
+    st.x += dx * crawl;
+    st.y += dy * crawl;
     return { kind: 'overlapping' };
   }
 

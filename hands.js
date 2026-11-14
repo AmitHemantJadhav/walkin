@@ -35,6 +35,7 @@ export async function startHands({ video, facingMode = 'user', onHands }) {
   await video.play();
 
   const mirror = facingMode === 'user';
+  const cam = { mirror, crop: CROP, span: SPAN }; // how screen units map back to the video (realhands.js)
   const pinching = {}; // hysteresis per hand
   let running = true, last = -1;
   function loop() {
@@ -57,7 +58,7 @@ export async function startHands({ video, facingMode = 'user', onHands }) {
       return { side, pts, size, pinch, x: (pts[4].x + pts[8].x) / 2, y: (pts[4].y + pts[8].y) / 2 };
     });
     for (const k of Object.keys(pinching)) if (!hands.some((h) => h.side === k)) delete pinching[k];
-    onHands(hands);
+    onHands(hands, cam);
   }
   loop();
   return {

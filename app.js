@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
+import { createRealHands } from './realhands.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -508,6 +509,9 @@ let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+// A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
+let handStyle = 'real';
+const realHands = createRealHands($('handcam'));
 
 function makeHandViz() {
   const g = new THREE.Group();
@@ -534,7 +538,7 @@ function screenToWorld(sx, sy, depth, out) {
 }
 function drawHands() {
   const seen = new Set();
-  for (const h of handsList) {
+  for (const h of handStyle === 'skeleton' || debug ? handsList : []) {
     seen.add(h.side);
     const g = handViz[h.side] || (handViz[h.side] = makeHandViz());
     g.visible = true;
@@ -554,9 +558,10 @@ function drawHands() {
   for (const [side, g] of Object.entries(handViz)) if (!seen.has(side)) g.visible = false;
 }
 
-function onHands(list) {
+function onHands(list, cam) {
   perf.hands++;
   handsList = list;
+  realHands.draw(handStyle === 'real' ? list : [], cam, vr);
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
@@ -640,6 +645,7 @@ async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
+    realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
     btn.classList.remove('on'); showCamPreview(handCam);
@@ -803,5 +809,9 @@ $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
   get current() { return current; }, get selected() { return selected; },
-  get handRay() { return handRay; } }; // hooks for agent.js and other modules
+  get handRay() { return handRay; },
+  get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
+  get handStyle() { return handStyle; },
+  set handStyle(s) { handStyle = s === 'skeleton' ? 'skeleton' : 'real'; if (handStyle !== 'real') realHands.clear(); },
+}; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

@@ -104,6 +104,14 @@ and always lands.
 
 Six rooms, 28 pieces, about a fifth of a second. Then walk through it.
 
+Rooms it leaves alone are left alone on purpose, so don't apologise for them on stage: bathrooms,
+halls and closets have no set, and a garage or a basement is never furnished by the whole-house pass
+even when it is big enough — a sofa in the garage is worse than an empty garage. Ask for one by
+name — *"stage this as a living room"* — and it will try anyway.
+
+Other houses, measured the same way: **10319 Dunvegan Way** 19 pieces across 4 rooms (its 31 m²
+kitchen is open-plan, so it gets the living set, television and all), **314 Gale St** 26 across 4.
+
 ---
 
 ## What to avoid on stage
@@ -117,6 +125,8 @@ Six rooms, 28 pieces, about a fifth of a second. Then walk through it.
   as-scanned photo it covers whatever was standing against that wall — the owner's sofa back, a
   lamp. It still works and still re-shades, it just looks like wallpaper over furniture. Empty is
   the default, so this only bites if you've toggled.
+- **The reload is safe, so don't panic-clear.** Furniture, what each piece is standing on, and wall
+  materials all come back. Only a *generated* tile doesn't — see the next line.
 - **A wall painted with a *generated* tile does not survive a reload.** The tile is a `data:` URL
   and we deliberately don't put megabytes of base64 in localStorage. A tile from
   `models/textures/` does survive.

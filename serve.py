@@ -29,6 +29,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 MAX_BODY = 20 * 1024 * 1024  # a view screenshot as inline base64 fits easily
 MAX_TTS_CHARS = 1000
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_COOL = {}  # kind -> time until which Gemini is skipped after it failed (quota/5xx)
 import openrouter  # noqa: E402  fallback LLM provider (OPENROUTER_API_KEY) when Gemini is missing or failing
 TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128"
 
@@ -351,9 +352,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if openrouter.key():
                 return self._openrouter(kind, model, req, body)
             return self._json(503, {"error": "GEMINI_API_KEY is not set in .env"})
-        # the fallback is the same request answered another way: it must not take a second rate-limit token
-        # (it did, so every image cost two of the two-a-minute image tokens and the next one was refused)
-        fallback = (lambda: self._openrouter(kind, model, req, body, charge=False)) if openrouter.key() else None
+        if openrouter.key():
+            # Stay on one provider for a whole turn: a function call that OpenRouter answered carries no Gemini
+            # thoughtSignature, and Gemini rejects the next round with 400 "missing thought_signature", so once a
+            # turn has such a call it finishes on OpenRouter. And after Gemini fails (free-tier quota 429, 5xx),
+            # skip it for a minute instead of paying its timeout on every round.
+            unsigned = any(isinstance(p, dict) and p.get("functionCall") and not p.get("thoughtSignature")
+                           for c in req.get("contents") or [] if isinstance(c, dict) and c.get("role") == "model"
+                           for p in c.get("parts") or [])
+            if unsigned or time.time() < GEMINI_COOL.get(kind, 0):
+                return self._openrouter(kind, model, req, body)
+        def fallback():
+            GEMINI_COOL[kind] = time.time() + 60
+            # the same request answered another way: it must not take a second rate-limit token
+            return self._openrouter(kind, model, req, body, charge=False)
+        fallback = fallback if openrouter.key() else None
         self._relay(kind, cache_key("gemini", model, body), GEMINI_URL.format(model=model), body,
                     {"Content-Type": "application/json", "x-goog-api-key": key}, fallback=fallback)
 

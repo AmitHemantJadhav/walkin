@@ -421,6 +421,42 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
   window.walkin.stageRoom = stageRoom;
   window.walkin.setStyle = (style) => setStyle(style, window.walkin.furniture);
   window.walkin.styles = () => Object.keys(STYLES);
+
+  // Buttons in the More popover, so a human can stage a room without the agent - the fallback if the
+  // voice path is having a bad day in front of the judges. Each press cycles to the next style.
+  const styles = Object.keys(STYLES);
+  let next = 0;
+  const stageBtn = document.getElementById('bStage');
+  if (stageBtn) {
+    stageBtn.addEventListener('click', () => {
+      const w = window.walkin;
+      const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
+      if (!room) { stageBtn.textContent = '⌂ not in a room'; setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 1800); return; }
+      const style = styles[next++ % styles.length];
+      const res = stageRoom(room, style);
+      stageBtn.textContent = res.placed.length ? `⌂ ${style}` : '⌂ no room for a set';
+      setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 2200);
+      console.log(`stage: ${res.say}`);
+    });
+  }
+  const clearBtn = document.getElementById('bClearRoom');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      const w = window.walkin;
+      const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
+      if (!room) return;
+      let n = 0;
+      for (const it of [...w.furniture.children]) {
+        if (it.userData.kind && w.roomAt(it.position.x, it.position.y, it.userData.floor) === room) {
+          w.furniture.remove(it);
+          n++;
+        }
+      }
+      if (w.select) w.select(null);
+      clearBtn.textContent = `⌁ took out ${n}`;
+      setTimeout(() => { clearBtn.textContent = '⌁ Clear room'; }, 1800);
+    });
+  }
   window.walkin.describeRoom = describeRoom;
   window.walkin.placeObject = placeObject;
   window.walkin.plants = plants;

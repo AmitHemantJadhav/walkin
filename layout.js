@@ -23,6 +23,12 @@ export function saveLayout() {
       rot: r2(o.rotation.z),
       floor: o.userData.floor || null,
     })),
+    // wall materials (A4). Only ones with a plain URL: a generated tile is usually a blob: or data:
+    // URL that means nothing after a reload, and a huge data: URL would blow the localStorage quota.
+    walls: (typeof w.wallMaterials === 'function' ? w.wallMaterials() : [])
+      .filter((m) => typeof m.url === 'string' && /^[./a-zA-Z0-9]/.test(m.url) && !m.url.startsWith('blob:')
+        && !m.url.startsWith('data:'))
+      .map((m) => ({ wall: m.wall, url: m.url, tile: m.tileMetres })),
   };
 }
 
@@ -58,7 +64,30 @@ export function loadLayout(data, { replace = true } = {}) {
     added++;
   }
   if (w.select) w.select(null);
-  return { added, skipped, model: doc.model || null };
+
+  let walls = 0;
+  if (Array.isArray(doc.walls) && doc.walls.length) {
+    walls = doc.walls.filter((m) => m && m.wall && typeof m.url === 'string').length;
+    // walls.js registers its hooks on its own timer, so don't assume it is there yet
+    whenWalls((ok) => {
+      if (!ok) return console.warn('layout: walls.js never appeared, wall materials not restored');
+      if (replace && typeof w.clearAllWallMaterials === 'function') w.clearAllWallMaterials();
+      for (const m of doc.walls) {
+        if (!m || !m.wall || typeof m.url !== 'string') continue;
+        Promise.resolve(w.setWallMaterial(m.wall, m.url, m.tile || 1))
+          .then((r) => { if (!r || !r.ok) console.warn('layout: wall skipped -', (r || {}).why); })
+          .catch((e) => console.warn('layout: wall failed', e));
+      }
+    });
+  }
+  return { added, walls, skipped, model: doc.model || null };
+}
+
+/** walls.js publishes its hooks from its own start timer; wait a moment for it. */
+function whenWalls(cb, tries = 0) {
+  if (window.walkin && typeof window.walkin.setWallMaterial === 'function') return cb(true);
+  if (tries > 60) return cb(false);
+  setTimeout(() => whenWalls(cb, tries + 1), 50);
 }
 
 export function clearLayout() {
@@ -66,6 +95,7 @@ export function clearLayout() {
   if (!w) return 0;
   const n = w.furniture.children.length;
   for (const o of [...w.furniture.children]) w.furniture.remove(o);
+  if (typeof w.clearAllWallMaterials === 'function') w.clearAllWallMaterials();
   if (w.select) w.select(null);
   store(null);
   return n;
@@ -78,7 +108,8 @@ function store(doc) {
   const w = window.walkin;
   if (!w || !enabled) return;
   try {
-    if (doc && doc.items.length) localStorage.setItem(key(w.house.model), JSON.stringify(doc));
+    const has = doc && (doc.items.length || (doc.walls && doc.walls.length));
+    if (has) localStorage.setItem(key(w.house.model), JSON.stringify(doc));
     else localStorage.removeItem(key(w.house.model));
   } catch (e) { /* private window, full disk: not worth bothering anyone about */ }
 }
@@ -94,6 +125,9 @@ export function storedLayout(model) {
 /** A cheap fingerprint of the scene, so autosave only runs when something actually moved. */
 function signature(w) {
   let s = `${w.furniture.children.length}`;
+  if (typeof w.wallMaterials === 'function') {
+    for (const m of w.wallMaterials()) s += `|W${m.wall.floor}:${m.wall.index}:${m.tileMetres}`;
+  }
   for (const o of w.furniture.children) {
     s += `|${o.userData.kind}${o.position.x.toFixed(2)},${o.position.y.toFixed(2)},`
       + `${o.position.z.toFixed(2)},${o.rotation.z.toFixed(2)}`;
@@ -117,9 +151,10 @@ function signature(w) {
     enabled = false;
   } else {
     const saved = storedLayout(w.house.model);
-    if (saved && saved.items && saved.items.length) {
-      const { added, skipped } = loadLayout(saved);
-      console.log(`layout: restored ${added} piece${added === 1 ? '' : 's'} from the last session`
+    if (saved && ((saved.items && saved.items.length) || (saved.walls && saved.walls.length))) {
+      const { added, walls, skipped } = loadLayout(saved);
+      console.log(`layout: restored ${added} piece${added === 1 ? '' : 's'}`
+        + `${walls ? ` and ${walls} wall${walls === 1 ? '' : 's'}` : ''} from the last session`
         + `${skipped.length ? `, skipped ${skipped.length}` : ''} — walkin.clearLayout() to start over`);
     }
   }

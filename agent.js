@@ -1,7 +1,8 @@
 // Walk-In agent: Gemini with function calling. Talks to the viewer only through window.walkin and to Gemini only
 // through the /api/gemini relay in serve.py (the key never reaches the browser).
 //   walkin.agent.ask("put a sofa in the living room")  -> Promise<string>   (also the text box, bottom left)
-//   walkin.say(text)                                    -> shows the reply (voice comes with R3)
+//   walkin.say(text)                                    -> shows the reply and speaks it (/api/tts, ElevenLabs)
+//   walkin.onTalk()                                     -> start listening (Talk button, pinch-hold menu)
 // Hooks that are not in the viewer yet (pointer, setWallMaterial, stageRoom, placeObject) are stubbed: the call is
 // logged and the model is told the feature is not available, so it says so instead of pretending.
 
@@ -256,15 +257,90 @@ async function ask(text) {
   }
 }
 
-// ------------------------------------------------------------------ UI: a small text box (voice comes with R3)
-let statusEl, inputEl;
+// ------------------------------------------------------------------ voice out: /api/tts, browser voice as fallback
+let statusEl, inputEl, talkEl;
 function setStatus(t) { if (statusEl) statusEl.textContent = t; }
+
+const player = new Audio();
+let audioUnlocked = false, speakSeq = 0;
+function unlockAudio() { // iOS only plays audio that was started from a tap once; do that on the first touch
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+  player.play().catch(() => {});
+}
+
+function browserSpeak(text) {
+  if (!window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+async function speak(text) {
+  const seq = ++speakSeq; // a newer reply replaces an older one
+  try {
+    const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+    if (!res.ok) throw new Error(`tts relay returned ${res.status}`);
+    const blob = await res.blob();
+    if (seq !== speakSeq) return;
+    if (player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
+    player.src = URL.createObjectURL(blob);
+    await player.play();
+  } catch (e) {
+    console.info('[agent] ElevenLabs voice unavailable, using the browser voice:', e.message);
+    if (seq === speakSeq) browserSpeak(text);
+  }
+}
 
 function say(text) {
   setStatus(text);
+  if (text) speak(text);
   return text;
 }
 
+// ------------------------------------------------------------------ voice in: Web Speech API, push to talk
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false;
+
+function setListening(on) {
+  listening = on;
+  if (talkEl) talkEl.classList.toggle('on', on);
+}
+
+function onTalk() {
+  unlockAudio();
+  if (!SR) return say('This browser has no speech recognition. Type your request instead.');
+  if (listening) { rec.stop(); return; }
+  player.pause();
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  rec = new SR();
+  rec.lang = 'en-US';
+  rec.interimResults = true;
+  rec.maxAlternatives = 1;
+  let heard = '';
+  rec.onresult = (e) => {
+    heard = [...e.results].map((r) => r[0].transcript).join(' ').trim();
+    setStatus(`“${heard}”`);
+  };
+  rec.onerror = (e) => {
+    setListening(false);
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') setStatus('Microphone access was blocked. Allow it and try again.');
+    else if (e.error !== 'aborted' && e.error !== 'no-speech') setStatus(`Didn't catch that (${e.error}).`);
+  };
+  rec.onend = () => {
+    setListening(false);
+    if (heard) ask(heard); else if (statusEl && statusEl.textContent === 'Listening…') setStatus("I didn't hear anything.");
+  };
+  try {
+    rec.start();
+    setListening(true);
+    setStatus('Listening…');
+  } catch (e) {
+    setListening(false);
+  }
+}
+
+// ------------------------------------------------------------------ UI: Talk button and a small text box
 function buildUI() {
   const style = document.createElement('style');
   style.textContent = `
@@ -279,17 +355,21 @@ function buildUI() {
   el.id = 'agent';
   el.className = 'panel';
   el.innerHTML = `<div id="agentSay">Ask me about this house, or tell me what to change.</div>
-    <form><input id="agentIn" placeholder="e.g. add a sofa · how big is this room?" autocomplete="off" enterkeyhint="send">
-    <button>Ask</button></form>`;
+    <form><input id="agentIn" placeholder="add a sofa · how big is this room?" autocomplete="off" enterkeyhint="send">
+    <button>Ask</button><button type="button" id="agentTalk" title="Talk to the agent">🎤 Talk</button></form>`;
   document.body.appendChild(el);
   statusEl = el.querySelector('#agentSay');
   inputEl = el.querySelector('#agentIn');
+  talkEl = el.querySelector('#agentTalk');
+  talkEl.addEventListener('click', onTalk);
+  addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
   // the viewer listens for keys and drags on the window; keep typing and taps inside the box
   for (const ev of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'wheel']) el.addEventListener(ev, (e) => e.stopPropagation());
   el.querySelector('form').addEventListener('submit', (e) => {
     e.preventDefault();
     const t = inputEl.value;
     inputEl.value = '';
+    unlockAudio();
     ask(t);
   });
 }
@@ -301,6 +381,7 @@ function buildUI() {
     return;
   }
   buildUI();
-  window.walkin.agent = { ask, describeHouse, history, tools: RUN };
-  if (!window.walkin.say) window.walkin.say = say;
+  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak };
+  window.walkin.say = say;
+  window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 })();

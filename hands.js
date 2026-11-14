@@ -1,23 +1,37 @@
 // Hand tracking with MediaPipe (up to two hands). For each hand it reports the 21 landmarks mapped to the screen
 // (0..1), a hand-size measure for depth, the pinch point, and whether that hand is pinching.
+// Local copies first (vendor/mediapipe, byte-identical to the CDN, see its README) so hands work without venue
+// Wi-Fi reaching jsdelivr / googleapis; the CDN only if a local file is missing or fails to load.
 const VER = '0.10.14';
-const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VER}`;
-const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const LOCAL = {
+  lib: new URL(`./vendor/mediapipe/tasks-vision@${VER}`, import.meta.url).href,
+  model: new URL('./vendor/mediapipe/hand_landmarker.task', import.meta.url).href,
+};
+const CDN = {
+  lib: `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VER}`,
+  model: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+};
+let handsSource = null; // 'local' | 'cdn', shown in the Debug line via stats.src
+
+async function createLandmarker({ lib, model }) {
+  const vision = await import(`${lib}/vision_bundle.mjs`);
+  const fileset = await vision.FilesetResolver.forVisionTasks(`${lib}/wasm`);
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath: model, delegate },
+    runningMode: 'VIDEO', numHands: 2,
+    minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
+  });
+  try { return await vision.HandLandmarker.createFromOptions(fileset, opts('GPU')); }
+  catch { return await vision.HandLandmarker.createFromOptions(fileset, opts('CPU')); }
+}
 
 let landmarkerPromise = null;
 async function getLandmarker() {
   if (!landmarkerPromise) {
-    landmarkerPromise = (async () => {
-      const vision = await import(`${CDN}/vision_bundle.mjs`);
-      const fileset = await vision.FilesetResolver.forVisionTasks(`${CDN}/wasm`);
-      const opts = (delegate) => ({
-        baseOptions: { modelAssetPath: MODEL, delegate },
-        runningMode: 'VIDEO', numHands: 2,
-        minHandDetectionConfidence: 0.4, minHandPresenceConfidence: 0.4, minTrackingConfidence: 0.4,
-      });
-      try { return await vision.HandLandmarker.createFromOptions(fileset, opts('GPU')); }
-      catch { return await vision.HandLandmarker.createFromOptions(fileset, opts('CPU')); }
-    })();
+    landmarkerPromise = createLandmarker(LOCAL).then((lm) => { handsSource = 'local'; return lm; }, (e) => {
+      console.warn('[hands] local MediaPipe failed, using the CDN:', e);
+      return createLandmarker(CDN).then((lm) => { handsSource = 'cdn'; return lm; });
+    });
   }
   return landmarkerPromise;
 }
@@ -81,7 +95,7 @@ export async function startHands({ video, facingMode = 'user', onHands, maxHz = 
   const mirror = facingMode === 'user';
   const pinching = {}; // hysteresis per hand
   const filters = {};  // One Euro filters per hand
-  const stats = { maxHz, ms: 0, hfov: 63 };
+  const stats = { maxHz, ms: 0, hfov: 63, src: handsSource };
   let running = true, last = -1, nextRun = 0;
   function loop() {
     if (!running) return;

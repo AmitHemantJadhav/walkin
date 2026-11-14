@@ -791,7 +791,7 @@ function tickPerf() {
   if (!show) return;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
-    + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
+    + `hands ${handsApi ? `${handsApi.stats?.src ?? ''} ${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
       + `${handsList.length} seen${handsList.map((h) => (h.depth ? ` ${h.side[0]} ${(h.depth * 100).toFixed(0)} cm` : '')).join('')}` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
@@ -852,6 +852,7 @@ await goTo(start.id, true);
 $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
+  renderer, // for env maps / tone mapping (#29); don't resize it or change its pixel ratio, app.js owns that
   get current() { return current; }, get selected() { return selected; },
   get handRay() { return handRay; },
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}

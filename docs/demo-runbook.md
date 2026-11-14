@@ -6,6 +6,9 @@ something doesn't work yet it says so.
 Three minutes, in this order. The point of the order is that each beat answers a question the
 previous one raises.
 
+**[`demo-card.md`](demo-card.md) is the one-screen version** — the seven beats, the lines to say, and
+this list. Hold that; this is the document you read beforehand.
+
 ## The six things that will bite you
 
 Each one is explained where it belongs below; this is the list to read on the walk to the stage.

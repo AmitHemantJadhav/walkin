@@ -1,0 +1,77 @@
+/* outside.js: the house from above (Vexcel) + its listing (CoStar), before you walk in. Uses ui.css's glass tokens. */
+#outside {
+  position: fixed; inset: 0; z-index: 60; overflow: hidden;
+  background: #0d0f12; color: var(--fg);
+  opacity: 0; transition: opacity .45s var(--ease);
+  --os-shift: 180px;            /* the house sits right of centre, clear of the card */
+}
+#outside[hidden] { display: none; }
+#outside.shown { opacity: 1; }
+#outside.walking { opacity: 0; transition: opacity .5s ease-in .8s; pointer-events: none; }
+
+.os-map {
+  position: absolute; top: 50%; left: calc(50% + var(--os-shift));
+  width: calc(max(100vw, 100vh) + 2 * var(--os-shift)); height: calc(max(100vw, 100vh) + 2 * var(--os-shift));
+  translate: -50% -50%;
+  transform: scale(1);
+  transition: transform 22s cubic-bezier(.2, .6, .3, 1);
+  will-change: transform;
+}
+#outside.shown .os-map { transform: scale(1.12); }          /* a slow drift toward the house */
+#outside.walking .os-map { transform: scale(8); transition: transform 1.3s cubic-bezier(.55, 0, .8, .2); }
+.os-map img, .os-map svg { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; -webkit-user-drag: none; }
+.os-map img { object-fit: cover; }
+
+.os-parcel { fill: none; stroke: rgba(255, 255, 255, .9); stroke-width: 2px; stroke-dasharray: 7 6; vector-effect: non-scaling-stroke; }
+.os-other  { fill: rgba(255, 255, 255, .08); stroke: rgba(255, 255, 255, .55); stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.os-house  { fill: rgba(255, 196, 0, .22); stroke: #ffc400; stroke-width: 3px; vector-effect: non-scaling-stroke;
+             animation: os-pulse 2.4s ease-in-out infinite; }
+.os-pin    { fill: #ffc400; stroke: #fff; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+@keyframes os-pulse { 50% { fill: rgba(255, 196, 0, .38); } }
+
+.os-shade {
+  position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(90deg, rgba(0, 0, 0, .5) 0%, rgba(0, 0, 0, .12) 42%, rgba(0, 0, 0, 0) 65%);
+}
+
+.os-card {
+  position: absolute; left: 16px; top: max(16px, env(safe-area-inset-top));
+  width: min(360px, calc(100vw - 32px)); max-height: calc(100% - 32px); overflow: auto;
+  border-radius: 24px; padding: 16px 18px;
+  background: var(--glass-strong);
+}
+.os-steps { display: flex; align-items: center; gap: 6px; font: 600 10.5px/1 system-ui, sans-serif;
+            letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.os-steps span.on { color: var(--fg); }
+.os-steps i { width: 14px; height: 1px; background: var(--glass-edge); }
+.os-price { font: 650 30px/1.1 system-ui, -apple-system, sans-serif; margin-top: 12px; letter-spacing: -.01em; }
+.os-price em { font: 600 11px/1 system-ui, sans-serif; font-style: normal; vertical-align: middle; margin-left: 10px;
+               padding: 4px 8px; border-radius: 999px; background: rgba(52, 199, 89, .9); color: #fff; }
+.os-addr { font: 500 13px/1.35 system-ui, sans-serif; color: var(--muted); margin-top: 4px; }
+.os-facts { font: 600 14px/1.35 system-ui, sans-serif; margin-top: 10px; }
+.os-chips { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.os-chips span { font: 500 12px/1 system-ui, sans-serif; padding: 6px 9px; border-radius: 999px; background: var(--glass-hover); }
+.os-above { font: 500 12.5px/1.4 system-ui, sans-serif; margin-top: 12px; color: var(--muted); }
+.os-above b { color: #ffc400; font-weight: 600; margin-right: 4px; }
+#outside .os-go {
+  display: block; width: 100%; margin-top: 14px; padding: 13px 16px;
+  background: var(--glass-on); color: var(--on-fg); font: 650 15px/1 system-ui, sans-serif;
+}
+#outside .os-go:hover { background: #fff; }
+#outside .os-go:disabled { opacity: .55; cursor: default; transform: none; }
+.os-src { font: 500 11px/1.35 system-ui, sans-serif; color: var(--muted); margin-top: 10px; }
+
+/* portrait phones: the card goes to the bottom, the house sits in the top half */
+@media (max-width: 640px) and (orientation: portrait) {
+  #outside { --os-shift: 0px; }
+  .os-map { top: 32%; }
+  .os-card { top: auto; bottom: max(16px, env(safe-area-inset-bottom)); max-height: 62%; }
+  .os-shade { background: linear-gradient(0deg, rgba(0, 0, 0, .55) 0%, rgba(0, 0, 0, 0) 55%); }
+}
+/* landscape phones: a narrower, denser card */
+@media (max-height: 480px) and (orientation: landscape) {
+  #outside { --os-shift: 150px; }
+  .os-card { width: min(320px, 45vw); padding: 12px 14px; }
+  .os-price { font-size: 24px; margin-top: 8px; }
+  .os-chips span:nth-child(n+5) { display: none; }
+}

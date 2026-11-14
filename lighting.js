@@ -138,7 +138,7 @@ export async function relight(panoOverride) {
   }
 
   // a dark room gets a lighter shadow, a bright one a deeper contact
-  setContactShadow({ opacity: THREE.MathUtils.clamp(0.18 + light.mean * 0.55, 0.16, 0.6) });
+  setContactShadow({ opacity: THREE.MathUtils.clamp(0.3 + light.mean * 0.6, 0.26, 0.78) });
 
   const d = dir ? dir.position.clone().normalize() : new THREE.Vector3();
   console.log(`lighting ${pano.id}: mean ${light.mean.toFixed(2)} · ambient ${hemi ? hemi.intensity.toFixed(2) : '-'}`

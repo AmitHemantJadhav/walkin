@@ -22,13 +22,21 @@ async function getLandmarker() {
   return landmarkerPromise;
 }
 
-// The middle 70% of the camera image covers the whole screen, so you don't have to reach the edges.
-const CROP = 0.15, SPAN = 0.7;
-const toScreen = (v) => (v - CROP) / SPAN;
+// The middle 70% of the camera image (in height) covers the whole view, so you don't have to reach the edges.
+// The crop has the view's own aspect, so hands keep their real proportions instead of being stretched to the
+// screen: wider on a 16:10 laptop, narrower per eye in the headset. Never more than 90% of the image either way.
+const SPAN = 0.7, MAX_SPAN = 0.9;
+export function cropFor(viewAspect, vw, vh) {
+  const va = vw / vh || 4 / 3;
+  let sy = SPAN, sx = (SPAN * viewAspect) / va;
+  if (sx > MAX_SPAN) { sx = MAX_SPAN; sy = (MAX_SPAN * va) / viewAspect; }
+  return { cx: (1 - sx) / 2, cy: (1 - sy) / 2, sx, sy };
+}
 
 // maxHz caps how often detection runs: detectForVideo blocks the main thread (~10-20 ms on a phone), so on a
 // phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
-export async function startHands({ video, facingMode = 'user', onHands, maxHz = 30 }) {
+// aspect(): width / height of the view the hands are drawn in (one eye in the headset).
+export async function startHands({ video, facingMode = 'user', onHands, maxHz = 30, aspect = () => innerWidth / innerHeight }) {
   const lm = await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
@@ -37,7 +45,6 @@ export async function startHands({ video, facingMode = 'user', onHands, maxHz = 
   await video.play();
 
   const mirror = facingMode === 'user';
-  const cam = { mirror, crop: CROP, span: SPAN }; // how screen units map back to the video (realhands.js)
   const pinching = {}; // hysteresis per hand
   const stats = { maxHz, ms: 0 };
   let running = true, last = -1, nextRun = 0;
@@ -52,11 +59,14 @@ export async function startHands({ video, facingMode = 'user', onHands, maxHz = 
     last = video.currentTime;
     const r = lm.detectForVideo(video, t);
     stats.ms = stats.ms ? stats.ms * 0.9 + (performance.now() - t) * 0.1 : performance.now() - t;
+    // how screen units map back to the video (realhands.js draws the same rectangle)
+    const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight) };
+    const toScreen = (p) => ({ x: ((mirror ? 1 - p.x : p.x) - cam.cx) / cam.sx, y: (p.y - cam.cy) / cam.sy, z: p.z });
     const hands = (r.landmarks || []).map((L, i) => {
       // MediaPipe labels assume a mirrored (selfie) image; flip for the back camera
       let side = ((r.handednesses || r.handedness || [])[i] || [])[0]?.categoryName || `h${i}`;
       if (!mirror && (side === 'Left' || side === 'Right')) side = side === 'Left' ? 'Right' : 'Left';
-      const pts = L.map((p) => ({ x: toScreen(mirror ? 1 - p.x : p.x), y: toScreen(p.y), z: p.z }));
+      const pts = L.map(toScreen);
       const d = (a, b) => Math.hypot(L[a].x - L[b].x, L[a].y - L[b].y);
       const size = d(0, 9) || 1e-3;                 // wrist to middle knuckle, in camera-image units
       const ratio = d(4, 8) / size;                  // thumb tip to index tip, relative to hand size

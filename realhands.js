@@ -36,7 +36,8 @@ export function createRealHands(video) {
 
   /**
    * hands: the list from hands.js ({pts: 21 × {x, y} in 0..1 screen units, x, y = pinch point, pinch}).
-   * cam: {mirror, crop, span} from hands.js. stereo: draw once per eye (side-by-side headset view).
+   * cam: {mirror, cx, cy, sx, sy} from hands.js (the camera rectangle the view shows, in 0..1 image units).
+   * stereo: draw once per eye (side-by-side headset view).
    */
   function draw(hands, cam, stereo) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -60,7 +61,7 @@ export function createRealHands(video) {
       // 2) the camera image, kept only where the mask is (source-in multiplies by the mask's alpha)
       ctx.globalCompositeOperation = 'source-in';
       if (cam.mirror) { ctx.translate(2 * x0 + ew, 0); ctx.scale(-1, 1); }
-      ctx.drawImage(video, cam.crop * vw, cam.crop * vh, cam.span * vw, cam.span * vh, x0, 0, ew, H);
+      ctx.drawImage(video, cam.cx * vw, cam.cy * vh, cam.sx * vw, cam.sy * vh, x0, 0, ew, H);
       ctx.restore();
       // 3) a glowing dot between thumb and index while pinching
       for (const { h, span } of hs) {

@@ -514,6 +514,12 @@ let handCam = 'user'; // handheld: front camera sees your hand; in the headset w
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
 const realHands = createRealHands($('handcam'));
+function setHandStyle(s) {
+  handStyle = s === 'skeleton' ? 'skeleton' : 'real';
+  if (handStyle !== 'real') realHands.clear();
+  const b = $('bHandStyle');
+  if (b) b.textContent = handStyle === 'real' ? '🖐 Real hands' : '🦴 Skeleton';
+}
 
 function makeHandViz() {
   const g = new THREE.Group();
@@ -639,7 +645,8 @@ function showCamPreview(mode) {
 async function restartHands(mode) {
   if (handsApi) handsApi.stop();
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
-  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX });
+  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
+    aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
@@ -777,6 +784,7 @@ $('bVR').onclick = () => toggleVR();
 $('exitvr').onclick = () => toggleVR(false);
 $('bHands').onclick = toggleHands;
 $('bCam').onclick = toggleCam;
+if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
 $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
 $('bEmpty').onclick = async () => {
   showEmpty = !showEmpty;
@@ -826,6 +834,6 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   get handRay() { return handRay; },
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
-  set handStyle(s) { handStyle = s === 'skeleton' ? 'skeleton' : 'real'; if (handStyle !== 'real') realHands.clear(); },
+  set handStyle(s) { setHandStyle(s); },
 }; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

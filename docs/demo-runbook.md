@@ -218,16 +218,14 @@ name — *"stage this as a living room"* — and it will try anyway.
 
 Both La Mirada living rooms have a television, each one squarely facing its sofa.
 
-Other houses, measured the same way — and the numbers depend on whether **#51** is merged, because
-that is what lets a big open-plan kitchen take the living set:
+Other houses, measured the same way on today's `main`:
 
-| | with #51 | without |
+| | | |
 |---|---|---|
-| 10319 Dunvegan Way | 19 pieces, 4 rooms (its 31 m² kitchen gets the living set, television and all) | 12 pieces, 3 rooms |
-| 314 Gale St | 26 pieces, 4 rooms | 19 pieces, 4 rooms |
-
-La Mirada is 32 either way. If the counts come out low on the day, that is the reason — check
-whether #51 landed before assuming something is broken.
+| 5836 La Mirada Ave | **32 pieces** | 6 rooms |
+| 314 Gale St | **26 pieces** | 4 rooms |
+| 10319 Dunvegan Way | **19 pieces** | 4 rooms — its 31 m² kitchen is open-plan, so it gets the living set, television and all |
+| the fixture (`?m=fixture`) | **12 pieces** | 2 rooms, no keys needed |
 
 ---
 

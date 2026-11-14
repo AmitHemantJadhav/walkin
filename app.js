@@ -1237,10 +1237,11 @@ dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead o
 // #108: the home's own furniture as 3D pieces, cut from the MatterPak by tools/meshdiff.py (data/<model>/furniture.bin).
 // realfurniture.js builds them; this is the way in without a console, which a phone doesn't have.
 // More → 🛋 Own furniture toggles them; ?mesh=1 puts them in on load (add &a1=1 to get the headset fps with them on).
-// Pieces photogrammetry got wrong (melted plants, shredded chairs) are left out: fold/captured from
-// tools/meshquality.py, thresholds from #117. ?mesh=all loads every piece, for debugging.
+// Pieces photogrammetry got wrong (melted plants, shredded chairs) are left out: the quarter of this
+// house with the worst fold (foldRank from tools/meshdiff.py, #117). A fixed fold cut doesn't travel
+// between houses (it took 34% of one and 59% of another). ?mesh=all loads every piece, for debugging.
 const meshBtn = $('bMesh');
-const meshOpts = params.get('mesh') === 'all' ? {} : { maxFold: 33, maxCaptured: 1.0 };
+const meshOpts = params.get('mesh') === 'all' ? {} : { worst: 0.25 };
 const meshPieces = () => furniture.children.filter((o) => o.userData.meshPiece);
 let meshBusy = false;
 async function toggleMeshFurniture() {

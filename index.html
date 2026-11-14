@@ -34,6 +34,7 @@
   body.vr #handcam { display: none !important; }
 </style>
 <link rel="stylesheet" href="ui.css">
+<link rel="stylesheet" href="voice.css">
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three/build/three.module.js",
@@ -90,6 +91,7 @@
     <button id="bStage" title="Furnish the room you are standing in">⌂ Stage room</button>
     <button id="bClearRoom" title="Take everything out of this room">⌁ Clear room</button>
     <button id="bCam" title="Which camera watches your hands (the headset always uses the back camera)">📷 Front</button>
+    <button id="bHandStyle" title="Show your real hands from the camera, or a 3D skeleton">🖐 Real hands</button>
     <button id="bGyro" title="Look around by moving the phone">Gyro</button>
     <button id="bDebug" title="Wall overlay + alignment controls">Debug</button>
   </div>
@@ -106,5 +108,6 @@
 <script type="module" src="picker.js"></script>
 <script type="module" src="pointer.js"></script>
 <script type="module" src="ui.js"></script>
+<script type="module" src="voice.js"></script>
 </body>
 </html>

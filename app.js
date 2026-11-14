@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { StereoEffect } from 'three/addons/effects/StereoEffect.js';
 import { FURNITURE, buildFurniture } from './furniture.js';
+import { createRealHands } from './realhands.js';
 
 const params = new URLSearchParams(location.search);
 const MODEL = params.get('m') || 'zvKHR9DHNjJ';
@@ -32,13 +33,16 @@ stereo.setSize(innerWidth, innerHeight);
 
 // Adaptive resolution state (A1). Declared here, before any event handler that touches it (see tickPerf below).
 const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(0.75, MAX_PR);
-const perf = { frames: 0, hands: 0, t0: performance.now(), pr: MAX_PR, cap: MAX_PR, slow: 0, fast: 0 };
+// Hand detection blocks the main thread each time it runs, so its rate backs off too (after resolution reaches 1x).
+// 30 Hz = the camera's own rate, so the top step costs nothing on a laptop.
+const HAND_HZ_MAX = 30, HAND_HZ_MIN = 15;
+const perf = { frames: 0, hands: 0, t0: performance.now(), pr: MAX_PR, cap: MAX_PR, handCap: HAND_HZ_MAX, slow: 0, fast: 0 };
 function setPixelRatio(pr) {
   perf.pr = THREE.MathUtils.clamp(Math.round(pr * 4) / 4, MIN_PR, MAX_PR);
   renderer.setPixelRatio(perf.pr);
   console.log(`[perf] pixel ratio ${perf.pr}`);
 }
-function resetPerfCap() { perf.cap = MAX_PR; perf.slow = perf.fast = 0; }
+function resetPerfCap() { perf.cap = MAX_PR; perf.handCap = HAND_HZ_MAX; perf.slow = perf.fast = 0; }
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 500);
@@ -507,7 +511,15 @@ const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
-const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+// A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
+let handStyle = 'real';
+const realHands = createRealHands($('handcam'));
+function setHandStyle(s) {
+  handStyle = s === 'skeleton' ? 'skeleton' : 'real';
+  if (handStyle !== 'real') realHands.clear();
+  const b = $('bHandStyle');
+  if (b) b.textContent = handStyle === 'real' ? '🖐 Real hands' : '🦴 Skeleton';
+}
 
 function makeHandViz() {
   const g = new THREE.Group();
@@ -534,7 +546,7 @@ function screenToWorld(sx, sy, depth, out) {
 }
 function drawHands() {
   const seen = new Set();
-  for (const h of handsList) {
+  for (const h of handStyle === 'skeleton' || debug ? handsList : []) {
     seen.add(h.side);
     const g = handViz[h.side] || (handViz[h.side] = makeHandViz());
     g.visible = true;
@@ -554,9 +566,10 @@ function drawHands() {
   for (const [side, g] of Object.entries(handViz)) if (!seen.has(side)) g.visible = false;
 }
 
-function onHands(list) {
+function onHands(list, cam) {
   perf.hands++;
   handsList = list;
+  realHands.draw(handStyle === 'real' ? list : [], cam, vr);
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
@@ -632,7 +645,8 @@ function showCamPreview(mode) {
 async function restartHands(mode) {
   if (handsApi) handsApi.stop();
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
-  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands });
+  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
+    aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
@@ -640,6 +654,7 @@ async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
+    realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
     btn.classList.remove('on'); showCamPreview(handCam);
@@ -736,14 +751,26 @@ function tickPerf() {
   if (dt > 2000 || document.hidden) return; // the tab was in the background: not a real measurement
   perf.slow = fps < 45 ? perf.slow + 1 : 0;
   perf.fast = fps > 57 ? perf.fast + 1 : 0;
-  if (perf.slow >= 2 && perf.pr > MIN_PR) { perf.cap = perf.pr - 0.25; setPixelRatio(perf.cap); perf.slow = 0; }
-  else if (perf.fast >= 4 && perf.pr < perf.cap) { setPixelRatio(perf.pr + 0.25); perf.fast = 0; }
+  // Too slow: resolution steps down to 1x first, then hand detection 5 Hz at a time, then resolution again.
+  // Fast enough: resolution climbs back first, then the hand rate (each never above the last level that was slow).
+  const handHzNow = handsApi?.stats?.maxHz;
+  if (perf.slow >= 2) {
+    perf.slow = 0;
+    if (handHzNow > HAND_HZ_MIN && perf.pr <= 1) {
+      perf.handCap = handHzNow - 5; handsApi.setMaxHz(perf.handCap); console.log(`[perf] hand detection ${perf.handCap} Hz`);
+    } else if (perf.pr > MIN_PR) { perf.cap = perf.pr - 0.25; setPixelRatio(perf.cap); }
+  } else if (perf.fast >= 4) {
+    perf.fast = 0;
+    if (perf.pr < perf.cap) setPixelRatio(perf.pr + 0.25);
+    else if (handHzNow < perf.handCap) { handsApi.setMaxHz(handHzNow + 5); console.log(`[perf] hand detection ${handHzNow + 5} Hz`); }
+  }
   const show = debug || fpsAlways;
   fpsEls.forEach((el, i) => { el.style.display = show && (i === 0 || vr) ? 'block' : 'none'; });
   if (!show) return;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
-    + `hands ${handsApi ? `${handHz.toFixed(0)}/s, ${handsList.length} seen` : 'off'} · `
+    + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
+      + `${handsList.length} seen` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }
@@ -757,6 +784,7 @@ $('bVR').onclick = () => toggleVR();
 $('exitvr').onclick = () => toggleVR(false);
 $('bHands').onclick = toggleHands;
 $('bCam').onclick = toggleCam;
+if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
 $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
 $('bEmpty').onclick = async () => {
   showEmpty = !showEmpty;
@@ -803,5 +831,9 @@ $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
   get current() { return current; }, get selected() { return selected; },
-  get handRay() { return handRay; } }; // hooks for agent.js and other modules
+  get handRay() { return handRay; },
+  get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
+  get handStyle() { return handStyle; },
+  set handStyle(s) { setHandStyle(s); },
+}; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

@@ -466,7 +466,7 @@ const FRIENDLY = {
 function friendlyError(e) {
   if (e && e.status === 429) return e.friendly || FRIENDLY.busy;
   if (e && (e.status === 0 || e.status === 502 || e.status === 504)) return FRIENDLY.network;
-  if (e && e.status === 503) return "I'm not connected to my AI yet. The team needs to add the key.";
+  if (e && e.status === 503) return "I can't reach my brain right now.";
   return FRIENDLY.other;
 }
 
@@ -574,7 +574,22 @@ function browserSpeak(text, capMs = 15000) {
  * Speak a line. Resolves when it has finished playing (at most `capMs`), so a reply can wait for the filler.
  * A newer line replaces an older one. Fillers are fixed sentences, so the relay's disk cache makes them free.
  */
-async function speak(text, { filler = false, capMs = filler ? 2500 : 15000 } = {}) {
+let talking = 0; // lines in flight; voice.js pauses its microphone while this is above zero (no self-trigger)
+const speechEvent = (state, text, filler) =>
+  window.dispatchEvent(new CustomEvent('walkin:speech', { detail: { state, text, filler, talking } }));
+
+async function speak(text, opts = {}) {
+  talking++;
+  speechEvent('start', text, !!opts.filler);
+  try {
+    await speakLine(text, opts);
+  } finally {
+    talking--;
+    speechEvent('end', text, !!opts.filler);
+  }
+}
+
+async function speakLine(text, { filler = false, capMs = filler ? 2500 : 15000 } = {}) {
   const seq = ++speakSeq;
   const ended = () => new Promise((resolve) => {
     const cap = setTimeout(resolve, capMs);
@@ -588,7 +603,7 @@ async function speak(text, { filler = false, capMs = filler ? 2500 : 15000 } = {
     if (player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
     const done = ended();
-    await player.play();
+    await Promise.race([player.play(), done]);   // play() can stay pending (no audio device): the cap still ends it
     await done;
   } catch (e) {
     console.info('[agent] ElevenLabs voice unavailable, using the browser voice:', e.message);
@@ -669,7 +684,7 @@ function buildUI() {
   talkEl = el.querySelector('#agentTalk');
   previewEl = el.querySelector('#agentPreview');
   previewEl.addEventListener('click', () => { previewEl.style.display = 'none'; });
-  talkEl.addEventListener('click', onTalk);
+  talkEl.addEventListener('click', () => (window.walkin.onTalk || onTalk)()); // voice.js may take this over
   addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
   // the viewer listens for keys and drags on the window; keep typing and taps inside the box
   for (const ev of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'wheel']) el.addEventListener(ev, (e) => e.stopPropagation());
@@ -690,7 +705,8 @@ function buildUI() {
   }
   buildUI();
   loadListing(window.walkin.house.model);
-  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere };
+  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere, isSpeaking: () => talking > 0,
+    isBusy: () => busy };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 })();

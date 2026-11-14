@@ -204,7 +204,7 @@ def mock_gemini(req, model):
         names = ", ".join(a.get("name", "?") for a in answered)
         say = next((a.get("response", {}).get("say") for a in answered if isinstance(a.get("response"), dict)
                     and a["response"].get("say")), None)
-        text = say or f"Mock reply: done ({names})."
+        text = say or "Done."
         return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP"}], "mock": True}
     words = " ".join(p.get("text", "") for p in parts if isinstance(p, dict)).lower()
     rules = [(r"wallpaper|brick|paint|wall", ("set_wall_material", {"description": "red brick with light grey mortar", "tile_metres": 0.9})),
@@ -218,7 +218,7 @@ def mock_gemini(req, model):
              (r"bed\b", ("add_furniture", {"kind": "queen"}))]
     call = next((c for pat, c in rules if re.search(pat, words)), ("describe_house", {}))
     if not req.get("tools"):
-        return {"candidates": [{"content": {"role": "model", "parts": [{"text": "Mock reply."}]}, "finishReason": "STOP"}], "mock": True}
+        return {"candidates": [{"content": {"role": "model", "parts": [{"text": "Okay."}]}, "finishReason": "STOP"}], "mock": True}
     return {"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": call[0], "args": call[1]}}]},
                             "finishReason": "STOP"}], "mock": True}
 
@@ -371,8 +371,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         voice = str(req.get("voice") or TTS_VOICE)
         if not text or not re.fullmatch(r"[A-Za-z0-9]{1,64}", voice):
             return self._json(400, {"error": "empty text or bad voice id"})
-        if MOCK:
-            return self._send(200, "audio/wav", mock_wav())
+        if MOCK:   # no voice service in mock: 503 makes agent.js speak with the browser voice instead of a silent clip
+            return self._json(503, {"error": "no TTS in GEMINI_MOCK mode (the browser voice speaks)"})
         key = os.environ.get("ELEVENLABS_API_KEY")
         if not key:
             return self._json(503, {"error": "ELEVENLABS_API_KEY is not set in .env"})

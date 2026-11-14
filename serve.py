@@ -16,7 +16,7 @@ Quota (R10, so a rate limit can't kill the demo):
     from disk and cost nothing. RELAY_CACHE=0 turns it off. Run the demo once before judging to pre-warm it.
   - GEMINI_MOCK=1: canned Gemini replies (tool calls, text, a brick tile image) and a silent TTS clip, so the
     agent flow can be tested without keys or quota.
-Static files: no-store for code (so edits show up), one day of private (browser-only) caching for data/ and models/.
+Static files: no-store for code (so edits show up), one day of private (browser-only) caching for data/, models/ and vendor/.
 """
 import base64, collections, datetime, hashlib, http.server, json, os, re, socketserver, struct, sys, threading, time
 import urllib.error, urllib.parse, urllib.request, zlib
@@ -53,7 +53,7 @@ MOCK = os.environ.get("GEMINI_MOCK", "") not in ("", "0", "false", "no")
 CACHE_DIR = os.path.join(ROOT, ".cache", "relay")
 CACHE_ON = os.environ.get("RELAY_CACHE", "1") not in ("0", "false", "no")
 FRIENDLY_BUSY = "One moment, I'm a bit busy. Ask me again in a few seconds."
-STATIC_CACHED = ("/data/", "/models/")  # big and rarely change: let phones keep them
+STATIC_CACHED = ("/data/", "/models/", "/vendor/")  # big and rarely change: let phones keep them
 
 
 # ------------------------------------------------------------------ quota: rate limits, stats, disk cache

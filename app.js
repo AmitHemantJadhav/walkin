@@ -412,8 +412,9 @@ canvas.addEventListener('pointerdown', (e) => {
   const item = hitFurniture();
   if (item) {
     select(item);
-    const f = hitFloor();
-    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2() };
+    const f = hitFloor(), P = phys();
+    drag = { mode: 'item', item, off: f ? new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) : new THREE.Vector2(),
+      phys: P && P.grab(item, 'mouse') ? P : null };
   } else {
     drag = { mode: 'look', x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, yaw: view.yaw, pitch: view.pitch };
   }
@@ -423,7 +424,11 @@ canvas.addEventListener('pointermove', (e) => {
   if (drag.mode === 'item') {
     setNDC(e.clientX, e.clientY);
     const f = hitFloor();
-    if (f) { drag.item.position.x = f.x + drag.off.x; drag.item.position.y = f.y + drag.off.y; checkFit(); }
+    if (f) {
+      const x = f.x + drag.off.x, y = f.y + drag.off.y;
+      if (drag.phys) drag.phys.moveTarget('mouse', [x, y]); else { drag.item.position.x = x; drag.item.position.y = y; }
+      checkFit();
+    }
   } else if (!gyro.on) {
     const k = (camera.fov / 75) * 0.0045;
     view.yaw = drag.yaw + (e.clientX - drag.x) * k;
@@ -437,6 +442,7 @@ canvas.addEventListener('pointerup', (e) => {
     if (h) goTo(h.object.userData.pano);
     else { selected = null; checkFit(); }
   }
+  if (drag?.phys) drag.phys.release('mouse'); // mouse sets pieces down where they are: no fling
   drag = null;
 });
 canvas.addEventListener('dblclick', (e) => {
@@ -511,6 +517,33 @@ const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {}, aims = {};
 // A2: a pinch grabs the nearest piece within 0.4 m of the pinch point (no need to hit it exactly), and teleports
 // only after the hand has pointed at the same puck for 300 ms (the cursor turns green), so a missed grab never jumps.
 const GRAB_RADIUS = 0.4, PUCK_RADIUS = 0.45, PUCK_DWELL_MS = 300;
+// A2 step 3: with Shaurya's physics.js loaded (walkin.physics, #44) hands and mouse give it a *target* instead of
+// setting the position, so a piece stops at walls, lags by its mass and slides if you let go while moving.
+// Without it (or with ?physics=off) we set the position directly, as before.
+const FLING_MIN = 0.5; // m/s: let go slower than this and the piece is just set down
+const phys = () => { const p = window.walkin?.physics; return p && p.enabled ? p : null; };
+function trackVel(g, x, y) { // smoothed velocity (m/s) of where the hand wants the piece, for the fling on release
+  const t = performance.now(), dt = g.last ? (t - g.last.t) / 1000 : 0;
+  if (g.last && dt < 0.005) return;
+  if (g.last) {
+    const a = Math.min(1, dt / 0.08);
+    g.vel[0] += ((x - g.last.x) / dt - g.vel[0]) * a;
+    g.vel[1] += ((y - g.last.y) / dt - g.vel[1]) * a;
+  }
+  g.last = { x, y, t };
+}
+function letGo(side, fling) {
+  const g = grabs[side];
+  if (!g) return;
+  if (g.phys) g.phys.release(side, fling && Math.hypot(g.vel[0], g.vel[1]) > FLING_MIN ? g.vel : null);
+  delete grabs[side];
+}
+function moveHeld(g, side, x, y, yaw) {
+  trackVel(g, x, y);
+  if (g.phys) { g.phys.moveTarget(side, [x, y], yaw); return; }
+  g.item.position.x = x; g.item.position.y = y;
+  if (typeof yaw === 'number') g.item.rotation.z = yaw;
+}
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
@@ -589,7 +622,7 @@ function onHands(list, cam) {
   camera.updateMatrixWorld();
   const present = new Set(list.map((h) => h.side));
   for (const side of Object.keys(handCursors)) if (!present.has(side)) handCursors[side].visible = false;
-  for (const side of Object.keys(grabs)) if (!present.has(side)) delete grabs[side];
+  for (const side of Object.keys(grabs)) if (!present.has(side)) letGo(side, false); // lost hand: no fling
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
   for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
 
@@ -622,13 +655,15 @@ function onHands(list, cam) {
       if (!item && !puckReady && selected && f && Math.hypot(selected.position.x - f.x, selected.position.y - f.y) < 1.2) item = selected;
       if (item && f) {
         select(item);
-        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y) };
+        const P = phys();
+        grabs[h.side] = { item, off: new THREE.Vector2(item.position.x - f.x, item.position.y - f.y),
+          phys: P && P.grab(item, h.side) ? P : null, vel: [0, 0], last: null };
       } else if (puckReady) {
         aims[h.side] = null;
         goTo(near.userData.pano);
       }
     } else if (!h.pinch) {
-      delete grabs[h.side];
+      letGo(h.side, true);
     }
     prevPinch[h.side] = h.pinch;
   }
@@ -642,18 +677,23 @@ function onHands(list, cam) {
     if (!twist || twist.item !== ga.item) {
       twist = { item: ga.item, a0: angle, r0: ga.item.rotation.z, off: new THREE.Vector2(ga.item.position.x - mid.x, ga.item.position.y - mid.y) };
     }
-    ga.item.rotation.z = twist.r0 + (angle - twist.a0);
-    ga.item.position.x = mid.x + twist.off.x;
-    ga.item.position.y = mid.y + twist.off.y;
+    const x = mid.x + twist.off.x, y = mid.y + twist.off.y, yaw = twist.r0 + (angle - twist.a0);
+    moveHeld(ga, ha.side, x, y, yaw);
+    moveHeld(gb, hb.side, x, y, yaw);
     checkFit();
     return;
   }
-  twist = null;
+  if (twist) { // two-hand hold just ended: re-anchor the hand still holding to where the piece is, so it doesn't jump
+    for (const h of list) {
+      const g = grabs[h.side];
+      if (g && g.item === twist.item && h.floor) g.off.set(g.item.position.x - h.floor.x, g.item.position.y - h.floor.y);
+    }
+    twist = null;
+  }
   for (const h of list) {
     const g = grabs[h.side];
     if (g && h.floor) {
-      g.item.position.x = h.floor.x + g.off.x;
-      g.item.position.y = h.floor.y + g.off.y;
+      moveHeld(g, h.side, h.floor.x + g.off.x, h.floor.y + g.off.y);
       checkFit();
     }
   }
@@ -676,6 +716,7 @@ async function toggleHands() {
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
+    for (const side of Object.keys(grabs)) letGo(side, false); // else physics keeps the piece held by a ghost hand
     realHands.clear();
     Object.values(handViz).forEach((g) => (g.visible = false));
     Object.values(handCursors).forEach((c) => (c.visible = false));
@@ -818,8 +859,14 @@ if (!house.panos.some((p) => p.imgEmpty)) { showEmpty = false; $('bEmpty').textC
 
 // ------------------------------------------------------------------ main loop
 const _dir = new THREE.Vector3(), _fwd = new THREE.Vector3();
+// walkin.beforeRender: add (dt) => {} to run every frame after all input (mouse, hands) and right before the draw,
+// e.g. physics.js constraining pieces. A callback that throws is dropped so it can't stop the render loop.
+const beforeRender = new Set();
+let lastFrameT = performance.now();
 function frame() {
   requestAnimationFrame(frame);
+  const now = performance.now(), dt = Math.min(0.05, (now - lastFrameT) / 1000);
+  lastFrameT = now;
   camera.position.copy(camPos);
   if (gyro.on && gyro.have) {
     if (gyro.offset === null) {
@@ -836,6 +883,9 @@ function frame() {
   sphere.position.copy(camPos);
   camera.updateMatrixWorld();
   drawHands();
+  for (const fn of beforeRender) {
+    try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
+  }
   if (selected && selBox.visible) selBox.box.setFromObject(selected);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
   tickPerf();
@@ -853,6 +903,7 @@ $('loading').remove();
 frame();
 window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view, roomAt, select, checkFit, FURNITURE,
   renderer, // for env maps / tone mapping (#29); don't resize it or change its pixel ratio, app.js owns that
+  beforeRender, // Set of (dt) => {} run every frame after input, before the draw (physics.js, #44)
   get current() { return current; }, get selected() { return selected; },
   get handRay() { return handRay; },
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}

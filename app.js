@@ -909,5 +909,13 @@ window.walkin = { house, cal, goTo, addFurniture, furniture, camera, scene, view
   get hands() { return handsList; }, // latest tracked hands: {side, pts[21] in 0..1 screen units, x, y, pinch}
   get handStyle() { return handStyle; },
   set handStyle(s) { setHandStyle(s); },
+  // A2 test hook: run made-up hands ({side, x, y, pinch}, x/y in 0..1 of the screen) through the real gesture code,
+  // so grab / carry / twist / pinch-teleport can be checked without a webcam. simHands([]) = hands gone (no fling).
+  simHands(list = []) {
+    onHands(list.map((h) => ({ side: 'Right', pinch: false, size: 0.2, ...h,
+      pts: h.pts || Array.from({ length: 21 }, () => ({ x: h.x, y: h.y, z: 0 })) })), null);
+    return handsList.map((h) => ({ side: h.side, floor: h.floor ? [h.floor.x, h.floor.y] : null,
+      holding: grabs[h.side]?.item?.userData.kind ?? null }));
+  },
 }; // hooks for agent.js and other modules
 dispatchEvent(new Event('walkin:ready')); // modules can wait for this instead of polling for window.walkin

@@ -58,6 +58,7 @@ const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, last
 export const physics = {
   enabled: true,
   jambSlide: true,              // #55: slide along a doorway's jamb, not into it (?jambslide=off)
+  doorRail: true,               // #55: a piece pushed at a doorway it fits commits to that door (?doorrail=off)
   MASS,
   stats,
   grab, moveTarget, release, shove,
@@ -351,13 +352,59 @@ function widthAcross(item, rot, d) {
 }
 
 /**
+ * #55: commit to one doorway. The per-frame assist slides a piece towards the nearest door ahead, and the
+ * hand pulls it back towards wherever the hand is, so from 35 cm off the sofa sat against the wall beside
+ * La Mirada's front door with the assist firing 500 times. And "the nearest door ahead" changes as the
+ * piece moves: the living room has three. So the first time a pushed piece is stopped by a wall with its
+ * centre line inside a doorway it fits through, that doorway becomes a rail: the hand still drives the
+ * piece through it, but the hand's offset along the wall is clamped to the band the doorway allows.
+ * Let go of the rail once the piece is through, or the hand pulls back or goes well off to the side.
+ * Returns the target to use this frame. ?doorrail=off turns it off.
+ */
+function doorRail(item, st, walls, tx, ty, trot, hit) {
+  if (!physics.doorRail) return [tx, ty];
+  const fitsAt = (d) => Math.min(widthAcross(item, st.rot, d), widthAcross(item, trot, d));
+  if (!st.rail && hit && hit.kind === 'wall') {
+    let best = null;
+    for (const d of walls.doors) {
+      const nx = -d.dy, ny = d.dx;                                  // the door's normal
+      const off = (st.x - d.x) * d.dx + (st.y - d.y) * d.dy;
+      const side = (st.x - d.x) * nx + (st.y - d.y) * ny;
+      const half = widthAcross(item, st.rot, { dx: nx, dy: ny }) / 2;   // the piece's depth through the door
+      if (Math.abs(off) > d.width / 2 || Math.abs(side) > half + 0.15) continue;  // not aimed at this one
+      if (fitsAt(d) > d.width - 0.02) continue;                     // a real misfit still stops and says so
+      const s = side > 0 ? -1 : 1;                                  // normal pointing from the piece through
+      if (((tx - st.x) * nx + (ty - st.y) * ny) * s <= 0) continue; // the hand isn't pushing through it
+      if (!best || Math.abs(off) < Math.abs(best.off)) best = { d, off, nx: nx * s, ny: ny * s };
+    }
+    if (best) st.rail = { d: best.d, nx: best.nx, ny: best.ny };
+  }
+  const r = st.rail;
+  if (!r) return [tx, ty];
+  const d = r.d;
+  const side = (st.x - d.x) * r.nx + (st.y - d.y) * r.ny;           // > 0: past the door plane
+  const tSide = (tx - d.x) * r.nx + (ty - d.y) * r.ny;
+  const tOff = (tx - d.x) * d.dx + (ty - d.y) * d.dy;
+  const half = widthAcross(item, st.rot, { dx: r.nx, dy: r.ny }) / 2;
+  if (side > half + 0.05 || side < -half - 0.6 || tSide < side - 0.1 || Math.abs(tOff) > d.width / 2 + 0.75) {
+    st.rail = null;                                                 // through, backed off, or gone elsewhere
+    return [tx, ty];
+  }
+  const band = Math.max(0, (d.width - fitsAt(d)) / 2 - 0.015);
+  const off = Math.max(-band, Math.min(band, tOff));
+  return [tx + d.dx * (off - tOff), ty + d.dy * (off - tOff)];
+}
+
+/**
  * S9: a piece that would fit through a doorway only goes through within about 10 cm of its centre line,
  * which is finer than tracked hands can hold. When one is blocked at a jamb and it *would* fit the way it
  * is turned, slide it sideways towards the centre line instead of stopping. A piece that genuinely does
  * not fit is left alone, so it still stops and still says "turn it".
  */
 function assistThroughDoor(item, st, walls, dt, dx, dy, wantRot) {
-  const near = doorAhead(item, st, walls, dx, dy);
+  // on a rail, help through that door and no other (#55)
+  const near = st.rail ? { d: st.rail.d, off: (st.rail.d.x - st.x) * st.rail.d.dx + (st.rail.d.y - st.y) * st.rail.d.dy }
+    : doorAhead(item, st, walls, dx, dy);
   if (!near) return false;
   // Judge the fit by the way it is turned OR the way the user is turning it: pressed against a jamb a
   // piece can't turn at all, so waiting for the turn to happen first would deadlock the two.
@@ -473,6 +520,7 @@ export function release(handId, velocity) {
   const h = hands.get(handId);
   if (!h) return false;
   const st = ensure(h.item);
+  st.rail = null;                 // the next carry picks its own doorway
   if (velocity) {
     const v = Math.min(MAX_V, Math.hypot(velocity[0], velocity[1]));
     const n = Math.hypot(velocity[0], velocity[1]) || 1;
@@ -573,13 +621,13 @@ function frame() {
     }
     if (st.tx === undefined) { st.tx = item.position.x; st.ty = item.position.y; }
     if (st.trot === undefined) st.trot = item.rotation.z;
-    const tx = st.tx, ty = st.ty, trot = st.trot;
-
+    let tx = st.tx, ty = st.ty;
+    const trot = st.trot;
     const jump = Math.hypot(tx - st.x, ty - st.y);
     const pushing = !!held || now - (st.pushT || 0) < SETTLED || now - (st.blockT || 0) < HOLD_BLOCK;
     if (jump > TELEPORT && !pushing) {                    // a placement, not a push: take it as given
       stats.teleports++;
-      st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false;
+      st.x = tx; st.y = ty; st.rot = trot; st.vx = st.vy = 0; st.sliding = false; st.rail = null;
       item.position.x = st.x; item.position.y = st.y; item.rotation.z = st.rot;
       st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
       continue;
@@ -587,14 +635,17 @@ function frame() {
 
     if (jump > 1e-4 || trot !== st.rot) {
       st.pushT = now;
+      if (st.rail) [tx, ty] = doorRail(item, st, walls, tx, ty, trot, null);   // #55: on a doorway's rail
+      const gap = Math.hypot(tx - st.x, ty - st.y);
       // heavier pieces lag further behind the hand, but never by more than MAX_LAG
       let k = 1 - Math.exp(-dt / lagOf(item.userData.kind));
-      if (jump * (1 - k) > MAX_LAG) k = 1 - MAX_LAG / jump;
+      if (gap * (1 - k) > MAX_LAG) k = 1 - MAX_LAG / gap;
       const nx = st.x + (tx - st.x) * k, ny = st.y + (ty - st.y) * k;
       const before = [st.x, st.y];
       const hit = step(item, st, nx, ny, trot, walls);
       stats.moved++;
       if (hit) { stats.blocked++; stats.lastHit = hit.kind; st.blockT = now; }
+      if (hit && !st.rail) doorRail(item, st, walls, tx, ty, trot, hit);   // #55: aimed at a doorway? take its rail
       st.vx = (st.x - before[0]) / dt;
       st.vy = (st.y - before[1]) / dt;
       st.sliding = false;
@@ -640,6 +691,7 @@ function frame() {
   }
   if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
   if (new URLSearchParams(location.search).get('jambslide') === 'off') physics.jambSlide = false;
+  if (new URLSearchParams(location.search).get('doorrail') === 'off') physics.doorRail = false;
   window.walkin.physics = physics;
   // the wall list is per floor and cheap, but drop it when the house or floor changes
   let lastFloor = null;

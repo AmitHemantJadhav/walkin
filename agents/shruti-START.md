@@ -17,11 +17,12 @@ CHECK AND FIX
    If it isn't, tell me to accept Amit's invite at https://github.com/AmitHemantJadhav/walkin/invitations.
    `claude --version` must work, because the loop calls it.
 2. Keys: if .env is missing, run cp .env.example .env. MATTERPORT_API_KEY and MATTERPORT_API_TOKEN must have values.
-   If they're empty, stop and tell me to paste them from /costar-keys in the #costar-group Discord.
+   If they're empty, DON'T stop: tell me to paste them later from /costar-keys in the #costar-group Discord,
+   skip steps 3 and 5 (house data and serve test need them), and continue with the rest.
    Also check GEMINI_API_KEY and ELEVENLABS_API_KEY, which R1–R3 need. If they're missing, tell me but continue:
    the agent builds with stubs and labels the issue needs-human.
    Report yes/no per key name, never the values.
-3. House data: data/zvKHR9DHNjJ/house.json must exist with 39 panos. If it doesn't, run python3 prep_house.py zvKHR9DHNjJ (~30 s).
+3. House data: data/zvKHR9DHNjJ/house.json must exist with 39 panos. If it doesn't, run python3 prep_house.py zvKHR9DHNjJ (~30 s). Skip if the Matterport keys are missing.
 4. scripts/smoke.sh must pass.
 5. Quick serve test on a spare port: start python3 serve.py 8001 in the background. Check that
    curl -s -o /dev/null -w '%{http_code}' 'http://localhost:8001/?m=zvKHR9DHNjJ' gives 200 and data/zvKHR9DHNjJ/house.json loads. Then stop it.

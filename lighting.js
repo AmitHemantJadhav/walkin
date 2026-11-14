@@ -129,7 +129,16 @@ function setEnvironment(pano, img, mean) {
   if (!w || !w.renderer || !w.scene) return null;
   const t0 = performance.now();
 
+  // The two sample the equirect with different handedness: app.js's sphere shader uses
+  // `atan(l.x, l.z)` and three's `equirectUv` uses `atan(dir.z, dir.x)`. Since
+  // atan2(x, z) == PI/2 - atan2(z, x), they differ by a *reflection*, which `environmentRotation`
+  // cannot express — so the image is flipped here and the remaining quarter turn is left to the
+  // rotation below. Without this a window on your left lights the furniture from the right.
+  envCtx.save();
+  envCtx.translate(ENV, 0);
+  envCtx.scale(-1, 1);
   envCtx.drawImage(img, 0, 0, ENV, ENV / 2);
+  envCtx.restore();
   const tex = new THREE.CanvasTexture(envCanvas);
   tex.mapping = THREE.EquirectangularReflectionMapping;
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -143,7 +152,10 @@ function setEnvironment(pano, img, mean) {
 
   // Orientation: three rotates the environment, not the scene, so invert local -> model.
   if (w.scene.environmentRotation) {
-    const m = new THREE.Matrix4().extractRotation(localToModel(pano, w.cal)).invert();
+    // local -> model, inverted because three rotates the map rather than the scene, then the quarter
+    // turn that is left once the reflection above has been taken out.
+    const m = new THREE.Matrix4().extractRotation(localToModel(pano, w.cal)).invert()
+      .multiply(new THREE.Matrix4().makeRotationZ(Math.PI / 2));
     w.scene.environmentRotation.setFromRotationMatrix(m);
   }
   // The hemisphere light already carries the room's level; the environment is a shaping light on top of

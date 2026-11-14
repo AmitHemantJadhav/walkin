@@ -120,6 +120,19 @@ standing in the living room.
 three palettes leave the scene census identical — 401 objects, 189 geometries, 54 materials, 7 textures — so
 nothing leaks. La Mirada stages 32 pieces across 6 rooms, Dunvegan 19 across 4 (with #51), 314 Gale St 26 across 4.
 
+### If there is time after the demo
+
+`scripts/smoke.sh` checks syntax, that no key or `data/` is tracked, and that `index.html` doesn't
+load a file that isn't there. **It would have caught none of the eight bugs found this morning** —
+the television never being placed, the rotate button doing nothing since S8, a deleted stand leaving
+its television in the air, the wrong door being quoted. All behaviour, none of it syntax.
+
+`walkin.preflight()` is the browser-side version of the same idea and it already catches most of
+that class: staging placing nothing, a piece stuck in something, no wall segments, the wallpaper
+tiles missing. @sshruti115 has a headless Chrome setup (she tested #60 with it) — **running
+`preflight()` headlessly in `smoke.sh` and failing on a red row** is the cheapest real test suite
+this repo could have. `scripts/` is the humans' to change, so this is a note, not a commit.
+
 ### Still untested by anyone, as of this writing
 
 - **Hands with a real camera** (#41, #50) — no webcam on this machine.

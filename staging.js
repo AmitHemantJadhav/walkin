@@ -659,14 +659,21 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
   let next = 0;
   const stageBtn = document.getElementById('bStage');
   if (stageBtn) {
+    // One timer, not one per press: pressing twice quickly used to let the first press's timer put
+    // "Stage room" back while the second press's style was still being read.
+    let labelTimer = null;
+    const flash = (text) => {
+      stageBtn.textContent = text;
+      clearTimeout(labelTimer);
+      labelTimer = setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 2200);
+    };
     stageBtn.addEventListener('click', () => {
       const w = window.walkin;
       const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
-      if (!room) { stageBtn.textContent = '⌂ not in a room'; setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 1800); return; }
+      if (!room) { flash('⌂ not in a room'); return; }
       const style = styles[next++ % styles.length];
       const res = stageRoom(room, style);
-      stageBtn.textContent = res.placed.length ? `⌂ ${style}` : '⌂ no room for a set';
-      setTimeout(() => { stageBtn.textContent = '⌂ Stage room'; }, 2200);
+      flash(res.placed.length ? `⌂ ${style}` : '⌂ no room for a set');
       console.log(`stage: ${res.say}`);
     });
   }

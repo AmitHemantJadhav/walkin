@@ -37,9 +37,16 @@ The same checks by hand, if you'd rather:
 | ✋ Hands | your hand appears cut out of the camera within a couple of seconds |
 | `?fps` | 45 or better in headset mode with hands on |
 
-**If there is no Gemini key**, start the server with `GEMINI_MOCK=1 python3 serve.py`. Every line
-below still works: the mock picks the right tool from your words and even generates a brick tile.
-It is not as smooth as the real thing but nothing dies on stage.
+**If there is no Gemini key**, start the server with `GEMINI_MOCK=1 python3 serve.py`. The mock picks
+a tool from your words and even generates a brick tile, so nothing dies on stage — but it is not as
+good as the real thing and two beats need help. Run end to end against the mock this morning:
+
+| beat | spoken | what actually happens |
+|---|---|---|
+| 2 furnish | *"stage this as a cosy living room"* | **works** — 7 pieces, television included, and John reads the sentence back |
+| 4 wallpaper | *"put red brick wallpaper on this wall"* | **works** — tile generated and laid at real scale, 3.9 s end to end |
+| 6 the plant | *"what plant should go here?"* | stops after reading the light: *"Mock reply: done (light_here)"*. Use `walkin.suggestPlant()` |
+| 7 the close | *"furnish the whole house"* | furnishes **one room**, not six — and that is true with a real key too, see beat 7 |
 
 **Start from a clean house:** `…/?m=zvKHR9DHNjJ&layout=none` — otherwise last night's furniture
 is still there, because layouts persist on purpose.
@@ -57,9 +64,10 @@ Matterport — this is a real listing, not a model.
 
 > **"Hey John — stage this as a cosy living room."**
 
-A sofa, rug, coffee table, armchair and a plant appear, and John says what he did:
+A sofa, rug, coffee table, armchair, tv stand, television and a plant appear, and John says what he did:
 
-> *"I put sofa, rug, coffee table, armchair and plant in the living room. Everything fits, doors clear."*
+> *"I put sofa, rug, coffee table, armchair, tv stand, television and plant in the living room.
+> Everything fits, doors clear."*
 
 **Say the thing that matters:** every piece is in the house's own coordinates, at its real size in
 metres, checked against the room's walls and doorways. The sofa is 2.1 m because sofas are.
@@ -105,8 +113,8 @@ door. Past that the assist does slide it towards the centre, but the hand is sti
 side, so the sofa lines itself up with the doorway and stops in it rather than passing. It looks
 deliberate rather than broken — but if it stops, back off half a metre, square up and go again, and
 don't let anyone think it is meant to be forgiving. Fixing that properly needs the doorway to act as
-a rail for the whole traverse; three attempts at it this morning each made something else worse, so
-it is written down rather than half-done.
+a rail for the whole traverse; four attempts at it this morning each made something else worse (#55),
+so it is written down rather than half-done.
 
 A piece that genuinely doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it
 won't fit through at all"* instead.
@@ -125,6 +133,11 @@ whether the sofa gets through the door.
 He reads the light at that spot from the photo and the window positions, and places one:
 
 > *"A fern — that spot is low light, 4.2 m from the nearest window, and it is happy out of the sun."*
+
+The plant depends on the reading: a fern out of the sun, a plant in indirect light, a tall cactus in
+a bright window. Standing in the living room this morning it answered *"A plant — that spot is medium
+light, 3.3 m from the nearest window, and it does well in indirect light."* — so don't promise a fern
+before you've heard it.
 
 If the model doesn't chain the two steps, `walkin.suggestPlant()` does the whole thing in one call
 and always lands.

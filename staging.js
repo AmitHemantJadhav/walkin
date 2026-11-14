@@ -3,6 +3,7 @@
 // with fit.js, so what comes back is a set that actually fits with the doors still usable.
 import { FURNITURE, PLANTS, applyStyle, setStyle, STYLES, getStyle } from './furniture.js';
 import { fitReport, fitLine, openings, overlaps, pointInPoly, footprint } from './fit.js';
+import { rules as placeRules, search as placeSearch, gridSpots, SPOT_RELAXED } from './placement.js';
 
 const WALL_GAP = 0.06;          // a piece stands this far off the wall
 const lower = (s) => (s || 'room').toLowerCase();
@@ -86,54 +87,62 @@ function clearOfWalls(house, floorId, kind, x, y, rot) {
 }
 
 // ------------------------------------------------------------------ putting pieces down
-// Tall pieces (lamp, bookcase, big plant) must not stand on a scan point: after a teleport there you would look
-// straight into them. Low pieces (bed, sofa, tables) are fine, you just look down at them; rugs you stand on.
-const CLEAR = 0.5, TALL = 1.0;
-
+// Every piece goes through placement.js's rules, the same ones a single "add a sofa" uses: nothing within
+// 0.45 m of a scan point (after a teleport there you would be standing in it - a coffee table is no better
+// than a lamp), nothing in a doorway's clear zone on either side, open floor in front of a sofa or a bed.
 function makePlacer(room, floorZ, floor, style) {
   const w = window.walkin;
   const placed = [];
   const skipped = [];
-  const spots = (w.house.panos || []).filter((p) => !floor || !p.floor || p.floor === floor).map((p) => p.pos);
-  function blocksSpot(kind, c) {
-    const f = FURNITURE[kind];
-    if (!f || f.flat || f.h < TALL) return false;
-    const cos = Math.cos(-(c.rot || 0)), sin = Math.sin(-(c.rot || 0));
-    return spots.some(([px, py]) => {
-      const dx = px - c.x, dy = py - c.y, lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
-      return Math.hypot(Math.max(0, Math.abs(lx) - f.w / 2), Math.max(0, Math.abs(ly) - f.d / 2)) < CLEAR;
-    });
+
+  /** Why this spot is no good, or '' if it is fine. `spot` relaxes the scan-point clearance (see SPOT_RELAXED). */
+  function wrong(kind, c, { full = true, spot } = {}) {
+    const bad = placeRules(kind, c.x, c.y, c.rot, { floor, spot });
+    if (bad.length) return bad[0];
+    const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor, quick: !full });
+    if (r.room !== room) return `would land in the ${lower(r.room ? r.room.label : 'hallway')}`;
+    if (!r.ok) return r.reasons[0];
+    if (!clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot)) return 'half of it would be in the wall';
+    return '';
   }
 
-  /** Try each candidate {x, y, rot} in turn; keep the first that passes the fit check. */
-  function tryPlace(kind, candidates, { optional = false } = {}) {
+  function put(kind, c) {
+    const item = w.addFurniture(kind);
+    const it = item || w.furniture.children[w.furniture.children.length - 1];
+    it.position.set(c.x, c.y, floorZ + (FURNITURE[kind].flat ? 0.002 : 0.004));
+    it.rotation.z = c.rot;
+    it.userData.floor = floor;
+    if (style) applyStyle(it, style);
+    placed.push({ kind, name: FURNITURE[kind].name, x: +c.x.toFixed(2), y: +c.y.toFixed(2), item: it });
+    return it;
+  }
+
+  /**
+   * Try each candidate {x, y, rot} in turn; keep the first that passes. With `search`, when none of them does,
+   * look for the best valid spot in the room near the first one, rather than give up.
+   */
+  function tryPlace(kind, candidates, { optional = false, search = false, spot } = {}) {
     let why = 'no room for it';
     for (const c of candidates) {
-      if (blocksSpot(kind, c)) { why = 'it would stand where you stand'; continue; }
-      const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
-      if (r.room !== room) { why = `would land in the ${lower(r.room ? r.room.label : 'hallway')}`; continue; }
-      if (!r.ok) { why = r.reasons[0]; continue; }
-      if (!clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot)) { why = 'half of it would be in the wall'; continue; }
-      const item = w.addFurniture(kind);
-      const it = item || w.furniture.children[w.furniture.children.length - 1];
-      it.position.set(c.x, c.y, floorZ + (FURNITURE[kind].flat ? 0.002 : 0.004));
-      it.rotation.z = c.rot;
-      it.userData.floor = floor;
-      if (style) applyStyle(it, style);
-      placed.push({ kind, name: FURNITURE[kind].name, x: +c.x.toFixed(2), y: +c.y.toFixed(2), item });
-      return it;
+      const bad = wrong(kind, c, { spot });
+      if (bad) { why = bad; continue; }
+      return put(kind, c);
+    }
+    if (search) {
+      const c0 = candidates[0];
+      const c = placeSearch(kind, room, { floor, near: c0 ? [c0.x, c0.y] : null, rot: c0 ? c0.rot : 0, spot });
+      if (c && !wrong(kind, c, { spot })) return put(kind, c);
     }
     if (!optional) skipped.push({ kind, name: FURNITURE[kind].name, why });
     return null;
   }
 
   /** Would this piece be fine here, without actually putting it there? */
-  function probe(kind, c) {
-    const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
-    return r.room === room && r.ok && clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot);
+  function probe(kind, c, spot) {
+    return !wrong(kind, c, { full: false, spot });
   }
 
-  return { placed, skipped, tryPlace, probe, floor };
+  return { placed, skipped, tryPlace, probe, floor, wrong };
 }
 
 /** Points along a wall, centre first, then stepping out to both sides. */
@@ -147,6 +156,14 @@ function alongWall(edge, kind, offsets = [0, 0.4, -0.4, 0.8, -0.8, 1.2, -1.2]) {
     y: edge.my + edge.dy * o + edge.ny * back,
     rot: edge.facing,
   }));
+}
+
+// sofa centre to coffee table centre: half the sofa, a 45 cm gap to reach across, half the table
+const COFFEE = FURNITURE.sofa.d / 2 + 0.45 + FURNITURE.coffeetable.d / 2;
+
+/** A spot `dist` in front of a candidate spot {x, y, rot}, before anything is placed there. */
+function spotInFront(c, dist) {
+  return { x: c.x + Math.sin(c.rot) * dist, y: c.y - Math.cos(c.rot) * dist, rot: c.rot + Math.PI };
 }
 
 /** A spot `dist` in front of an already placed piece (along the direction it faces). */
@@ -180,25 +197,37 @@ function besideOf(item, side) {
 const PLANS = {
   bedroom(room, edges, P) {
     const area = (room.dims || {}).areaFloor || 12;
-    const bed = area > 15 ? 'king' : 'queen';
-    const spec = FURNITURE[bed];
-    const reach = spec.w / 2 + FURNITURE.nightstand.w / 2 + 0.1;
+    let bed = area > 15 ? 'king' : 'queen', spec = FURNITURE[bed], reach = 0, tier;
 
-    // a bed wants a nightstand on each side, so score every spot on every usable wall by how many fit
+    // a bed wants a nightstand on each side, so score every spot on every usable wall by how many fit.
+    // Strict scan-point clearance first; a king that doesn't fit becomes a queen; then the relaxed clearance.
     let best = null;
-    for (const e of wallsFor(edges, spec.w, { avoidWindows: true })) {
-      for (const c of alongWall(e, bed)) {
-        if (!P.probe(bed, c)) continue;
-        const sides = [1, -1].filter((s) => P.probe('nightstand', beside(c, reach * s)));
-        const score = sides.length * 10 - (e.windows ? 2 : 0);
-        if (!best || score > best.score) best = { c, sides, score };
-        if (score >= 20) break;
+    tiers: for (const spot of [undefined, ...SPOT_RELAXED]) {
+      for (const b of bed === 'king' ? ['king', 'queen'] : ['queen']) {
+        const sp = FURNITURE[b], rch = sp.w / 2 + FURNITURE.nightstand.w / 2 + 0.1;
+        for (const e of wallsFor(edges, sp.w, { avoidWindows: true })) {
+          for (const c of alongWall(e, b)) {
+            if (!P.probe(b, c, spot)) continue;
+            const sides = [1, -1].filter((s) => P.probe('nightstand', beside(c, rch * s)));
+            const score = sides.length * 10 - (e.windows ? 2 : 0);
+            if (!best || score > best.score) best = { c, sides, score };
+            if (score >= 20) break;
+          }
+          if (best && best.score >= 20) break;
+        }
+        if (!best) {
+          // no wall position passed: search every wall, and prefer one where a nightstand fits beside it
+          const c = placeSearch(b, room, { floor: P.floor, wall: true, spot,
+            accept: (q) => [1, -1].some((s) => P.probe('nightstand', beside(q, rch * s))) })
+            || placeSearch(b, room, { floor: P.floor, wall: true, spot });
+          if (c) best = { c, sides: [1, -1].filter((s) => P.probe('nightstand', beside(c, rch * s))) };
+        }
+        if (best) { bed = b; spec = sp; reach = rch; tier = spot; break tiers; }
       }
-      if (best && best.score >= 20) break;
     }
-    if (!best) { P.skipped.push({ kind: bed, name: spec.name, why: 'no wall long enough without a door' }); return; }
+    if (!best) { P.skipped.push({ kind: bed, name: spec.name, why: 'no wall where it keeps the doors and scan points clear' }); return; }
 
-    const placedBed = P.tryPlace(bed, [best.c], { optional: true });
+    const placedBed = P.tryPlace(bed, [best.c], { optional: true, spot: tier });
     for (const s of best.sides) P.tryPlace('nightstand', [beside(best.c, reach * s)], { optional: true });
     void placedBed;
     const bedAt = placedBed ? [placedBed.position.x, placedBed.position.y] : null;
@@ -213,21 +242,35 @@ const PLANS = {
       return;
     }
     const sofa = FURNITURE.sofa;
-    let placedSofa = null;
-    for (const e of wallsFor(edges, sofa.w)) {
-      placedSofa = P.tryPlace('sofa', alongWall(e, 'sofa'), { optional: true });
-      if (placedSofa) break;
+    // A sofa is the set's anchor, so pick its spot for the whole set: back to a wall, and with the coffee
+    // table able to stand in front of it (not on a scan point, not in a doorway). Walls without a door first.
+    let spot = null, tier;
+    for (const t of [undefined, ...SPOT_RELAXED]) {
+      let fallback = null;
+      for (const e of wallsFor(edges, sofa.w)) {
+        for (const c of alongWall(e, 'sofa', [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9, 1.2, -1.2, 1.6, -1.6, 2, -2])) {
+          if (!P.probe('sofa', c, t)) continue;
+          if (!fallback) fallback = c;
+          if (P.probe('coffeetable', spotInFront(c, COFFEE))) { spot = c; break; }
+        }
+        if (spot) break;
+      }
+      if (!spot) {
+        spot = placeSearch('sofa', room, { floor: P.floor, wall: true, spot: t,
+          accept: (c) => P.probe('coffeetable', spotInFront(c, COFFEE)) }) || fallback;
+      }
+      if (spot) { tier = t; break; }
     }
+    const placedSofa = spot && P.tryPlace('sofa', [spot], { optional: true, spot: tier });
     if (!placedSofa) { P.skipped.push({ kind: 'sofa', name: sofa.name, why: 'no wall long enough without a door' }); return; }
-    P.tryPlace('rug', [inFrontOf(placedSofa, 1.25)], { optional: true });
-    P.tryPlace('coffeetable', [inFrontOf(placedSofa, 1.0), inFrontOf(placedSofa, 0.85)], { optional: true });
+    // the rug under the coffee table and the front of the sofa, the coffee table a knee's width (45 cm) off it
+    P.tryPlace('rug', [inFrontOf(placedSofa, COFFEE), inFrontOf(placedSofa, COFFEE + 0.2)], { optional: true });
+    P.tryPlace('coffeetable', [inFrontOf(placedSofa, COFFEE), inFrontOf(placedSofa, COFFEE + 0.15)], { optional: true });
     const side = FURNITURE.sofa.w / 2 + FURNITURE.armchair.w / 2 + 0.35;
-    P.tryPlace('armchair', [
-      { ...inFrontOf(placedSofa, 0.9, side), rot: placedSofa.rotation.z - Math.PI / 2 },
-      { ...inFrontOf(placedSofa, 0.9, -side), rot: placedSofa.rotation.z + Math.PI / 2 },
-      { ...inFrontOf(placedSofa, 1.4, side * 0.8), rot: placedSofa.rotation.z - Math.PI / 2 },
-      { ...inFrontOf(placedSofa, 1.4, -side * 0.8), rot: placedSofa.rotation.z + Math.PI / 2 },
-    ], { optional: true });
+    P.tryPlace('armchair', [COFFEE, COFFEE + 0.35].flatMap((d) => [
+      { ...inFrontOf(placedSofa, d, side), rot: placedSofa.rotation.z - Math.PI / 2 },
+      { ...inFrontOf(placedSofa, d, -side), rot: placedSofa.rotation.z + Math.PI / 2 },
+    ]), { optional: true });
     // The television goes on the wall the sofa looks at. Centre of the wall first, because that is
     // where a television goes, but an off-centre spot beats no television.
     const opposite = edges.filter((e) => Math.cos(e.facing - placedSofa.rotation.z) < -0.5)
@@ -244,6 +287,9 @@ const PLANS = {
       stand = P.tryPlace('tvstand', [3.4, 3.0, 2.6, 2.2].flatMap((d) => [
         inFrontOf(placedSofa, d), inFrontOf(placedSofa, d, 0.6), inFrontOf(placedSofa, d, -0.6),
       ]), { optional: true });
+    }
+    if (!stand) {
+      stand = P.tryPlace('tvstand', [inFrontOf(placedSofa, 3.0)], { optional: true, search: true });
     }
     if (stand) {
       // The television goes ON the stand, so it needs placeObject, which knows about surfaces.
@@ -263,21 +309,39 @@ const PLANS = {
 
   dining(room, edges, P) {
     const c = centroid(room.poly);
-    const table = P.tryPlace('table', [
-      { x: c.x, y: c.y, rot: 0 }, { x: c.x, y: c.y, rot: Math.PI / 2 },
-    ], { optional: true });
-    if (!table) { P.skipped.push({ kind: 'table', name: FURNITURE.table.name, why: 'no clear middle to the room' }); return; }
     const t = FURNITURE.table;
-    const rot = table.rotation.z;
-    const fx = Math.sin(rot), fy = -Math.cos(rot), sx = Math.cos(rot), sy = Math.sin(rot);
     const gap = t.d / 2 + FURNITURE.chair.d / 2 + 0.06;
     const spread = t.w / 4;
-    for (const [side, along, turn] of [[1, -spread, Math.PI], [1, spread, Math.PI], [-1, -spread, 0], [-1, spread, 0]]) {
-      P.tryPlace('chair', [{
-        x: table.position.x + fx * gap * side + sx * along,
-        y: table.position.y + fy * gap * side + sy * along,
-        rot: rot + turn,
-      }], { optional: true });
+    const chairsAt = (q) => [[1, -spread, Math.PI], [1, spread, Math.PI], [-1, -spread, 0], [-1, spread, 0]]
+      .map(([side, along, turn]) => {
+        const fx = Math.sin(q.rot), fy = -Math.cos(q.rot), sx = Math.cos(q.rot), sy = Math.sin(q.rot);
+        return { x: q.x + fx * gap * side + sx * along, y: q.y + fy * gap * side + sy * along, rot: q.rot + turn };
+      });
+    // The middle of the room first, but a dining room's scan point is usually right there: then the nearest
+    // spot where the table and all four chairs fit, then the nearest where the table fits at all.
+    const mid = [{ x: c.x, y: c.y, rot: 0 }, { x: c.x, y: c.y, rot: Math.PI / 2 }];
+    const seats = (q) => chairsAt(q).filter((s) => P.probe('chair', s)).length;
+    const near = gridSpots(room, { step: 0.15, rots: [0, Math.PI / 2] })
+      .sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y)).slice(0, 900);
+    let spot = null, tier;
+    for (const t of [undefined, ...SPOT_RELAXED]) {
+      spot = mid.find((q) => P.probe('table', q, t) && seats(q) === 4);
+      if (!spot) {
+        let best = null;
+        for (const q of near) {
+          if (!P.probe('table', q, t)) continue;
+          const n = seats(q);
+          if (!best || n > best.n) best = { q, n };
+          if (n === 4) break;
+        }
+        spot = best && best.n >= 2 ? best.q : (t ? best && best.q : null);
+      }
+      if (spot) { tier = t; break; }
+    }
+    const table = spot && P.tryPlace('table', [spot], { optional: true, spot: tier });
+    if (!table) { P.skipped.push({ kind: 'table', name: FURNITURE.table.name, why: 'no clear middle to the room' }); return; }
+    for (const s of chairsAt({ x: table.position.x, y: table.position.y, rot: table.rotation.z })) {
+      P.tryPlace('chair', [s], { optional: true });
     }
     P.tryPlace('plant', spotsFor(room, edges, 'plant', [table.position.x, table.position.y]), { optional: true });
   },
@@ -288,6 +352,8 @@ const PLANS = {
       desk = P.tryPlace('desk', alongWall(e, 'desk'), { optional: true });
       if (desk) break;
     }
+    if (!desk) desk = P.tryPlace('desk', [], { optional: true, search: true });
+    for (const spot of SPOT_RELAXED) if (!desk) desk = P.tryPlace('desk', [], { optional: true, search: true, spot });
     if (!desk) { P.skipped.push({ kind: 'desk', name: FURNITURE.desk.name, why: 'no wall long enough without a door' }); return; }
     P.tryPlace('chair', [{ ...inFrontOf(desk, 0.65), rot: desk.rotation.z + Math.PI }], { optional: true });
     for (const e of wallsFor(edges, FURNITURE.bookcase.w)) {
@@ -488,7 +554,9 @@ export function stageHouse(style) {
     if (!room.poly || room.poly.length < 3) continue;
     if (!PLAN_FOR(room.label)
       && (((room.dims || {}).areaFloor || 0) < 20 || NOT_LIVING.test(lower(room.label)))) continue;   // baths, halls, garages
-    const res = stageRoom(room, style);
+    // Only the palette: "cosy family home" names a style, not a set, and passed whole it would make every
+    // bedroom a living room (parseStyle reads "family" as one).
+    const res = stageRoom(room, parseStyle(style).palette || getStyle());
     if (!res.placed.length) continue;
     placed += res.placed.length;
     rooms.push({ room: room.label, area: +((room.dims || {}).areaFloor || 0).toFixed(1),
@@ -605,6 +673,8 @@ export function placeObject(kind, x, y, opts = {}) {
     }
     let found = null;
     for (const [ox, oy] of ring) {
+      const bad = placeRules(kind, x + ox, y + oy, rot, { floor });
+      if (bad.length) { if (!why) why = bad[0]; continue; }
       const r = fitReport({ kind, x: x + ox, y: y + oy, rot, floor });
       if (r.ok) { found = { x: x + ox, y: y + oy }; break; }
       if (!why) why = r.room ? r.reasons[0] : 'that spot is not in a room';
@@ -615,6 +685,7 @@ export function placeObject(kind, x, y, opts = {}) {
       const here = w.roomAt(w.current.pos[0], w.current.pos[1], floor);
       if (here) {
         for (const c of spotsFor(here, edgesOf(here, w.house), kind)) {
+          if (placeRules(kind, c.x, c.y, c.rot, { floor }).length) continue;
           const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
           if (r.room === here && r.ok && clearOfWalls(w.house, floor, kind, c.x, c.y, c.rot)) {
             found = { x: c.x, y: c.y };

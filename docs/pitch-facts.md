@@ -75,6 +75,7 @@ Measured against `main` on Sat 14 Nov, La Mirada (`zvKHR9DHNjJ`) unless another 
 
 - **Every number above is a laptop at 60 Hz.** As of this writing nobody has run it on a phone or in
   a headset, and nobody has run the hands with a real camera.
-- The doorway assist helps a piece that *would* fit onto the centre line, but only within about
-  **8 cm**, which is the real clearance anyway. Hands cannot hold ±8 cm. See #55.
+- The doorway assist helps a piece that *would* fit onto the centre line. Since #55 was fixed (#97:
+  a piece pushed at a door it fits commits to that door as a rail) it works from **±50 cm** off
+  centre, measured on the 1.15 m front door. It used to be about 8–10 cm, which no hand could hold.
 - Everything verified without a Gemini key, on the mock. It demos well; it is not the real thing.

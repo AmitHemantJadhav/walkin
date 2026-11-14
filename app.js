@@ -33,13 +33,16 @@ stereo.setSize(innerWidth, innerHeight);
 
 // Adaptive resolution state (A1). Declared here, before any event handler that touches it (see tickPerf below).
 const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(0.75, MAX_PR);
-const perf = { frames: 0, hands: 0, t0: performance.now(), pr: MAX_PR, cap: MAX_PR, slow: 0, fast: 0 };
+// Hand detection blocks the main thread each time it runs, so its rate backs off too (after resolution reaches 1x).
+// 30 Hz = the camera's own rate, so the top step costs nothing on a laptop.
+const HAND_HZ_MAX = 30, HAND_HZ_MIN = 15;
+const perf = { frames: 0, hands: 0, t0: performance.now(), pr: MAX_PR, cap: MAX_PR, handCap: HAND_HZ_MAX, slow: 0, fast: 0 };
 function setPixelRatio(pr) {
   perf.pr = THREE.MathUtils.clamp(Math.round(pr * 4) / 4, MIN_PR, MAX_PR);
   renderer.setPixelRatio(perf.pr);
   console.log(`[perf] pixel ratio ${perf.pr}`);
 }
-function resetPerfCap() { perf.cap = MAX_PR; perf.slow = perf.fast = 0; }
+function resetPerfCap() { perf.cap = MAX_PR; perf.handCap = HAND_HZ_MAX; perf.slow = perf.fast = 0; }
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.05, 500);
@@ -508,7 +511,6 @@ const handViz = {}, handCursors = {}, grabs = {}, prevPinch = {};
 let handsApi = null, handsList = [], twist = null;
 let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (pinching, else the first seen), or null
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
-const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
 const realHands = createRealHands($('handcam'));
@@ -637,7 +639,7 @@ function showCamPreview(mode) {
 async function restartHands(mode) {
   if (handsApi) handsApi.stop();
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
-  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands });
+  handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX });
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
@@ -742,14 +744,26 @@ function tickPerf() {
   if (dt > 2000 || document.hidden) return; // the tab was in the background: not a real measurement
   perf.slow = fps < 45 ? perf.slow + 1 : 0;
   perf.fast = fps > 57 ? perf.fast + 1 : 0;
-  if (perf.slow >= 2 && perf.pr > MIN_PR) { perf.cap = perf.pr - 0.25; setPixelRatio(perf.cap); perf.slow = 0; }
-  else if (perf.fast >= 4 && perf.pr < perf.cap) { setPixelRatio(perf.pr + 0.25); perf.fast = 0; }
+  // Too slow: resolution steps down to 1x first, then hand detection 5 Hz at a time, then resolution again.
+  // Fast enough: resolution climbs back first, then the hand rate (each never above the last level that was slow).
+  const handHzNow = handsApi?.stats?.maxHz;
+  if (perf.slow >= 2) {
+    perf.slow = 0;
+    if (handHzNow > HAND_HZ_MIN && perf.pr <= 1) {
+      perf.handCap = handHzNow - 5; handsApi.setMaxHz(perf.handCap); console.log(`[perf] hand detection ${perf.handCap} Hz`);
+    } else if (perf.pr > MIN_PR) { perf.cap = perf.pr - 0.25; setPixelRatio(perf.cap); }
+  } else if (perf.fast >= 4) {
+    perf.fast = 0;
+    if (perf.pr < perf.cap) setPixelRatio(perf.pr + 0.25);
+    else if (handHzNow < perf.handCap) { handsApi.setMaxHz(handHzNow + 5); console.log(`[perf] hand detection ${handHzNow + 5} Hz`); }
+  }
   const show = debug || fpsAlways;
   fpsEls.forEach((el, i) => { el.style.display = show && (i === 0 || vr) ? 'block' : 'none'; });
   if (!show) return;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const text = `${fps.toFixed(0)} fps · ${perf.pr}x (${px.x}×${px.y})${vr ? ' · headset' : ''}\n`
-    + `hands ${handsApi ? `${handHz.toFixed(0)}/s, ${handsList.length} seen` : 'off'} · `
+    + `hands ${handsApi ? `${handHz.toFixed(0)}/s (max ${handsApi.stats?.maxHz}), ${(handsApi.stats?.ms ?? 0).toFixed(0)} ms each, `
+      + `${handsList.length} seen` : 'off'} · `
     + `${renderer.info.render.calls} draws${vr ? '/eye' : ''}, ${(renderer.info.render.triangles / 1000).toFixed(0)}k tris`;
   fpsEls.forEach((el) => { el.textContent = text; });
 }

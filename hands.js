@@ -26,7 +26,9 @@ async function getLandmarker() {
 const CROP = 0.15, SPAN = 0.7;
 const toScreen = (v) => (v - CROP) / SPAN;
 
-export async function startHands({ video, facingMode = 'user', onHands }) {
+// maxHz caps how often detection runs: detectForVideo blocks the main thread (~10-20 ms on a phone), so on a
+// phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
+export async function startHands({ video, facingMode = 'user', onHands, maxHz = 30 }) {
   const lm = await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
@@ -37,13 +39,19 @@ export async function startHands({ video, facingMode = 'user', onHands }) {
   const mirror = facingMode === 'user';
   const cam = { mirror, crop: CROP, span: SPAN }; // how screen units map back to the video (realhands.js)
   const pinching = {}; // hysteresis per hand
-  let running = true, last = -1;
+  const stats = { maxHz, ms: 0 };
+  let running = true, last = -1, nextRun = 0;
   function loop() {
     if (!running) return;
     requestAnimationFrame(loop);
     if (video.readyState < 2 || video.currentTime === last) return;
+    const t = performance.now();
+    if (t < nextRun - 4) return; // 4 ms slack for display-frame jitter
+    // schedule from the due time, not from now, so 25 Hz on a 60 Hz display averages 25 instead of rounding to 20
+    nextRun = Math.max(nextRun + 1000 / stats.maxHz, t);
     last = video.currentTime;
-    const r = lm.detectForVideo(video, performance.now());
+    const r = lm.detectForVideo(video, t);
+    stats.ms = stats.ms ? stats.ms * 0.9 + (performance.now() - t) * 0.1 : performance.now() - t;
     const hands = (r.landmarks || []).map((L, i) => {
       // MediaPipe labels assume a mirrored (selfie) image; flip for the back camera
       let side = ((r.handednesses || r.handedness || [])[i] || [])[0]?.categoryName || `h${i}`;
@@ -62,7 +70,8 @@ export async function startHands({ video, facingMode = 'user', onHands }) {
   }
   loop();
   return {
-    facingMode,
+    facingMode, stats,
+    setMaxHz(hz) { stats.maxHz = hz; },
     stop() { running = false; stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; },
   };
 }

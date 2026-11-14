@@ -1,5 +1,41 @@
 # HANDOFF → Amit's agent
 
+## ▶ Paste this into Claude Code first (one prompt: checks everything, sets up GitHub and the live demo, starts the loop)
+```
+You're setting up my (Amit's) Walk-In agent for the night. This folder should be a clone of AmitHemantJadhav/walkin.
+THE GOAL is MAIN.md §0. The overnight loop keeps working toward it, cycle after cycle, until it's true.
+Check everything, fix what's missing, then start. Never print the contents of any .env file. If something fails and you can't fix it, stop and tell me.
+
+CHECK AND FIX
+1. Repo: `git remote -v` must point to AmitHemantJadhav/walkin. Run git fetch, git checkout amit, git pull. Make sure there are no stray uncommitted changes.
+   git config user.name "Amit Jadhav" && git config user.email "AmitHemantJadhav@users.noreply.github.com"
+   `gh auth status` must show AmitHemantJadhav. `claude --version` must work, because the loop calls it.
+2. Keys: if .env is missing, run cp ~/Devlopment/costar/.env .env. Confirm MATTERPORT_API_KEY and MATTERPORT_API_TOKEN have values (yes/no only).
+3. House data: data/zvKHR9DHNjJ/house.json (39 panos) must exist. If it doesn't, cp -R ~/Devlopment/costar/walkin/data ./data.
+   Only if that's missing too, run python3 prep_house.py zvKHR9DHNjJ.
+4. scripts/smoke.sh must pass.
+5. What's running: lsof -nP -iTCP:8000 -sTCP:LISTEN and pgrep -fl "serve.py|http.server|cloudflared|agent-loop|live.sh".
+6. Read CLAUDE.md, MAIN.md (§0 THE GOAL, §7), agents/amit.md, agents/amit-HANDOFF.md.
+
+GITHUB (once)
+7. Run scripts/bootstrap_github.sh with no argument (Shruti's username isn't known yet).
+   Confirm the labels, the task issues and the pinned "Agent status" issue exist.
+8. CI: the "smoke" workflow shows startup_failure on every push, and the merge rule needs green checks. Find the cause
+   (gh run list, gh run view, the Actions settings). If it's a quick fix, commit it to amit. If Actions can't run on this
+   account, run `gh workflow disable smoke`. Tell me which one you did.
+
+START
+9. Live demo: kill only the old server on :8000 (lsof -ti tcp:8000 -sTCP:LISTEN | xargs kill). Do NOT touch cloudflared.
+   mkdir -p .agent && nohup scripts/live.sh > .agent/live.log 2>&1 & disown
+   Check that http://localhost:8000/?m=zvKHR9DHNjJ returns 200 from ../walkin-live.
+   Comment on "Agent status": "Live build (main): https://default-confidence-holdings-muslim.trycloudflare.com/?m=zvKHR9DHNjJ"
+10. Overnight loop: nohup scripts/agent-loop.sh amit > .agent/loop.out 2>&1 & disown
+    Wait about 90 seconds. Then show me pgrep -fl "agent-loop|live.sh|caffeinate|claude -p" and the last lines of .agent/loop.out.
+11. Finish with a checklist: what passed, what you fixed, what's running (with PIDs), anything I must do, and how to stop it.
+    After that, don't edit files in this folder. The loop uses it now.
+```
+
+
 Written at 01:40 Sat Nov 14 by Amit (with Claude) after the first build session. Read this once, fully.
 
 ## The project in one breath

@@ -170,8 +170,10 @@ So, for anything physics:
 - `-0/1` is `0` and `op.at` is not `op.relativeCenter`. Same family of mistake: the number came back
   looking usable.
 
-The lateral figure that survived all this is **about 10 cm**, not symmetric, which is what
-`physics.js:342` already documented. The docs now say that and decline to name an angle.
+The lateral figure that survived all this was **about 10 cm**, not symmetric, which is what
+`physics.js:342` documented at the time. **Superseded:** @AmitHemantJadhav fixed #55 in #97 (slide
+along the jamb, then commit to the door as a rail) and it is now **±50 cm** on the same door. The
+lesson about controls stands; the number doesn't.
 
 ### Delete the thing you are blaming before you blame it
 

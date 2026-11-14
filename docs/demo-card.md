@@ -36,8 +36,9 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 ### Six things that will bite you
 
 - **Only one doorway works for beat 5.** 19 of La Mirada's 22 are too narrow for a sofa even turned.
-- **Go in square.** About **10 cm** off the centre line still goes through — not symmetric, so don't lean
-  on it. By 16 cm it squares up to the gap and **stops in it**: back off half a metre and go again.
+- **Go in square — and it is forgiving now.** Since #97 the sofa goes through from **±50 cm** off the
+  centre line (it was 10 cm this morning). If it does stop it is beside the door, not wedged in it:
+  back off half a metre, aim at the doorway, go again. `&doorrail=off` restores the old behaviour.
 - **Clear three pieces first, not one** — coffee table, armchair *and* tv stand. With all seven staged the
   sofa travels 24 cm and stops. Simplest: **do beat 5 before beat 2**, in the empty room.
 - **Don't stand at scan point 38 or 16** — the scan gives those rooms no outline, so staging refuses.

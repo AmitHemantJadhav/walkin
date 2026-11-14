@@ -23,6 +23,12 @@ Rules:
   then place_object with the closest catalog kind (plant for a tall floor plant; plantsmall, plantfern or plantsucculent
   for small ones). Give the reason in a few words (e.g. "bright light from the big window").
   Only name a compass direction if light_here gives one.`;
+// Tool modules (furniture-tools.js, decor.js, …) add their own tools and a few lines of rules:
+//   (window.walkinTools = window.walkinTools || []).push({ declarations: [...], run: { name: fn }, rules: '...' })
+// They are merged into TOOLS / RUN / the system prompt when the agent starts, and live.js gets the same set.
+let EXTRA_RULES = '';
+const systemText = () => SYSTEM + EXTRA_RULES +
+  '\n- Never say you cannot do something a tool can do. For a bigger request (a theme, "make it cosy"), chain several tools.';
 
 const TOOLS = [{
   functionDeclarations: [
@@ -601,7 +607,7 @@ async function relay(url, body, waitMs) {
 
 async function gemini(contents) {
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM }] }, contents, tools: TOOLS,
+    systemInstruction: { parts: [{ text: systemText() }] }, contents, tools: TOOLS,
     generationConfig: { temperature: 0.4, maxOutputTokens: 1024 }, // room for thinking tokens plus a short answer
   };
   let data;
@@ -916,10 +922,22 @@ function buildUI() {
   }
   buildUI();
   loadListing(window.walkin.house.model);
+  const register = (m) => {
+    if (!m || !Array.isArray(m.declarations)) return;
+    for (const d of m.declarations) {
+      const i = TOOLS[0].functionDeclarations.findIndex((x) => x.name === d.name);
+      if (i >= 0) TOOLS[0].functionDeclarations[i] = d; else TOOLS[0].functionDeclarations.push(d);
+    }
+    Object.assign(RUN, m.run || {});
+    if (m.rules) EXTRA_RULES += '\n' + m.rules.trim();
+  };
+  const queued = window.walkinTools || [];
+  queued.forEach(register);
+  window.walkinTools = { push: register }; // modules loading later register at once
   window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere, isSpeaking: () => talking > 0,
     isBusy: () => busy, runTool,
     // for live.js (Gemini Live voice): the same instructions and tools as the typed pipeline
-    system: SYSTEM, declarations: TOOLS[0].functionDeclarations };
+    get system() { return systemText(); }, declarations: TOOLS[0].functionDeclarations };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 

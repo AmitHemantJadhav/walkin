@@ -368,7 +368,17 @@ export function stageRoom(room, style = 'modern') {
       || w.house.rooms.filter((q) => lower(q.label).includes(lower(room).replace(/^the /, '')))
         .sort((a, b) => ((b.dims || {}).areaFloor || 0) - ((a.dims || {}).areaFloor || 0))[0];
   }
-  if (!r || !r.poly || r.poly.length < 3) return { placed: [], skipped: [], fits: false, say: "I can't find that room" };
+  if (!r || !r.poly || r.poly.length < 3) {
+    // Not the same thing as "I don't know that room". Three of La Mirada's seventeen rooms come back
+    // from the API labelled `Room` with no boundary at all, two of them full-sized, and two scan
+    // points stand in them. Saying "I can't find that room" while the user is visibly standing in one
+    // looks like a bug; saying what is actually missing, and what to do, doesn't.
+    const named = room && typeof room !== 'string' ? (room.label || '') : (typeof room === 'string' ? room : '');
+    return { placed: [], skipped: [], fits: false,
+      say: named ? `I can't find a room called "${named}"`
+        : 'the scan gives this spot no room outline, so I have nothing to fit furniture against — '
+          + 'try the next scan point' };
+  }
 
   const plan = PLAN_FOR(r.label);
   if (!plan) {
@@ -670,7 +680,7 @@ export const plants = () => PLANTS.map((k) => ({ kind: k, name: FURNITURE[k].nam
     stageBtn.addEventListener('click', () => {
       const w = window.walkin;
       const room = w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
-      if (!room) { flash('⌂ not in a room'); return; }
+      if (!room) { flash('⌂ no outline here'); return; }
       const style = styles[next++ % styles.length];
       const res = stageRoom(room, style);
       flash(res.placed.length ? `⌂ ${style}` : '⌂ no room for a set');

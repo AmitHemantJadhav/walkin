@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Walk-In</title>
+<style>
+  :root { --bg: rgba(18,18,22,.78); --fg: #f4f2ee; --muted: #a9a5a0; --accent: #ff5a5f; --ok: #3ccf8e; --bad: #ff5a5f; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--fg);
+    font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif; touch-action: none; }
+  canvas { display: block; }
+  .panel { position: fixed; background: var(--bg); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border-radius: 14px; padding: 10px 12px; }
+  #info { top: 12px; left: 12px; max-width: 46vw; }
+  #info h1 { margin: 0; font-size: 15px; letter-spacing: .02em; }
+  #info .sub { color: var(--muted); font-size: 12px; }
+  #room { margin-top: 6px; font-weight: 600; }
+  #fit { margin-top: 4px; font-size: 13px; }
+  #fit.ok { color: var(--ok); } #fit.bad { color: var(--bad); }
+  #bar { bottom: 12px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; gap: 6px;
+    justify-content: center; max-width: 96vw; }
+  button { background: #2a2a31; color: var(--fg); border: 0; border-radius: 10px; padding: 8px 11px; font: inherit;
+    font-size: 13px; cursor: pointer; white-space: nowrap; }
+  button:hover { background: #3a3a43; }
+  button.on { background: var(--accent); }
+  .sep { width: 1px; background: #444; margin: 2px 2px; }
+  #debug { top: 12px; right: 12px; font: 12px/1.4 ui-monospace, Menlo, monospace; max-width: 40vw; display: none; white-space: pre-wrap; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #000; z-index: 10; font-size: 16px; }
+  #exitvr { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: none; z-index: 5; opacity: .7; }
+  body.vr #info, body.vr #bar, body.vr #debug { display: none !important; }
+  body.vr #exitvr { display: block; }
+  #handcam { position: fixed; right: 12px; top: 12px; width: 150px; max-width: 30vw; border-radius: 10px; display: none; opacity: .85; z-index: 3; }
+  body.vr #handcam { display: none !important; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading">Loading house…</div>
+
+<div id="info" class="panel">
+  <h1>Walk-In</h1>
+  <div class="sub" id="house">—</div>
+  <div id="room">—</div>
+  <div id="fit"></div>
+</div>
+
+<div id="debug" class="panel"></div>
+<video id="handcam" playsinline muted></video>
+<button id="exitvr">Exit headset</button>
+
+<div id="bar" class="panel">
+  <button id="bEmpty" class="on" title="Show the house empty (defurnished) or as scanned">Empty</button>
+  <span class="sep"></span>
+  <button data-add="sofa">+ Sofa</button>
+  <button data-add="armchair">+ Chair</button>
+  <button data-add="queen">+ Queen bed</button>
+  <button data-add="king">+ King bed</button>
+  <button data-add="table">+ Table</button>
+  <button data-add="desk">+ Desk</button>
+  <button id="bRotate" title="Rotate selected (or double-click it)">⟳ Rotate</button>
+  <button id="bDelete">✕ Delete</button>
+  <span class="sep"></span>
+  <button id="bHands" title="Pinch to grab furniture (both hands: twist to rotate)">✋ Hands</button>
+  <button id="bCam" title="Which camera watches your hands (the headset always uses the back camera)">📷 Front</button>
+  <button id="bGyro" title="Look around by moving the phone">Gyro</button>
+  <button id="bVR" title="Side-by-side view for a phone headset">Headset</button>
+  <button id="bDebug" title="Wall overlay + alignment controls">Debug</button>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

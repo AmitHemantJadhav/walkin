@@ -1,0 +1,21 @@
+id	owner	title	body
+A1	amit	Headset performance on iPhone (≥45 fps with hands on)	Adaptive pixel ratio, lighter pano sphere, skip hand drawing when no hand, throttle hand detection on mobile. Show fps in Debug. Done = headset mode with hands holds ≥45 fps on an iPhone.
+A2	amit	Hand gesture polish	One-euro filter on landmarks, 0.4 m grab radius, pinch-to-teleport only after pointing at a puck for 300 ms, stable two-hand twist and carry.
+A3	amit	walkin.pointer: what the user points at	Every frame from the active hand ray (or screen centre): {type: wall|floor|furniture|null, wall:{floor,index,a,b}, point:[x,y,z], room}. Ray vs wall quads from house.floors[].walls (skip doorways). Highlight the pointed wall. Needed by R4/R5 — do this early.
+A4	amit	walkin.setWallMaterial(wall, textureUrl, tileMetres)	Quad 1 cm in front of the wall face, room height, cut around doorway openings, texture at real scale, multiplied by the photo's luminance; occluded like furniture; consistent from every scan point. Also clearWallMaterial(wall).
+A5	amit	In-headset radial menu (pinch and hold)	Pinch-hold 0.6 s in empty space → 6 options at the hand: Sofa, Bed, Table, Plant, Empty/Scanned, Talk. Talk calls walkin.onTalk?.().
+A6	amit	Smoother pano-to-pano transition	Ease + short fade, or depth-aware blend using the mesh. Must stay ≥45 fps.
+A7	amit	Live demo host	scripts/live.sh serves main from Amit's laptop through the tunnel; post the tunnel URL in the Agent status issue.
+S1	shaurya	Real GLB furniture models	CC0 GLBs in models/ (<3 MB each), GLTFLoader, scaled to the catalog's real w×d×h, origin at footprint centre on the floor, front −y. Box builders stay as fallback. buildFurniture(kind) stays synchronous.
+S2	shaurya	Furniture lighting that matches the photo	Ambient tint from the pano's average colour, soft contact shadow, sensible roughness. No shadow maps on phones.
+S3	shaurya	walkin.stageRoom(roomId, style)	staging.js: bedroom / living / dining / office sets that fit the room polygon. Returns what was placed and whether it fits (the agent will say it).
+S4	shaurya	Fit check v2	fit.js: keep doorways clear (wall openings), ≥0.6 m walkways, no overlap. Return human reasons ("blocks the bedroom door").
+S5	shaurya	Plants + walkin.placeObject(kind, x, y)	5–8 CC0 plant GLBs and small objects (lamp, rug); placeObject for the agent.
+S6	shaurya	Save / load layouts	layout.js: walkin.saveLayout(), walkin.loadLayout(json), localStorage autosave so the demo layout survives reloads.
+R1	shruti	/api/gemini and /api/tts relays in serve.py	Keys from .env (GEMINI_API_KEY, ELEVENLABS_API_KEY), never sent to the browser. Update .env.example.
+R2	shruti	agent.js: Gemini agent with function calling	Tools → window.walkin: addFurniture, stageRoom, setWallMaterial, placeObject, goTo, describe_house (rooms+sizes, current room, placed items, CoStar listing). Send the current view when the user says "this". Replies are 1–2 spoken sentences. Stub hooks that don't exist yet.
+R3	shruti	Voice in and out	Talk button + walkin.onTalk → Web Speech API → agent → /api/tts audio. Check for a Vapi prize; if there is one, propose Vapi (label needs-human).
+R4	shruti	Wallpaper on the pointed wall	"Red-brick wallpaper on this wall" → Gemini image model makes a seamless tile → setWallMaterial(walkin.pointer.wall, url, tileMetres).
+R5	shruti	Plant advice from real light	Window openings + wall orientation (house lat/lon) → light estimate → suggest a plant, generated preview image, placeObject where the user points.
+R6	shruti	House picker + two more demo houses	Small picker for 3 houses; run prep_house.py for two from docs/walkin_candidates.csv (single floor, residential, splat).
+R7	shruti	Devpost, video script, pitch	docs/devpost.md, docs/video-script.md (2 min), docs/pitch.md (3 min). Draft by Saturday 18:00.

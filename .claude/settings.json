@@ -1,0 +1,16 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "allow": [
+      "Read", "Edit", "Write", "WebFetch", "WebSearch",
+      "Bash(git:*)", "Bash(gh:*)", "Bash(node:*)", "Bash(npm:*)", "Bash(npx:*)",
+      "Bash(python:*)", "Bash(python3:*)", "Bash(scripts/smoke.sh)", "Bash(curl:*)",
+      "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)", "Bash(find:*)",
+      "Bash(wc:*)", "Bash(sed:*)", "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(touch:*)", "Bash(date)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)", "Bash(git push -f:*)", "Bash(git push origin main:*)", "Bash(git push origin demo:*)",
+      "Bash(git reset --hard:*)", "Bash(rm -rf:*)", "Read(./.env)", "Read(../.env)"
+    ]
+  }
+}

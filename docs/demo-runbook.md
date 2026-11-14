@@ -86,10 +86,17 @@ Grab the sofa and carry it at the doorway **broadside**. It stops dead, and the 
 
 > *"the sofa is 2.10 m across the way you're holding it and that door is 1.15 m — turn it and it goes through"*
 
-Turn it. It goes through — and you don't have to be precise about it: a piece that *would* fit is
-slid onto the doorway's centre line for you, because hands can't hold ±10 cm. A piece that genuinely
-doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it won't fit through at
-all"* instead.
+Turn it and walk it through — **square on**. Measured at that doorway: up to about **8 cm off the
+centre line it goes straight through**, which is the real clearance a 0.95 m sofa has in a 1.15 m
+door. Past that the assist does slide it towards the centre, but the hand is still pulling off to one
+side, so the sofa lines itself up with the doorway and stops in it rather than passing. It looks
+deliberate rather than broken — but if it stops, back off half a metre, square up and go again, and
+don't let anyone think it is meant to be forgiving. Fixing that properly needs the doorway to act as
+a rail for the whole traverse; three attempts at it this morning each made something else worse, so
+it is written down rather than half-done.
+
+A piece that genuinely doesn't fit, like a king bed at a 1.15 m door, is never helped and says *"it
+won't fit through at all"* instead.
 
 Both halves were run against `main` at that doorway, and the two sentences above are verbatim what
 came back: the sofa (2.10 × 0.95 m) stops 0.56 m short held broadside and crosses to the other side

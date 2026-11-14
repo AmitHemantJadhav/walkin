@@ -122,7 +122,8 @@ function update() {
   const wa = hitWall(w, cur.floor, floorZ, o, d);
   if (wa) hits.push({ type: 'wall', ...wa });
   const fl = hitFloor(floorZ, o, d);
-  if (fl) hits.push({ type: 'floor', ...fl });
+  // only floor inside the house: through a doorway or window the plane would otherwise reach the garden
+  if (fl && w.roomAt(fl.point[0], fl.point[1], cur.floor)) hits.push({ type: 'floor', ...fl });
   hits.sort((x, y) => x.t - y.t);
   const h = hits[0];
   if (!h) { w.pointer = { ...EMPTY, source }; showHighlight(w, null); return; }

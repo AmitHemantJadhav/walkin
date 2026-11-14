@@ -1090,6 +1090,22 @@ $('bHands').onclick = toggleHands;
 $('bCam').onclick = toggleCam;
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
 $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+// A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
+// so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
+// numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.
+if (params.has('a1')) {
+  const tip = document.createElement('div');
+  tip.textContent = 'A1 test: tap anywhere, then put the phone in the headset for 30 s';
+  tip.style.cssText = 'position:fixed;inset:0;z-index:999;display:flex;align-items:center;justify-content:center;'
+    + 'padding:24px;text-align:center;font:600 22px system-ui;color:#fff;background:#000b';
+  document.body.appendChild(tip);
+  tip.onclick = async () => {
+    tip.remove();
+    await toggleVR(true);
+    if (!handsApi) await toggleHands();
+    console.log(`[a1] headset ${vr}, hands ${!!handsApi}, fps report ${fpsReport.on ? `on (sid ${fpsReport.sid})` : 'off'}`);
+  };
+}
 $('bEmpty').onclick = async () => {
   showEmpty = !showEmpty;
   $('bEmpty').classList.toggle('on', showEmpty);

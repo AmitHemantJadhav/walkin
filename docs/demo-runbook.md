@@ -96,6 +96,12 @@ window stays bright. Walk to another scan point: still the same wall.
 
 ### 5. "Will my sofa fit?" (40 s) — the one people actually ask
 
+**Move the coffee table first.** Beat 2 just put one directly in front of the sofa, because that is
+what a living room looks like, and a sofa cannot pass through a coffee table: dragged straight at the
+door it travels **24 cm** and stops. Grab the coffee table and pull it aside — one grab, it is light
+and it moves easily — or run this beat on a room you haven't staged. (Why the sofa doesn't just shove
+it out of the way: #57.)
+
 **Use the right door.** The beat only works at a door the sofa *could* pass if it were turned, and
 La Mirada has three out of twenty-two: the 2.50 m opening into the dining room (too wide, nothing to
 prove), one at 0.98 m into the dining room, and **the 1.15 m doorway off the living room — the one

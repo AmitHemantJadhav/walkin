@@ -23,7 +23,10 @@ EYE = 1.5                               # camera height of a scan point
 #   living room  x in [0, 5.2], y in [0, 4.0]          bedroom  x in [5.2, 9.0], y in [0, 3.4]
 LIVING = [[0, 0], [5.2, 0], [5.2, 4.0], [0, 4.0]]
 BEDROOM = [[5.2, 0], [9.0, 0], [9.0, 3.4], [5.2, 3.4]]
-DOOR = dict(x=5.2, y0=1.2, y1=2.1)      # opening in the shared wall
+DOOR = dict(x=5.2, y0=1.15, y1=2.30)    # opening in the shared wall: 1.15 m, the same as the doorway
+                                        # beat 5 uses at La Mirada, so the no-keys fallback house can do
+                                        # that beat too. At 0.9 m a 0.95 m sofa does not fit even turned,
+                                        # and all John can ever say is "it won't fit through at all".
 WINDOWS = [                             # (x0, y0, x1, y1, z0, z1) bright rectangles on a wall
     (0.0, 1.0, 0.0, 2.8, 0.9, 2.1),     # living room, west wall
     (9.0, 0.9, 9.0, 2.4, 0.9, 2.1),     # bedroom, east wall

@@ -40,6 +40,10 @@ const TOOLS = [{
         room: { type: 'string', description: 'Room label or id. Leave empty for the room the user is in.' },
         style: { type: 'string', description: 'For example: modern bedroom, cosy living room, home office.' } },
         required: ['style'] } },
+    { name: 'stage_house',
+      description: 'Furnish every room in the house that has a set (living rooms, bedrooms, dining rooms, offices) in one go. Use for "furnish the whole house", "stage every room".',
+      parameters: { type: 'object', properties: {
+        style: { type: 'string', description: 'Optional palette: modern, cozy or scandi.' } } } },
     { name: 'set_wall_material',
       description: 'Cover the wall the user points at with a material (wallpaper, brick, tiles, wood panels, paint). A seamless tile is generated from the description and placed at real scale.',
       parameters: { type: 'object', properties: {
@@ -201,10 +205,26 @@ function roomWindows(room) {
   return out;
 }
 
+// "Here" for advice is a spot on the floor. A wall or furniture hit sits on (or past) the room outline, which made
+// "what plant should go here?" while looking at a wall answer "not inside a room": step 0.4 m back toward the user,
+// and if that is still outside every room, fall back to where the user stands.
+function herePoint() {
+  const w = W(), p = w.pointer, u = userPos();
+  if (p && p.point) {
+    let x = p.point[0], y = p.point[1];
+    if (p.type !== 'floor' && u) {
+      const dx = u.x - x, dy = u.y - y, d = Math.hypot(dx, dy) || 1, s = Math.min(0.4, d);
+      x += (dx / d) * s; y += (dy / d) * s;
+    }
+    if (w.roomAt(x, y, (u && u.floor) || undefined)) return { x, y, spot: 'where the user points' };
+  }
+  return u ? { x: u.x, y: u.y, spot: 'where the user stands' } : null;
+}
+
 function lightHere() {
-  const w = W(), pt = w.pointer && w.pointer.point, u = userPos();
-  const x = pt ? pt[0] : u && u.x, y = pt ? pt[1] : u && u.y;
-  if (x == null) return { ok: false, reason: 'No position yet.' };
+  const w = W(), u = userPos(), here = herePoint();
+  if (!here) return { ok: false, reason: 'No position yet.' };
+  const { x, y } = here;
   const room = w.roomAt(x, y, (u && u.floor) || undefined);
   if (!room) return { ok: false, reason: 'That spot is not inside a room.' };
   const north = typeof w.house.north === 'number' ? w.house.north : null;
@@ -222,7 +242,7 @@ function lightHere() {
   const level = !windows.length ? 'low (no windows in this room)' : score > 0.6 ? 'bright' : score > 0.2 ? 'medium' : 'low';
   const lat = listingFacts && listingFacts.lat;
   return {
-    ok: true, room: room.label, spot: pt ? 'where the user points' : 'where the user stands', light: level,
+    ok: true, room: room.label, spot: here.spot, light: level,
     windows, window_count: windows.length,
     compass: north == null ? 'unknown: the scan is not north-aligned, so do not name a direction' : 'known',
     latitude: lat ? round(lat, 1) : null,
@@ -261,6 +281,16 @@ const RUN = {
     return { ok: !!(res.placed && res.placed.length), room: r.label, style,         // plain facts only: no geometry
       placed: (res.placed || []).map((p) => p.name), skipped: (res.skipped || []).map((s) => `${s.name}: ${s.why}`),
       cleared: res.cleared || [], fits: !!res.fits, say: res.say || null };
+  },
+
+  async stage_house({ style }) {
+    const w = W();
+    if (typeof w.stageHouse !== 'function') return unavailable('stageHouse', 'shaurya');
+    setStatus('Furnishing the house…');
+    const res = (await w.stageHouse(style || undefined)) || {};
+    const rooms = res.rooms || [];
+    return { ok: (res.placed || 0) > 0, rooms: rooms.length, pieces: res.placed || 0,   // plain facts only
+      by_room: rooms.slice(0, 8).map((r) => r.label || r.room || r.name).filter(Boolean), say: res.say || null };
   },
 
   async set_wall_material({ description, tile_metres }) {
@@ -396,6 +426,11 @@ async function runTool(name, args) {
 // ------------------------------------------------------------------ current view
 // The WebGL buffer is cleared after each frame, so copy it inside a frame callback (ours runs after the viewer's).
 function captureView() {
+  // never let a missing frame hold up the command: without one in 600 ms, go on without the picture
+  return Promise.race([grabFrame(), new Promise((resolve) => setTimeout(() => resolve(null), 600))]);
+}
+
+function grabFrame() {
   return new Promise((resolve) => requestAnimationFrame(() => {
     try {
       const src = document.querySelector('canvas');
@@ -466,7 +501,7 @@ const FRIENDLY = {
 function friendlyError(e) {
   if (e && e.status === 429) return e.friendly || FRIENDLY.busy;
   if (e && (e.status === 0 || e.status === 502 || e.status === 504)) return FRIENDLY.network;
-  if (e && e.status === 503) return "I'm not connected to my AI yet. The team needs to add the key.";
+  if (e && e.status === 503) return "I can't reach my brain right now.";
   return FRIENDLY.other;
 }
 
@@ -574,7 +609,22 @@ function browserSpeak(text, capMs = 15000) {
  * Speak a line. Resolves when it has finished playing (at most `capMs`), so a reply can wait for the filler.
  * A newer line replaces an older one. Fillers are fixed sentences, so the relay's disk cache makes them free.
  */
-async function speak(text, { filler = false, capMs = filler ? 2500 : 15000 } = {}) {
+let talking = 0; // lines in flight; voice.js pauses its microphone while this is above zero (no self-trigger)
+const speechEvent = (state, text, filler) =>
+  window.dispatchEvent(new CustomEvent('walkin:speech', { detail: { state, text, filler, talking } }));
+
+async function speak(text, opts = {}) {
+  talking++;
+  speechEvent('start', text, !!opts.filler);
+  try {
+    await speakLine(text, opts);
+  } finally {
+    talking--;
+    speechEvent('end', text, !!opts.filler);
+  }
+}
+
+async function speakLine(text, { filler = false, capMs = filler ? 2500 : 15000 } = {}) {
   const seq = ++speakSeq;
   const ended = () => new Promise((resolve) => {
     const cap = setTimeout(resolve, capMs);
@@ -588,7 +638,7 @@ async function speak(text, { filler = false, capMs = filler ? 2500 : 15000 } = {
     if (player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
     player.src = URL.createObjectURL(blob);
     const done = ended();
-    await player.play();
+    await Promise.race([player.play(), done]);   // play() can stay pending (no audio device): the cap still ends it
     await done;
   } catch (e) {
     console.info('[agent] ElevenLabs voice unavailable, using the browser voice:', e.message);
@@ -669,7 +719,7 @@ function buildUI() {
   talkEl = el.querySelector('#agentTalk');
   previewEl = el.querySelector('#agentPreview');
   previewEl.addEventListener('click', () => { previewEl.style.display = 'none'; });
-  talkEl.addEventListener('click', onTalk);
+  talkEl.addEventListener('click', () => (window.walkin.onTalk || onTalk)()); // voice.js may take this over
   addEventListener('pointerdown', unlockAudio, { once: true, capture: true });
   // the viewer listens for keys and drags on the window; keep typing and taps inside the box
   for (const ev of ['keydown', 'keyup', 'pointerdown', 'mousedown', 'touchstart', 'wheel']) el.addEventListener(ev, (e) => e.stopPropagation());
@@ -690,7 +740,8 @@ function buildUI() {
   }
   buildUI();
   loadListing(window.walkin.house.model);
-  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere };
+  window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere, isSpeaking: () => talking > 0,
+    isBusy: () => busy };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 })();

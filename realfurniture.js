@@ -105,19 +105,71 @@ function standOn(blob, M, cam, floorZ) {
   return { pos: c, span, height, dist, yaw: Math.atan2(c.y - cam.y, c.x - cam.x) };
 }
 
-/** Cut a blob out of the as-scanned photo: its own pixels, everything else transparent. */
+/**
+ * Fill a blob's interior holes.
+ *
+ * A difference mask goes quiet wherever the furniture happens to match what Matterport painted behind
+ * it — a grey sofa against a grey wall, or its shadow against dark boards — so pieces come out with
+ * holes you can see the floor through. Anything fully enclosed by the blob is such a hole: flood the
+ * blob's bounding box inward from its border through not-mine pixels, and whatever the flood never
+ * reaches is interior and belongs to the piece. Holes that touch the box border are left alone, since
+ * those are genuinely see-through, like the gap under a chair.
+ */
+function fillHoles(blob, ids) {
+  const bw = blob.x1 - blob.x0 + 1, bh = blob.y1 - blob.y0 + 1;
+  if (bw < 3 || bh < 3) return 0;
+  const outside = new Uint8Array(bw * bh);
+  const stack = [];
+  const push = (x, y) => {
+    const i = y * bw + x;
+    if (outside[i] || ids[(blob.y0 + y) * W + (blob.x0 + x)] === blob.id) return;
+    outside[i] = 1; stack.push(i);
+  };
+  for (let x = 0; x < bw; x++) { push(x, 0); push(x, bh - 1); }
+  for (let y = 0; y < bh; y++) { push(0, y); push(bw - 1, y); }
+  while (stack.length) {
+    const i = stack.pop(), x = i % bw, y = (i / bw) | 0;
+    if (x > 0) push(x - 1, y);
+    if (x < bw - 1) push(x + 1, y);
+    if (y > 0) push(x, y - 1);
+    if (y < bh - 1) push(x, y + 1);
+  }
+  let filled = 0;
+  for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+    const i = y * bw + x, sp = (blob.y0 + y) * W + (blob.x0 + x);
+    if (!outside[i] && ids[sp] !== blob.id) { ids[sp] = blob.id; filled++; }
+  }
+  return filled;
+}
+
+/**
+ * Cut a blob out of the as-scanned photo: its own pixels, everything else transparent.
+ *
+ * The outline is eroded by a pixel first. A difference mask always runs a little wide — the edge of a
+ * sofa sits between the sofa and the wall, and in a JPEG those pixels are a blend of both — so cutting
+ * on the raw mask fringes every piece with a halo of wall. Eroding loses a pixel of sofa and takes the
+ * halo with it, which reads far better than the speckled edge it replaces. The alpha is then a ramp
+ * rather than a step, so the edge doesn't crawl when you move.
+ */
 function cutOut(blob, ids, src) {
   const bw = blob.x1 - blob.x0 + 1, bh = blob.y1 - blob.y0 + 1;
+  const mine = (x, y) => (x < 0 || y < 0 || x >= bw || y >= bh)
+    ? false : ids[(blob.y0 + y) * W + (blob.x0 + x)] === blob.id;
   const cv = document.createElement('canvas');
   cv.width = bw; cv.height = bh;
-  const out = cv.getContext('2d').createImageData(bw, bh);
+  const ctx = cv.getContext('2d');
+  const out = ctx.createImageData(bw, bh);
   for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
     const sp = (blob.y0 + y) * W + (blob.x0 + x), dp = (y * bw + x) * 4;
     if (ids[sp] !== blob.id) { out.data[dp + 3] = 0; continue; }
     out.data[dp] = src[sp * 4]; out.data[dp + 1] = src[sp * 4 + 1];
-    out.data[dp + 2] = src[sp * 4 + 2]; out.data[dp + 3] = 255;
+    out.data[dp + 2] = src[sp * 4 + 2];
+    // how many of the 4 neighbours are also mine: 4 inside, fewer at the edge
+    const n = (mine(x - 1, y) ? 1 : 0) + (mine(x + 1, y) ? 1 : 0)
+            + (mine(x, y - 1) ? 1 : 0) + (mine(x, y + 1) ? 1 : 0);
+    out.data[dp + 3] = n === 4 ? 255 : n >= 3 ? 150 : 0;
   }
-  cv.getContext('2d').putImageData(out, 0, 0);
+  ctx.putImageData(out, 0, 0);
   return cv;
 }
 
@@ -157,6 +209,7 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
   for (const blob of blobs.sort((p, q) => q.n - p.n)) {
     if (found.length >= max) break;
     if (blob.n < minPx) continue;
+    fillHoles(blob, ids);                                  // before measuring: a holed blob reads thin
     const st = standOn(blob, M, cam, floorZ);
     if (!st) continue;
     const room = w.roomAt(st.pos.x, st.pos.y);
@@ -177,7 +230,7 @@ export async function realFurniture({ minPx = MIN_PX, max = 8 } = {}) {
     const g = new THREE.Group();
     const card = new THREE.Mesh(
       new THREE.PlaneGeometry(f.span, f.height),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide, toneMapped: false }));
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, toneMapped: false, depthWrite: true }));
     card.rotation.x = Math.PI / 2;                         // stand it up: the plane's +y becomes world +z
     card.position.z = f.height / 2;
     card.renderOrder = 2;

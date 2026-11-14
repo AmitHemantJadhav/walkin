@@ -44,15 +44,30 @@ function wallsFor(edges, width, { avoidWindows = false } = {}) {
 }
 
 // ------------------------------------------------------------------ putting pieces down
+// Tall pieces (lamp, bookcase, big plant) must not stand on a scan point: after a teleport there you would look
+// straight into them. Low pieces (bed, sofa, tables) are fine, you just look down at them; rugs you stand on.
+const CLEAR = 0.5, TALL = 1.0;
+
 function makePlacer(room, floorZ, floor, style) {
   const w = window.walkin;
   const placed = [];
   const skipped = [];
+  const spots = (w.house.panos || []).filter((p) => !floor || !p.floor || p.floor === floor).map((p) => p.pos);
+  function blocksSpot(kind, c) {
+    const f = FURNITURE[kind];
+    if (!f || f.flat || f.h < TALL) return false;
+    const cos = Math.cos(-(c.rot || 0)), sin = Math.sin(-(c.rot || 0));
+    return spots.some(([px, py]) => {
+      const dx = px - c.x, dy = py - c.y, lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
+      return Math.hypot(Math.max(0, Math.abs(lx) - f.w / 2), Math.max(0, Math.abs(ly) - f.d / 2)) < CLEAR;
+    });
+  }
 
   /** Try each candidate {x, y, rot} in turn; keep the first that passes the fit check. */
   function tryPlace(kind, candidates, { optional = false } = {}) {
     let why = 'no room for it';
     for (const c of candidates) {
+      if (blocksSpot(kind, c)) { why = 'it would stand where you stand'; continue; }
       const r = fitReport({ kind, x: c.x, y: c.y, rot: c.rot, floor });
       if (r.room !== room) { why = `would land in the ${lower(r.room ? r.room.label : 'hallway')}`; continue; }
       if (!r.ok) { why = r.reasons[0]; continue; }
@@ -223,6 +238,16 @@ function cornersOf(room, edges, inset) {
   return out;
 }
 
+/** "cosy living room" -> {palette: 'cozy', kind: 'living'}; a bare palette name works too. */
+function parseStyle(style) {
+  const s = lower(style || '');
+  const palette = STYLES[s] ? s : /scandi|nordic/.test(s) ? 'scandi' : /co[sz]y|co[sz]ie|warm|rustic/.test(s) ? 'cozy'
+    : /modern|minimal|contemporary/.test(s) ? 'modern' : null;
+  const kind = /bed/.test(s) ? 'bedroom' : /living|lounge|family|sitting/.test(s) ? 'living'
+    : /dining/.test(s) ? 'dining' : /office|study|desk|work/.test(s) ? 'office' : null;
+  return { palette, kind };
+}
+
 const PLAN_FOR = (label) => {
   const l = lower(label);
   if (l.includes('bed')) return PLANS.bedroom;
@@ -251,7 +276,9 @@ export function stageRoom(room, style = 'modern') {
   }
   if (!r || !r.poly || r.poly.length < 3) return { placed: [], skipped: [], fits: false, say: "I can't find that room" };
 
-  const plan = PLAN_FOR(r.label);
+  const asked = parseStyle(style);
+  let plan = asked.kind ? PLANS[asked.kind] : PLAN_FOR(r.label);
+  if (!plan && ((r.dims || {}).areaFloor || 0) >= 20) plan = PLANS.living; // open-plan kitchen / great room
   if (!plan) {
     return { room: r, placed: [], skipped: [], fits: true,
       say: `I don't have a set for a ${lower(r.label)} yet` };
@@ -269,7 +296,7 @@ export function stageRoom(room, style = 'modern') {
   const floor = r.floor || (w.current && w.current.floor);
   const floorZ = (w.current && w.current.floorZ) || 0;
   const edges = edgesOf(r, w.house);
-  const styleName = STYLES[style] ? style : getStyle();
+  const styleName = asked.palette || getStyle();
   const P = makePlacer(r, floorZ, floor, styleName);
   plan(r, edges, P, floorZ, style);
 

@@ -34,7 +34,9 @@ const stereo = new StereoEffect(renderer);
 stereo.setSize(innerWidth, innerHeight);
 
 // Adaptive resolution state (A1). Declared here, before any event handler that touches it (see tickPerf below).
-const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(0.75, MAX_PR);
+// Never below 1x: at 0.75x everything on an iPhone went soft (the radial menu, labels, hands). Below 1x the hand
+// detection rate backs off instead (see tickPerf).
+const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(1, MAX_PR);
 // Hand detection blocks the main thread each time it runs, so its rate backs off too (after resolution reaches 1x).
 // 30 Hz = the camera's own rate, so the top step costs nothing on a laptop.
 const HAND_HZ_MAX = 30, HAND_HZ_MIN = 15;
@@ -653,9 +655,9 @@ async function toggleVR(force) {
   vr = force ?? !vr;
   document.body.classList.toggle('vr', vr);
   if (vr) {
+    document.body.classList.remove('eyes'); $('bEyes')?.classList.remove('on');
     if (!gyro.on) await toggleGyro();
-    try { await document.documentElement.requestFullscreen?.(); } catch {}
-    try { await screen.orientation?.lock?.('landscape'); } catch {}
+    await goFullscreen();
   } else {
     try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
   }
@@ -754,6 +756,9 @@ let handStyle = 'real';
 // place. Handheld: the camera is not where your eyes are, so the view shows the middle of the camera like the preview.
 // ?handmap=crop forces the crop everywhere. No shrink by default: a shrunk hand is no longer where your hand is.
 const HAND_MAP = params.get('handmap') === 'crop' ? 'crop' : 'angle';
+// reach (hands.js): the back camera's view spans the whole screen, so a hand reaches every edge; ?handmap=true is
+// the strict by-angle passthrough, where the hand only shows in a window in the middle of the view
+const HAND_REACH = params.get('handmap') !== 'true';
 const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 1,
   seg: params.get('handseg') === '1' }); // skin-colour cut-out, experimental: ?handseg=1
 function setHandStyle(s) {
@@ -851,6 +856,42 @@ function holdMenu(h, now) {
   }
 }
 
+// Hands on the on-screen controls (the dock, the ⋯ menu, the sun slider): point at one and it lights up, pinch to
+// press it, pinch on a slider and move to drag it. Not in the side-by-side headset view, where the HTML is hidden.
+const UI_SEL = 'button, input[type=range], select, [role=menuitem]';
+const uiDrag = {};
+let uiHover = null;
+function uiAt(h) {
+  if (vr) return null;
+  const el = document.elementFromPoint(h.x * innerWidth, h.y * innerHeight);
+  if (!el || el === renderer.domElement) return null;
+  const c = el.closest(UI_SEL);
+  return c && !c.disabled ? c : null;
+}
+function uiSlide(el, h) {
+  const r = el.getBoundingClientRect();
+  const t = THREE.MathUtils.clamp((h.x * innerWidth - r.left) / r.width, 0, 1);
+  const min = el.min === '' ? 0 : +el.min, max = el.max === '' ? 100 : +el.max, step = +el.step || 1;
+  const v = min + Math.round((t * (max - min)) / step) * step;
+  if (+el.value !== v) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+}
+function uiHand(h) { // true when this hand is on the controls this frame (so it neither grabs nor opens the ring)
+  const drag = uiDrag[h.side];
+  if (drag) {
+    if (h.pinch) uiSlide(drag, h);
+    else { drag.dispatchEvent(new Event('change', { bubbles: true })); delete uiDrag[h.side]; }
+    return true;
+  }
+  if (grabs[h.side] || radial.side === h.side || (h.pinch && prevPinch[h.side])) return false;
+  const el = uiAt(h);
+  if (!el) return false;
+  if (h.pinch) { // pinch started on a control
+    if (el.matches('input[type=range]')) { uiDrag[h.side] = el; uiSlide(el, h); }
+    else el.click();
+  }
+  return true;
+}
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -862,6 +903,8 @@ function onHands(list, cam) {
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
   for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
   for (const side of Object.keys(holds)) if (!present.has(side)) delete holds[side];
+  for (const side of Object.keys(uiDrag)) if (!present.has(side)) delete uiDrag[side];
+  let hover = null;
   if (radial.side && !present.has(radial.side)) radial.cancel(); // lost the hand: never pick by accident
 
   const act = list.find((h) => h.pinch) || list[0];
@@ -885,6 +928,13 @@ function onHands(list, cam) {
     cur.material.color.set(h.pinch ? 0xffc400 : puckReady ? 0x3dff8a : 0x00e5ff);
     cur.scale.setScalar(h.pinch ? 0.7 : 1);
 
+    if (uiHand(h)) { // on a button or slider: that is what the pinch is for
+      hover = hover || uiDrag[h.side] || uiAt(h);
+      cur.visible = false;
+      delete holds[h.side];
+      prevPinch[h.side] = h.pinch;
+      continue;
+    }
     if (h.pinch && !prevPinch[h.side]) {
       // pinch started: grab the piece you point at; a held aim at a puck (300 ms) means teleport; otherwise grab
       // the nearest piece within 0.4 m, or the selected piece if it's close
@@ -909,6 +959,12 @@ function onHands(list, cam) {
     }
     if (h.pinch) holdMenu(h, now);
     prevPinch[h.side] = h.pinch;
+  }
+
+  if (hover !== uiHover) {
+    uiHover?.classList.remove('hand-hover');
+    hover?.classList.add('hand-hover');
+    uiHover = hover;
   }
 
   // both hands on the same piece: twist to rotate it, move both to carry it
@@ -960,6 +1016,7 @@ async function restartHands(mode) {
     // the back camera sees what is in front of the phone, so its hand is drawn where it really is (passthrough):
     // in the headset and with the phone held at your eyes. The front camera faces you: the zoomed crop.
     viewFov: HAND_MAP === 'angle' && mode === 'environment' ? () => camera.fov : null,
+    reach: HAND_REACH,
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
@@ -1133,6 +1190,8 @@ async function eyesMode() {
   const b = $('bEyes');
   if (b && b.classList.contains('on')) {             // second tap: back to the normal handheld setup
     b.classList.remove('on');
+    document.body.classList.remove('eyes');
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
     if (handCam !== 'user') await toggleCam();
     return;
   }
@@ -1142,6 +1201,20 @@ async function eyesMode() {
   if (handsApi) { if (handsApi.facingMode !== 'environment') await restartHands('environment'); }
   else await toggleHands();
   if (b) b.classList.add('on');
+  document.body.classList.add('eyes'); // ui.css: no info card or camera preview; the dock and sun stay, for your hands
+  await goFullscreen();
+}
+// Full screen: Android and iPad do it from the tap. iPhone Safari has no fullscreen for a page - the way there is
+// "Add to Home Screen" (manifest.json + apple-mobile-web-app-capable): opened from the icon, there is no URL bar.
+async function goFullscreen() {
+  const d = document.documentElement;
+  try { await (d.requestFullscreen?.() || d.webkitRequestFullscreen?.()); } catch {}
+  try { await screen.orientation?.lock?.('landscape'); } catch {}
+  const standalone = navigator.standalone || matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches;
+  if (!document.fullscreenElement && !document.webkitFullscreenElement && !standalone && /iPhone|iPod/.test(navigator.userAgent)) {
+    let seen = false; try { seen = localStorage.getItem('walkin.a2hs') === '1'; localStorage.setItem('walkin.a2hs', '1'); } catch {}
+    if (!seen) window.walkin?.say?.('For full screen on iPhone: Share, then Add to Home Screen, and open Walk-In from the icon.');
+  }
 }
 if ($('bEyes')) $('bEyes').onclick = eyesMode;
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');

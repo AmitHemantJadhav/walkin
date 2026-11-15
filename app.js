@@ -476,6 +476,26 @@ async function refreshImages() {
 const furniture = new THREE.Group();
 scene.add(furniture);
 let selected = null;
+// A piece's world box, like Box3.setFromObject, but without its contact shadow: realfurniture.js puts each
+// own-furniture piece's floor blob (1.25x the footprint, #135) inside the piece, and counting it spread the
+// selection box out on the floor and grew the grab reach. Catalog blobs live in their own group already.
+const _pieceB = new THREE.Box3();
+function pieceBox(o, box) {
+  box.makeEmpty();
+  o.updateWorldMatrix(true, false);
+  (function add(n) {
+    if (n.userData.shadow) return;
+    n.updateWorldMatrix(false, false);
+    const g = n.geometry;
+    if (g) {
+      if (n.boundingBox !== undefined) { if (n.boundingBox === null) n.computeBoundingBox(); _pieceB.copy(n.boundingBox); }
+      else { if (g.boundingBox === null) g.computeBoundingBox(); _pieceB.copy(g.boundingBox); }
+      box.union(_pieceB.applyMatrix4(n.matrixWorld));
+    }
+    for (const c of n.children) add(c);
+  })(o);
+  return box;
+}
 const selBox = new THREE.Box3Helper(new THREE.Box3(), 0x3ccf8e);
 selBox.visible = false;
 selBox.renderOrder = 30;
@@ -513,7 +533,7 @@ function checkFit() {
   const spec = FURNITURE[selected.userData.kind];
   const room = roomAt(selected.position.x, selected.position.y, selected.userData.floor);
   const ok = !!room && footprint(selected).every(([x, y]) => pointInPoly(x, y, room.poly));
-  selBox.box.setFromObject(selected);
+  pieceBox(selected, selBox.box);
   selBox.material.color.set(ok ? 0x3ccf8e : 0xff5a5f);
   selBox.visible = true;
   el.className = ok ? 'ok' : 'bad';
@@ -818,7 +838,7 @@ function nearestFurniture(f) { // the piece whose footprint is closest to floor 
   let best = null, bestD = GRAB_RADIUS;
   for (const o of furniture.children) {
     if (!o.userData?.kind || o.visible === false) continue;
-    _gbox.setFromObject(o);
+    pieceBox(o, _gbox);
     const d = Math.hypot(Math.max(_gbox.min.x - f.x, 0, f.x - _gbox.max.x), Math.max(_gbox.min.y - f.y, 0, f.y - _gbox.max.y));
     if (d < bestD) { bestD = d; best = o; }
   }
@@ -1383,7 +1403,7 @@ function frame() {
   for (const fn of beforeRender) {
     try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
   }
-  if (selected && selBox.visible) selBox.box.setFromObject(selected);
+  if (selected && selBox.visible) pieceBox(selected, selBox.box);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
   tickPerf();
 }

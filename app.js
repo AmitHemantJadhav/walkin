@@ -1077,7 +1077,7 @@ async function toggleHands() {
 }
 async function toggleCam() {
   handCam = handCam === 'user' ? 'environment' : 'user';
-  $('bCam').textContent = handCam === 'user' ? '📷 Front' : '📷 Back';
+  if ($('bCam')) $('bCam').textContent = handCam === 'user' ? '📷 Front' : '📷 Back';
   if (handsApi && !vr) await restartHands(handCam);
 }
 
@@ -1212,15 +1212,15 @@ document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click
 $('bRotate').onclick = () => rotateSelected(45);
 $('bDelete').onclick = deleteSelected;
 $('bGyro').onclick = toggleGyro;
-$('bVR').onclick = () => toggleVR();
+if ($('bVR')) $('bVR').onclick = () => toggleVR(); // the Headset button is gone (tapped by mistake); ?a1=1 still enters it
 $('exitvr').onclick = () => toggleVR(false);
 $('bHands').onclick = toggleHands;
-$('bCam').onclick = toggleCam;
+if ($('bCam')) $('bCam').onclick = toggleCam;
 // "At eyes": the phone held up at your eyes like a window, full screen (no lenses needed): look around with the
 // gyro, hands seen by the back camera and drawn where they really are. One tap, since iOS needs a tap for motion.
 async function eyesMode() {
   const b = $('bEyes');
-  if (b && b.classList.contains('on')) {             // second tap: back to the normal handheld setup
+  if (b && b.classList.contains('on') && document.body.classList.contains('eyes')) {             // second tap: back to the normal handheld setup
     b.classList.remove('on');
     document.body.classList.remove('eyes');
     try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
@@ -1229,7 +1229,7 @@ async function eyesMode() {
   }
   if (vr) await toggleVR(false);
   if (!gyro.on) await toggleGyro();
-  if (handCam !== 'environment') { handCam = 'environment'; $('bCam').textContent = '📷 Back'; }
+  if (handCam !== 'environment') { handCam = 'environment'; if ($('bCam')) $('bCam').textContent = '📷 Back'; }
   if (handsApi) { if (handsApi.facingMode !== 'environment') await restartHands('environment'); }
   else await toggleHands();
   if (b) b.classList.add('on');
@@ -1276,9 +1276,57 @@ async function goFullscreen() {
     if (!seen) window.walkin?.say?.('For full screen on iPhone: Share, then Add to Home Screen, and open Walk-In from the icon.');
   }
 }
-if ($('bEyes')) $('bEyes').onclick = eyesMode;
+if ($('bEyes')) $('bEyes').onclick = () => eyesMode();
+
+// At eyes is the default on a phone (Amit): the first tap anywhere - usually "Walk in" - turns it on, since iOS
+// only allows motion and the camera from a tap. ?eyes=off keeps the handheld setup; ?eyes=1 does it on a laptop.
+const PHONE_UA = navigator.maxTouchPoints > 1 && /iPhone|iPad|Android/i.test(navigator.userAgent);
+if ((PHONE_UA || params.get('eyes') === '1') && params.get('eyes') !== 'off' && !params.has('resume') && !params.has('a1')) {
+  addEventListener('pointerdown', (e) => {
+    if (e.target.closest && e.target.closest('#bEyes')) return;          // that button does it itself
+    if (!document.body.classList.contains('eyes') && !vr) eyesMode();
+  }, { once: true, capture: true });
+}
+
+// The house and the office in one session: "John, take me to the office". A property is a page load, so this
+// reloads into the other one with resume=eyes, and At eyes comes straight back with no tap: iOS answers a repeat
+// motion-permission request at once when it was granted earlier in the session, and the camera needs no tap.
+const SPACES = { house: { m: 'zvKHR9DHNjJ', name: 'the house on La Mirada' }, office: { m: 'WhqAmKQ3YYP', name: 'the Suite 300 office' } };
+function openSpace({ space = '' } = {}) {
+  const key = /office|work|suite|commercial/i.test(space) ? 'office' : /house|home|mirada|resid/i.test(space) ? 'house' : null;
+  if (!key) return { ok: false, reason: 'Which one: the house or the office?' };
+  const sp = SPACES[key];
+  if (MODEL === sp.m) return { ok: true, say: `You are already in ${sp.name}.` };
+  const p = new URLSearchParams(location.search);
+  p.set('m', sp.m);
+  if (document.body.classList.contains('eyes')) p.set('resume', 'eyes'); else p.delete('resume');
+  const t0 = performance.now();
+  (function go() { // let John finish his sentence first (up to 8 s)
+    const talking = window.walkin?.agent?.isSpeaking?.() || window.walkin?.live?.isSpeaking?.();
+    if (performance.now() - t0 < 2500 || (talking && performance.now() - t0 < 8000)) { setTimeout(go, 250); return; }
+    location.search = p.toString();
+  })();
+  return { ok: true, going_to: sp.name, say: `Taking you to ${sp.name}.`, note: 'The view reloads in a moment. Say one short sentence, nothing else.' };
+}
+(window.walkinTools = window.walkinTools || []).push({
+  declarations: [{ name: 'open_space',
+    description: 'Go to the other property: "house" (the La Mirada home) or "office" (Suite 300, an empty office floor for test fits). Use for "take me to the office", "show me the office space", "back to the house". A room inside this house is go_to, not this.',
+    parameters: { type: 'object', properties: { space: { type: 'string', enum: ['house', 'office'] } }, required: ['space'] } }],
+  run: { open_space: openSpace },
+  rules: '- "Take me to the office (space)", "show me the office", "back to the house": call open_space at once, then say one short sentence; the view reloads.',
+});
+if (params.get('resume') === 'eyes') {
+  const p = new URLSearchParams(location.search); p.delete('resume');
+  history.replaceState(null, '', `${location.pathname}?${p}`);           // a manual reload starts normally
+  setTimeout(async () => {
+    await eyesMode();
+    // if this browser does want a fresh tap for motion after all, the next touch brings it back
+    if (!gyro.on) addEventListener('pointerdown', () => { if (!gyro.on) toggleGyro(); }, { once: true });
+  }, 300);
+}
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
-$('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+if ($('bDebug')) $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+if (params.has('debug')) { debug = true; updateDebug(); } // the Debug button is gone from the menu: ?debug=1
 // A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
 // so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
 // numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.

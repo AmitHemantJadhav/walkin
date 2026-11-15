@@ -10,23 +10,23 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 export const FURNITURE = {
   sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/Sofa_01/Sofa_01_1k.gltf', against: 'wall' },
   armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/ArmChair_01/ArmChair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
-  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', against: 'wall' },
-  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', against: 'wall' },
-  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', against: 'free' },
-  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', against: 'wall' },
+  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
+  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
+  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', hero: 'hero/dining_table/dining_table_1k.gltf', against: 'free' },
+  desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', hero: 'hero/metal_office_desk/metal_office_desk_1k.gltf', against: 'wall' },
   // pieces a staged room needs
-  chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', against: 'small' },
-  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', against: 'small', tone: 'woodLt' },
-  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', against: 'small', tone: 'woodLt' },
-  coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', against: 'free' },
-  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', against: 'wall', tone: 'woodLt' },
+  chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', hero: 'hero/dining_chair_02/dining_chair_02_1k.gltf', against: 'small' },
+  nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', hero: 'hero/ClassicNightstand_01/ClassicNightstand_01_1k.gltf', against: 'small', tone: 'woodLt' },
+  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', hero: 'hero/side_table_01/side_table_01_1k.gltf', against: 'small', tone: 'woodLt' },
+  coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', hero: 'hero/CoffeeTable_01/CoffeeTable_01_1k.gltf', against: 'free' },
+  tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', hero: 'hero/modern_wooden_cabinet/modern_wooden_cabinet_1k.gltf', against: 'wall', tone: 'woodLt' },
   tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
-  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', against: 'wall', tone: 'woodLt' },
+  bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', hero: 'hero/wooden_display_shelves_01/wooden_display_shelves_01_1k.gltf', heroYaw: Math.PI / 2, against: 'wall', tone: 'woodLt' },
   floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', against: 'small' },
   rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true, tone: 'fabricLt' },
   ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true, tone: 'fabricLt' },
-  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', against: 'small' },
-  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', against: 'small' },
+  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', hero: 'hero/potted_plant_02/potted_plant_02_1k.gltf', against: 'small' },
+  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', hero: 'hero/potted_plant_04/potted_plant_04_1k.gltf', against: 'small' },
   plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
   plantsucculent: { name: 'Succulent', w: 0.22, d: 0.2, h: 0.33, model: 'plantSmall3.glb', against: 'small' },
   cactus: { name: 'Cactus', w: 0.3, d: 0.3, h: 0.5, model: 'cactus_short.glb', against: 'small' },
@@ -43,7 +43,8 @@ const MODEL_DIR = new URL('models/', import.meta.url).href;
 const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
 // Photoreal CC0 pieces from Poly Haven (see models/CREDITS.md). They are bigger than the kit models,
 // so they load after it: a piece appears instantly as the kit model and sharpens when the hero arrives.
-const HERO_FLIPPED = new Set();
+// Poly Haven models that face +z: the gothic bed's headboard and the shelves' open side
+const HERO_FLIPPED = new Set(['hero/GothicBed_01/GothicBed_01_1k.gltf']);
 
 
 // ------------------------------------------------------------------ materials (S7)
@@ -458,11 +459,25 @@ export function preloadHeroModels() {
  * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
  */
 export function fitToSpec(src, spec, flipped, style, hero) {
-  const b = new THREE.Box3().setFromObject(src);
-  const size = b.getSize(new THREE.Vector3());
+  let b = new THREE.Box3().setFromObject(src);
+  let size = b.getSize(new THREE.Vector3());
+  if (hero && (size.x < size.z) !== (spec.w < spec.d) && Math.abs(size.x - size.z) > 0.1 * Math.max(size.x, size.z)) {
+    // the model's long side is on the other axis than the catalog's: turn it, don't squash it
+    const inner = new THREE.Group(); for (const ch of [...src.children]) inner.add(ch);
+    inner.rotation.y = Math.PI / 2; src.add(inner); src.updateMatrixWorld(true);
+    b = new THREE.Box3().setFromObject(src); size = b.getSize(new THREE.Vector3());
+  }
   const c = b.getCenter(new THREE.Vector3());
   // model x -> our width, model z -> our depth, model y -> our height
-  const sx = spec.w / size.x, sd = spec.d / size.z, sh = spec.h / size.y;
+  let sx = spec.w / size.x, sd = spec.d / size.z, sh = spec.h / size.y;
+  if (hero) {
+    // A photoscanned piece keeps its proportions: the kit is made to be stretched to the catalog
+    // box, a real coffee table squashed to 1.2 x 0.7 comes out as a skewed box. Fit inside the
+    // catalog footprint and height uniformly; a little non-uniformity (10%) is allowed so a
+    // nearly-right model still fills its box.
+    const u = Math.min(sx, sd, sh);
+    sx = Math.min(sx, u * 1.1); sd = Math.min(sd, u * 1.1); sh = Math.min(sh, u * 1.1);
+  }
   src.scale.set(sx, sh, sd);
   src.position.set(-c.x * sx, -b.min.y * sh, -c.z * sd); // centred on x/z, standing on y = 0
   src.traverse((o) => {
@@ -652,12 +667,16 @@ export function buildFurniture(kind, style = currentStyle) {
   let shown = boxes;
   const swapIn = (file, flipSet, isHero) => load(file).then((src) => {
     if (!src || (spec.hero && g.userData.model === spec.hero)) return;  // load failed, or the hero already won
-    const next = fitToSpec(src.clone(true), spec, flipSet.has(file), g.userData.style || currentStyle, isHero);
+    let model = src.clone(true);
+    if (isHero && spec.heroYaw) {              // a model whose front is on x: turn it before it is measured
+      const wrap = new THREE.Group(); model.rotation.y = spec.heroYaw; wrap.add(model); wrap.updateMatrixWorld(true); model = wrap;
+    }
+    const next = fitToSpec(model, spec, flipSet.has(file), g.userData.style || currentStyle, isHero);
     g.remove(shown);
     g.add(next);
     shown = next;
     g.userData.model = file;
-    addProps(next, kind, spec);
+    if (!isHero) addProps(next, kind, spec);   // a hero is already dressed; the kit-sized cushions floated over the bed
   });
 
   if (spec.model) swapIn(spec.model, FLIPPED, false);

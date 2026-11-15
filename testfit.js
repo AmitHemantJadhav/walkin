@@ -488,10 +488,32 @@ function dressed(mesh, kind) {
   return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x1e1f23, metalness: 0.75, roughness: 0.4 }) };
 }
 
-async function instanced(kind, poses, floorZ) {
+const PHONE = navigator.maxTouchPoints > 1 && /iPhone|iPad|Android/i.test(navigator.userAgent);
+const PHONE_HEROES = 40;   // stations that get the photoreal chair on a phone; the rest get the kit
+
+async function instanced(kind, poses, floorZ, useHero = true) {
   const spec = FURNITURE[kind];
-  const src = await load(spec.model);
-  const proto = src ? fitToSpec(src.clone(true), spec, false, undefined, false)
+  // The chairs and desks take the catalog's photoreal model (Poly Haven, real PBR maps) when it has
+  // one; the kit chair read as a toy next to a real desk. A hero keeps its own materials - that is
+  // the point of it - instead of the dressed() wood and fabric the kit parts get. Falls back to the
+  // kit model if the hero fails to load, and to a box if that fails too.
+  // The chair is 22k triangles, so 150 of them are 3.3M: fine on a laptop (60 fps measured), too
+  // much for a phone in stereo. A phone gets heroes on the PHONE_HEROES stations nearest the viewer
+  // and the kit on the rest - the far rows read as chairs either way.
+  if (PHONE && useHero && spec.hero && poses.length > PHONE_HEROES) {
+    const w = window.walkin, c = w.camera.position;
+    const byDist = [...poses].sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y));
+    const near = byDist.slice(0, PHONE_HEROES), far = byDist.slice(PHONE_HEROES);
+    const g = new THREE.Group();
+    g.add(await instanced(kind, near, floorZ, true));
+    g.add(await instanced(kind, far, floorZ, false));
+    return g;
+  }
+  let file = (useHero && spec.hero) || spec.model;
+  let src = await load(file);
+  if (!src && file !== spec.model) { file = spec.model; src = await load(file); }
+  const isHero = !!src && file === spec.hero;
+  const proto = src ? fitToSpec(src.clone(true), spec, false, undefined, isHero)
                     : new THREE.Mesh(new THREE.BoxGeometry(spec.w, spec.d, spec.h).translate(0, 0, spec.h / 2), new THREE.MeshStandardMaterial({ color: 0x9a8f80 }));
   proto.updateMatrixWorld(true);
   const parts = [];
@@ -499,7 +521,8 @@ async function instanced(kind, poses, floorZ) {
   const out = new THREE.Group();
   const M = new THREE.Matrix4(), P = new THREE.Matrix4();
   for (const m of parts) {
-    const d = dressed(m, kind);
+    const d = isHero ? { geometry: m.geometry, material: m.material } : dressed(m, kind);
+    if (isHero) d.material.userData.sharedMap = true;     // its textures belong to the GLTF cache
     const im = new THREE.InstancedMesh(d.geometry, d.material, poses.length);
     im.renderOrder = 2;
     im.frustumCulled = false;

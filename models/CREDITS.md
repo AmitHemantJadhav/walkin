@@ -43,3 +43,25 @@ Two things worth knowing if you add more of these:
   (it rendered `CoffeeTable_01` solid black until `vertexColors` was turned off).
 - Their packed ARM maps can drive metalness to 1, and a metal surface with no environment map renders
   black, so metalness is clamped to 0.12 until the scene has an environment map.
+
+The full set, fetched by `tools/heroes.py` (Poly Haven asset id → catalog kind):
+
+| Asset | Kind | Size (1k) |
+|---|---|---|
+| `Sofa_01` | sofa | 0.6 MB |
+| `ArmChair_01` | armchair | 0.6 MB |
+| `GothicBed_01` | queen, king | 1.2 MB |
+| `dining_table` | table | 2.3 MB |
+| `metal_office_desk` | desk (and the office test fit) | 1.6 MB |
+| `dining_chair_02` | chair (and the office test fit) | 0.9 MB |
+| `ClassicNightstand_01` | nightstand | 0.4 MB |
+| `side_table_01` | sidetable | 0.5 MB |
+| `CoffeeTable_01` | coffeetable | 1.0 MB |
+| `modern_wooden_cabinet` | tvstand | 2.9 MB |
+| `wooden_display_shelves_01` | bookcase | 0.5 MB |
+| `potted_plant_02` | plant | 2.6 MB |
+| `potted_plant_04` | plantsmall | 2.1 MB |
+
+All CC0 (<https://polyhaven.com/license>). A hero keeps its proportions (`fitToSpec` fits it inside
+the catalog box uniformly, turning it 90° when its long side is on the other axis) and its own PBR
+materials; the kit's style tints only multiply them.

@@ -31,6 +31,7 @@ const CROSS_EVERY = 6;             // a cross aisle after this many desks
 const CROSS_AISLE = 1.2;
 const MIN_EXIT_W = 0.7;            // narrower than this is a duct or a cupboard, not a way out
 const MIN_ASIDE = 1.0;             // free floor a bench block needs beside it, so corridors stay empty
+const DRAW_CAP = 160;              // desks drawn when no headcount is asked for; the count is still the full one
 const DAYLIGHT_M = 7.5;            // "near a window" for the daylight count (WELL / LEED use 7.5 m)
 const SQFT = 0.09290304;
 const CODE_PER_PERSON = 150 * SQFT;    // IBC business occupancy, gross
@@ -455,10 +456,11 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   let stations = layoutDesks(g, frame, aisle, zones);
   const benching = stations.length;
   for (const s of stations) { const [x, y] = frame.toWorld(s.u, s.v); s.x = x; s.y = y; s.rot = ang + (s.facing > 0 ? Math.PI : 0); s.window = nearestWindow(wins, x, y); }
-  if (people && people < stations.length) {
-    stations.sort((a, b) => a.window - b.window);      // daylight first: keep the seats nearest a window
-    stations = stations.slice(0, people);
-  }
+  stations.sort((a, b) => a.window - b.window);        // daylight first: the seats nearest a window come first
+  if (people && people < stations.length) stations = stations.slice(0, people);
+  // Nobody asked for a number: say how many fit, but draw only the window-side DRAW_CAP. All 331 cost
+  // 6.4 ms of GPU fill on the laptop against 3.7 for 150, and a phone in stereo cannot carry that.
+  const drawn = people ? stations : stations.slice(0, DRAW_CAP);
 
   const exits = exitDoors(g, w);
   const field = egressField(g, exits, stations.map((s) => s.rect), frame);
@@ -478,8 +480,8 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   // draw
   clearGroup();
   const grp = ensureGroup(w);
-  const deskPoses = stations.map((s) => ({ x: s.x, y: s.y, rot: s.rot }));
-  const chairPoses = stations.map((s) => {
+  const deskPoses = drawn.map((s) => ({ x: s.x, y: s.y, rot: s.rot }));
+  const chairPoses = drawn.map((s) => {
     const [cx, cy] = frame.toWorld(s.u, s.v + (DESK.d / 2 + CHAIR.d / 2 + 0.05) * s.facing);
     return { x: cx, y: cy, rot: s.rot + Math.PI };
   });
@@ -498,9 +500,9 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
     `${Math.floor(area / CODE_PER_PERSON)} people by code at 150 square feet each, ${Math.floor(area / TYPICAL_PER_PERSON)} at 100. ` +
     (lit != null ? `Longest walk to an exit ${lit.toFixed(0)} m through ${exits.length} exit${exits.length === 1 ? '' : 's'}.` : `No exit door found on this floor.`);
   const exitWhy = exits.map((e) => `${e.width.toFixed(2)} m (${e.why})`).join(', ');
-  hud(`Test fit · ${stations.length} seats · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
+  hud(`Test fit · ${stations.length} seats${drawn.length < stations.length ? ` (showing ${drawn.length})` : ''} · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
     (lit != null ? `\nlongest walk to exit ${lit.toFixed(0)} m` : '') + (zones.length ? `\n${zones.length} zone${zones.length === 1 ? '' : 's'}: ${zones.map((z) => z.name).join(', ')}` : ''));
-  return { ok: true, ms: Math.round(performance.now() - t0), seats: stations.length, benching_max: benching, near_window: near,
+  return { ok: true, ms: Math.round(performance.now() - t0), seats: stations.length, drawn: drawn.length, benching_max: benching, near_window: near,
     usable_m2: Math.round(area), code_occupancy: Math.floor(area / CODE_PER_PERSON), typical_occupancy: Math.floor(area / TYPICAL_PER_PERSON),
     windows: wins.length, exits: exits.length, exit_doors: exitWhy, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle, say };
 }

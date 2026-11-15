@@ -435,10 +435,16 @@ const meshMade = [];
 
 /** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
 export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
-                                     maxFold = null, maxCaptured = null, worst = null } = {}) {
+                                     maxFold = null, maxCaptured = null, worst = null,
+                                     model = null, into = null } = {}) {
   const w = window.walkin;
   if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
-  const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
+  // `model` loads another house's pieces into this one - your own sofa, cut from your own scan,
+  // standing in the house you are thinking of buying. `into` is [x, y] in this house's frame for
+  // the first piece's footprint centre; without it the pieces land where they stood at home,
+  // which means nothing here.
+  const foreign = !!(model && model !== w.house.model);
+  const base = location.pathname.replace(/[^/]*$/, '') + `data/${model || w.house.model}/`;
   let meta, buf;
   try {
     const [a, b] = await Promise.all([fetch(base + 'furniture.json'), fetch(base + 'furniture.bin')]);
@@ -520,7 +526,15 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands at the
     // height it was measured at. Using the current pano's floor instead would put every piece on the
     // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).
-    grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
+    if (foreign) {
+      const cur = w.current || {};
+      const fz = cur.floorZ ?? floorZ;
+      grp.position.set(into ? into[0] : cur.pos ? cur.pos[0] : 0,
+                       into ? into[1] : cur.pos ? cur.pos[1] : 0, fz);
+      into = null;                       // only the first piece goes to the asked-for spot
+    } else {
+      grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
+    }
     const kind = `mesh${++seq}`;
     FURNITURE[kind] = { name: p.room ? `${p.room.toLowerCase()} piece` : 'piece the home already had',
                         real: true, mesh: true,
@@ -532,7 +546,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     grp.userData.z0 = grp.position.z;
     // physics finds a piece's walls and its neighbours by floor, so a piece upstairs must not collide
     // with a wall downstairs. meshdiff works this out from the piece's own height.
-    grp.userData.floor = p.floor || (w.current && w.current.floor);
+    grp.userData.floor = foreign ? (w.current && w.current.floor) : (p.floor || (w.current && w.current.floor));
     w.furniture.add(grp);
     meshMade.push(grp);
     placed.push({ kind, room: p.room, size: p.size, tris: p.tris });

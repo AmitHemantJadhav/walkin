@@ -529,7 +529,7 @@ function propMaterials() {
     cushion: PROP_COLOURS.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, bumpMap: weave.bump, bumpScale: 0.0025 })),
     throw: new THREE.MeshStandardMaterial({ color: 0x8c6d5b, roughness: 0.95, bumpMap: weave.bump, bumpScale: 0.003 }),
     mug: new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.35 }),
-    bowl: new THREE.MeshStandardMaterial({ color: 0x2f3b45, roughness: 0.3, metalness: 0.1 }),
+    bowl: new THREE.MeshStandardMaterial({ color: 0x2f3b45, roughness: 0.3, metalness: 0.1, side: THREE.DoubleSide }),
   };
   for (const m of [...propMats.cushion, propMats.throw]) m.userData.sharedMap = true;
   return propMats;
@@ -608,7 +608,7 @@ export function addProps(root, kind, spec) {
     if (shelves.length) {                                             // a leaning book or a bowl on one shelf
       const z = shelves[Math.min(1, shelves.length - 1)];
       const bw = mesh(new THREE.SphereGeometry(0.07, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.bowl);
-      bw.position.set(inner / 2 - 0.1, 0, z + 0.005); bw.rotation.x = Math.PI; bw.position.z += 0.07;
+      bw.position.set(inner / 2 - 0.1, 0, z + 0.075); bw.rotation.x = -Math.PI / 2; // sphere poles are on Y, the item is Z up: this puts the rim flat and up
       grp.add(bw);
     }
   } else if (kind === 'nightstand' || kind === 'sidetable') {
@@ -623,10 +623,10 @@ export function addProps(root, kind, spec) {
     const b = mesh(new THREE.BoxGeometry(0.3, 0.23, 0.025), M.books[5]); b.position.set(-w * 0.2, 0.05, h + 0.0125); b.rotation.z = 0.2; grp.add(b);
     const b2 = mesh(new THREE.BoxGeometry(0.28, 0.21, 0.02), M.books[8]); b2.position.set(-w * 0.2, 0.05, h + 0.035); b2.rotation.z = -0.1; grp.add(b2);
     const bw = mesh(new THREE.SphereGeometry(0.11, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.bowl);
-    bw.position.set(w * 0.22, -0.02, h + 0.11); bw.rotation.x = Math.PI; grp.add(bw);
+    bw.position.set(w * 0.22, -0.02, h + 0.11); bw.rotation.x = Math.PI / 2; grp.add(bw);
   } else if (kind === 'table') {
     const bw = mesh(new THREE.SphereGeometry(0.13, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.bowl);
-    bw.position.set(0, 0, h + 0.13); bw.rotation.x = Math.PI; grp.add(bw);
+    bw.position.set(0, 0, h + 0.13); bw.rotation.x = Math.PI / 2; grp.add(bw);
   } else if (kind === 'desk') {
     const b = mesh(new THREE.BoxGeometry(0.24, 0.17, 0.03), M.books[3]); b.position.set(w * 0.3, 0.12, h + 0.015); b.rotation.z = -0.3; grp.add(b);
     const mug = mesh(new THREE.CylinderGeometry(0.038, 0.034, 0.095, 16), M.mug); mug.rotation.x = Math.PI / 2; mug.position.set(-w * 0.35, 0.1, h + 0.05); grp.add(mug);

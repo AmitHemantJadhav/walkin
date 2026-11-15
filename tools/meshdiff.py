@@ -430,6 +430,24 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12
               f'{SLIVER}x thinner than they are long '
               f'({100*(before-int(keep.sum()))/max(before,1):.1f}%)')
 
+    # The spikes that survive are the ones under 12 cm. Cutting them everywhere holed the sofa's seat
+    # (an interior sliver is still surface); a spike that hangs off the piece's open edge is not. So a
+    # second pass takes the thin triangles (6 cm, 6x) that own a boundary edge of what is kept, and
+    # repeats, since removing one exposes the next in the chain. Three rounds took the sectional's
+    # base spikes and nothing from its seat.
+    if max_edge:
+        for _ in range(3):
+            kept = np.flatnonzero(keep)
+            E = np.sort(Ff[kept][:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+            _, inv, cnt = np.unique(E, axis=0, return_inverse=True, return_counts=True)
+            open_edge = (cnt[inv] == 1).reshape(-1, 3).any(axis=1)
+            thin = (elong[kept] > 0.06) & (elong[kept] / np.maximum(thick[kept], 1e-9) > 6)
+            drop = kept[open_edge & thin]
+            if not len(drop):
+                break
+            keep[drop] = False
+        print(f'then dropped the thin triangles on open edges: {len(Ff) - int((~keep).sum()) - 0:,} kept')
+
     idx, lab, n = components(Ff, keep)
     if flap_frac:
         keep = drop_flaps(Vf, Ff, idx, lab, n, FLAP_FOLD, flap_frac)

@@ -235,7 +235,7 @@ def cap_uvs(pos, faces, L):
     return np.clip(uv, 0, 1)
 
 
-def tile_caps(model, meta, base):
+def tile_caps(model, meta, base, rewritten=()):
     """Give every piece's caps a square of its own material, appended to its atlas.
 
     tools/meshclose.py caps a missing side with new vertices whose UV lands on one representative
@@ -252,6 +252,8 @@ def tile_caps(model, meta, base):
         if not p.get('tex') or not p.get('capped'):
             continue
         again = bool(p.get('capTile'))                   # a rerun: the UVs are already in place
+        if again and p['tex'] not in rewritten:
+            continue                                     # atlas untouched this run: it still has its square
         path = os.path.join(tex_dir, p['tex'])
         img = np.asarray(Image.open(path).convert('RGB'), np.float32)
         H, W, _ = img.shape
@@ -308,6 +310,7 @@ def run(model, force=False, report=False):
         open(stamp, 'w').write(meta.get('built', ''))
     t0 = time.time()
     done = 0
+    rewritten = set()
     for p in meta['pieces']:
         if not p.get('tex'):
             continue
@@ -325,11 +328,12 @@ def run(model, force=False, report=False):
         if report:
             continue
         Image.fromarray(out.astype(np.uint8)).save(cur, quality=88, optimize=True)
+        rewritten.add(p['tex'])
         p['sharpened'] = True
         p['smear'] = st['smear']
         done += 1
     if not report:
-        tiles = tile_caps(model, meta, base)
+        tiles = tile_caps(model, meta, base, rewritten)
         meta['sharpened'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         json.dump(meta, open(meta_path, 'w'))
         print(f'sharpened {done} atlases, {tiles} with their caps on their own material, '

@@ -44,13 +44,23 @@ const SPAN = 0.7, MAX_SPAN = 0.9;
 // the mapping is by angle instead: each camera pixel lands in the direction it really comes from, so a hand shows at
 // its real size and place (passthrough). The camera then covers only the middle of a wider view: sx/sy > 1.
 // ?handmap=crop in app.js keeps the old zoomed crop.
-export function cropFor(viewAspect, vw, vh, viewVfov, camHfov) {
+//
+// reach (the default with the back camera): the camera sees ~63° and the view is far wider (~117° across a phone in
+// landscape), so by angle alone a hand only shows - and can only point - inside a window in the middle of the
+// screen, and fades out at that window's edge. With reach the screen spans the middle REACH of the camera instead,
+// so the hand reaches every edge (and the buttons along them) while it is still whole in the camera image. `gain`
+// says how much that magnifies the camera; realhands.js draws the hand 1/gain smaller about the pinch point, so it
+// keeps its real size and only its movement is amplified (like mouse acceleration). ?handmap=true turns reach off.
+const REACH = 0.85;
+export function cropFor(viewAspect, vw, vh, viewVfov, camHfov, reach = false) {
   if (viewVfov && camHfov && vw && vh) {
     // camHfov is along the camera's long side (a phone held upright delivers a portrait video)
     const tV = Math.tan((viewVfov * Math.PI) / 360), tL = Math.tan((camHfov * Math.PI) / 360);
     const tW = vw >= vh ? tL : (tL * vw) / vh, tH = (tW * vh) / vw; // half-angle tangents across and up the video
-    const sx = (tV * viewAspect) / tW, sy = tV / tH;
-    return { cx: (1 - sx) / 2, cy: (1 - sy) / 2, sx, sy };
+    let sx = (tV * viewAspect) / tW, sy = tV / tH, gain = 1;
+    const k = Math.max(sx, sy) / REACH;
+    if (reach && k > 1) { sx /= k; sy /= k; gain = k; }
+    return { cx: (1 - sx) / 2, cy: (1 - sy) / 2, sx, sy, gain };
   }
   const va = vw / vh || 4 / 3;
   let sy = SPAN, sx = (SPAN * viewAspect) / va;
@@ -96,7 +106,7 @@ export function handDepth(L, W, vw, vh, hfovDeg = 63) {
 // phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
 // aspect(): width / height of the view the hands are drawn in (one eye in the headset).
 // onFrame(cam): called right before each detection, so realhands.js can copy the very image the landmarks come from.
-export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight, viewFov = null }) {
+export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight, viewFov = null, reach = false }) {
   const lm = await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
@@ -119,7 +129,7 @@ export async function startHands({ video, facingMode = 'user', onHands, onFrame,
     nextRun = Math.max(nextRun + 1000 / stats.maxHz, t);
     last = video.currentTime;
     // how screen units map back to the video (realhands.js draws the same rectangle)
-    const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight, viewFov && viewFov(), stats.hfov) };
+    const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight, viewFov && viewFov(), stats.hfov, reach) };
     onFrame?.(cam);
     const t1 = performance.now(); // stats.ms is the detection alone
     const r = lm.detectForVideo(video, t);

@@ -445,6 +445,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
   // the first piece's footprint centre; without it the pieces land where they stood at home,
   // which means nothing here.
   const foreign = !!(model && model !== w.house.model);
+  let row = null;                     // where foreign pieces line up
   const base = location.pathname.replace(/[^/]*$/, '') + `data/${model || w.house.model}/`;
   let meta, buf;
   try {
@@ -500,9 +501,13 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
       // 40 MB and still ~125 px/m, which at arm's length is what the screen can show anyway.
       map = texLoader.load(base + 'furniture-tex/' + p.tex, (tex) => {
         const im = tex.image;
-        if (!PHONE || !im || Math.max(im.width, im.height) <= 768 || !window.createImageBitmap) return;
-        createImageBitmap(im, { resizeWidth: im.width >> 1, resizeHeight: im.height >> 1, resizeQuality: 'high' })
-          .then((bm) => { tex.image = bm; tex.needsUpdate = true; }).catch(() => {});
+        if (!PHONE || !im || Math.max(im.width, im.height) <= 768) return;
+        // A canvas, not an ImageBitmap: WebGL ignores flipY for ImageBitmap sources, so every atlas
+        // would have sampled upside down on exactly the devices we demo on (Amit, #135). Synchronous
+        // too, so the full-size upload never happens.
+        const c = document.createElement('canvas'); c.width = im.width >> 1; c.height = im.height >> 1;
+        const g2 = c.getContext('2d'); g2.imageSmoothingQuality = 'high'; g2.drawImage(im, 0, 0, c.width, c.height);
+        tex.image = c; tex.needsUpdate = true;
       });
       map.colorSpace = THREE.SRGBColorSpace;
       map.anisotropy = maxAniso;
@@ -533,11 +538,19 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     // height it was measured at. Using the current pano's floor instead would put every piece on the
     // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).
     if (foreign) {
+      // a row of pieces, side by side: from `into`, or 2 m in front of the viewer (never on the
+      // viewer's own spot, which put every piece inside the camera), each one past the last
       const cur = w.current || {};
       const fz = cur.floorZ ?? floorZ;
-      grp.position.set(into ? into[0] : cur.pos ? cur.pos[0] : 0,
-                       into ? into[1] : cur.pos ? cur.pos[1] : 0, fz);
-      into = null;                       // only the first piece goes to the asked-for spot
+      if (!row) {
+        const yaw = (w.view && w.view.yaw) || 0, at = cur.pos || [0, 0];
+        row = { x: into ? into[0] : at[0] + Math.cos(yaw) * 2, y: into ? into[1] : at[1] + Math.sin(yaw) * 2,
+                sx: -Math.sin(yaw), sy: Math.cos(yaw), next: 0 };
+      }
+      const half = Math.max(p.size[0], p.size[1]) / 2;
+      const off = row.next ? row.next + half : 0;
+      grp.position.set(row.x + row.sx * off, row.y + row.sy * off, fz);
+      row.next = off + half + 0.3;       // 30 cm between pieces
     } else {
       grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
     }
@@ -550,6 +563,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     grp.userData.meshPiece = true;
     grp.userData.i = p.i;
     grp.userData.z0 = grp.position.z;
+    grp.userData.floor = foreign ? (w.current && w.current.floor) : (p.floor || (w.current && w.current.floor));
     // The scanner rarely sees a piece's feet, so most pieces' lowest point is 5-25 cm above the floor
     // (the sofa's is 19 cm) and they are drawn at that height, which is right in place - the photo's
     // own sofa is under them - and reads as hovering the moment they move. The piece keeps its true
@@ -564,9 +578,14 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
       // above that (the living room's is +4 cm), and the occluder would hide a blob laid below it.
       // So the blob goes on whichever is higher, the median floor or the nearest scan point's, +3 cm.
       const pieceFloor = grp.position.z - Math.max(0, gap);
-      let near = { d: Infinity, z: null };                 // the floor of the nearest scan point
+      // the floor of the nearest scan point on this piece's storey and within 30 cm of its own floor:
+      // 7axUS8XrcSc's scan-point floors run from -0.9 to 0 m, and a piece by a step must not borrow
+      // the wrong level (Amit, #135)
+      let near = { d: Infinity, z: null };
       for (const q of w.house.panos || []) {
         if (!q.pos || q.floorZ == null) continue;
+        if (grp.userData.floor && q.floor && q.floor !== grp.userData.floor) continue;
+        if (Math.abs(q.floorZ - pieceFloor) > 0.3) continue;
         const dd = Math.hypot(q.pos[0] - grp.position.x, q.pos[1] - grp.position.y);
         if (dd < near.d) near = { d: dd, z: q.floorZ };
       }

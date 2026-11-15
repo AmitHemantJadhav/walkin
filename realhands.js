@@ -20,11 +20,11 @@
 const FINGERS = [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12],
   [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
 const PALM = [0, 1, 2, 5, 9, 13, 17];
-const MAX_W = 720;        // canvas width cap: the camera crop is only ~450-580 px wide, more pixels only cost fill rate
-const FRAME_W = 360;      // camera copy width: passthrough shows the camera ~270 px wide per eye, so more is wasted work
+const MAX_W = 1280;       // canvas width cap: 720 was visibly soft on an iPhone screen (Amit, in the headset)
+const FRAME_W = 640;      // camera copy width: the whole 640 px camera frame, so the hand is as sharp as the camera allows
 const TIPS = new Set([4, 8, 12, 16, 20]);
 const ALPHA = 0.95;       // a resting hand
-const PINCH_ALPHA = 0.4;  // a pinching (holding) hand: the piece in your fingers shows through
+const PINCH_ALPHA = 0.7;  // a pinching (holding) hand: the piece shows through a little (0.4 read as the hand vanishing)
 
 export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
   const cv = document.createElement('canvas');
@@ -214,6 +214,7 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
 
       // 2) into each eye, shrunk by `scale` around the point between thumb and index tips
       const ax = (P[4][0] + P[8][0]) / 2, ay = (P[4][1] + P[8][1]) / 2;
+      const sc = scale / (cam.gain || 1); // reach magnifies the camera by gain: draw the hand back at its real size
       ctx.globalAlpha = h.pinch ? PINCH_ALPHA : ALPHA;
       for (const x0 of stereo ? [0, W / 2] : [0]) {
         // frame px q -> eye px e = x0 + ox + kx q, then shrunk about the anchor A: A + scale (e - A).
@@ -221,7 +222,7 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
         const Ax = x0 + ox + kx * ax, Ay = oy + ky * ay;
         ctx.save();
         ctx.beginPath(); ctx.rect(x0, 0, ew, H); ctx.clip();
-        ctx.setTransform(scale * kx, 0, 0, scale * ky, Ax * (1 - scale) + scale * (x0 + ox), Ay * (1 - scale) + scale * oy);
+        ctx.setTransform(sc * kx, 0, 0, sc * ky, Ax * (1 - sc) + sc * (x0 + ox), Ay * (1 - sc) + sc * oy);
         ctx.drawImage(mask, 0, 0);
         ctx.restore();
       }
@@ -231,7 +232,7 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
       // 3) a glowing dot between thumb and index while pinching (the smoothed pinch point that grabs)
       if (!h.pinch) continue;
       for (const x0 of stereo ? [0, W / 2] : [0]) {
-        const cx = x0 + h.x * ew, cy = h.y * H, r = Math.max(5, span * kx * scale * 0.2);
+        const cx = x0 + h.x * ew, cy = h.y * H, r = Math.max(5, span * kx * sc * 0.2);
         const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
         g.addColorStop(0, 'rgba(255,240,170,1)');
         g.addColorStop(0.35, 'rgba(255,196,0,.9)');

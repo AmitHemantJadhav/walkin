@@ -849,6 +849,7 @@ async function moveFurniture(args) {
   const moved = Math.hypot(item.position.x - from[0], item.position.y - from[1]);
   const res = report(item, { moved: p.desc, moved_m: r2(moved) });
   if (p.linear && p.cands[0] && Math.hypot(spot.x - p.cands[0].x, spot.y - p.cands[0].y) > 0.05) res.note = `only ${r2(moved)} m: something is in the way`;
+  else if (moved < 0.15) res.note = `it was already ${p.desc}: say so, don't say you moved it`;
   return res;
 }
 

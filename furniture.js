@@ -75,22 +75,178 @@ function partOf(name, lightness) {
   return 'fabric';
 }
 
-const styled = new Map();   // `${style}|${source material uuid}` -> the restyled material
+// ------------------------------------------------------------------ surfaces (S7b)
+// Recolouring alone still leaves one flat colour per part, which is what reads as Lego in a headset.
+// Below are the grain and the weave the kit never shipped: drawn once on a canvas (no assets, nothing
+// to download) and shared by every piece. The kit's UVs are colour-swatch islands, so a texture through
+// them collapses to one flat colour; each mesh gets box-projected UVs in world metres instead
+// (surfaceGeometry) and the textures tile from `repeat`.
+const WOOD_REPEAT = 0.6, WEAVE_REPEAT = 0.08;     // metres per tile
+let woodTex = null, weaveBumpTex = null, weaveMapTex = null;
 
-function styleMaterial(src, style, tone) {
+const hash = (i) => Math.abs(Math.sin(i * 12.9898 + 78.233) * 43758.5453) % 1;
+
+/** Wood grain, kept near-neutral so `material.color` picks the species. 512 px, one per page. */
+function woodTexture() {
+  if (woodTex) return woodTex;
+  const N = 512;
+  const c = document.createElement('canvas'); c.width = c.height = N;
+  const g = c.getContext('2d');
+  g.fillStyle = '#d8cfc2'; g.fillRect(0, 0, N, N);
+  const TAU = Math.PI * 2;
+  // long wobbling streaks in four close tones; periodic in x so the tile has no seam, drawn a tile
+  // above and below as well so the top and bottom edges match
+  const streak = (y, i) => {
+    g.beginPath();
+    for (let x = 0; x <= N; x += 16) g.lineTo(x, y + Math.sin(TAU * x / N + i) * 2.6 + Math.sin(TAU * 4 * x / N + i * 3) * 0.8);
+    g.stroke();
+  };
+  // broad soft bands first: the figure of a board, a few tones wide
+  for (let i = 0; i < 9; i++) {
+    g.strokeStyle = i % 2 ? '#e2dacd' : '#c3b5a1'; g.globalAlpha = 0.18 + 0.1 * hash(i + 50);
+    g.lineWidth = 28 + 40 * hash(i + 70);
+    for (const dy of [-N, 0, N]) streak((i / 9) * N + hash(i + 20) * 40 + dy, i * 7);
+  }
+  // then the grain lines, uneven in spacing and weight like a sawn face
+  for (let i = 0; i < 130; i++) {
+    const y = (i / 130) * N + hash(i) * 12;
+    g.strokeStyle = ['#c3b5a1', '#e4dccf', '#b4a58f', '#cfc3b1'][i % 4];
+    g.globalAlpha = 0.2 + 0.3 * Math.abs(Math.sin(i * 0.7));
+    g.lineWidth = 0.7 + 3 * hash(i + 500) * hash(i + 600);
+    for (const dy of [-N, 0, N]) streak(y + dy, i);
+  }
+  g.globalAlpha = 0.16; g.strokeStyle = '#8f7f6b';            // a few darker rays
+  for (let i = 0; i < 24; i++) {
+    g.lineWidth = 0.5 + hash(i + 300) * 1.4;
+    for (const dy of [-N, 0, N]) streak(hash(i + 900) * N + dy, i * 5);
+  }
+  g.globalAlpha = 1;
+  woodTex = new THREE.CanvasTexture(c);
+  woodTex.colorSpace = THREE.SRGBColorSpace;
+  woodTex.wrapS = woodTex.wrapT = THREE.RepeatWrapping;
+  woodTex.repeat.set(1 / WOOD_REPEAT, 1 / WOOD_REPEAT);
+  woodTex.anisotropy = 8;
+  return woodTex;
+}
+
+/** A plain weave, 16 threads per 8 cm tile: a height map for `bumpMap` and a faint one for `map`. */
+function weaveTextures() {
+  if (weaveBumpTex) return { bump: weaveBumpTex, map: weaveMapTex };
+  const N = 256, cell = N / 16;
+  const make = (lo, hi, noise) => {
+    const c = document.createElement('canvas'); c.width = c.height = N;
+    const g = c.getContext('2d');
+    const img = g.createImageData(N, N), d = img.data;
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+      const warpOnTop = ((x / cell | 0) + (y / cell | 0)) % 2 === 0;   // over, under, over: alternate cells show the other thread
+      const fx = (x % cell) / cell, fy = (y % cell) / cell;
+      const t = Math.sin((warpOnTop ? fx : fy) * Math.PI);           // a thread is a half-round: bright in the middle, dark at the sides
+      const v = Math.round(255 * THREE.MathUtils.clamp(lo + (hi - lo) * t + (hash(x * 131 + y * 7) - 0.5) * noise, 0, 1));
+      const k = (y * N + x) * 4; d[k] = d[k + 1] = d[k + 2] = v; d[k + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(1 / WEAVE_REPEAT, 1 / WEAVE_REPEAT);
+    tex.anisotropy = 4;
+    return tex;
+  };
+  weaveBumpTex = make(0.2, 1, 0.12); weaveBumpTex.colorSpace = THREE.NoColorSpace;
+  weaveMapTex = make(0.86, 1, 0.1); weaveMapTex.colorSpace = THREE.SRGBColorSpace;
+  return { bump: weaveBumpTex, map: weaveMapTex };
+}
+
+/** Box-project UVs in metres onto a copy of a geometry: tops in plan, sides with u running up the face so the grain climbs legs and panels. */
+function boxUV(geometry, scale) {
+  const geo = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+  const pos = geo.getAttribute('position');
+  const uv = new Float32Array(pos.count * 2);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), e = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    a.fromBufferAttribute(pos, i).multiply(scale); b.fromBufferAttribute(pos, i + 1).multiply(scale); c.fromBufferAttribute(pos, i + 2).multiply(scale);
+    n.subVectors(b, a).cross(e.subVectors(c, a));
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    for (let k = 0; k < 3; k++) {
+      const v = k === 0 ? a : k === 1 ? b : c;
+      let u, w;
+      if (ay >= ax && ay >= az) { u = v.x; w = v.z; }                 // top or underside (glTF y up)
+      else if (ax >= az) { u = v.y; w = v.z; } else { u = v.y; w = v.x; }
+      uv[(i + k) * 2] = u; uv[(i + k) * 2 + 1] = w;
+    }
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+
+const projected = new Map();   // `${kit geometry uuid}|${part}|${scale}` -> the box-projected copy, shared by every item of that kind
+
+/** The kit geometry with UVs in world metres (and, for leaves, a little colour per face). The GLB cache's own geometry is never touched. */
+function surfaceGeometry(geometry, part, scale) {
+  const key = `${geometry.uuid}|${part}|${scale.x.toFixed(3)},${scale.y.toFixed(3)},${scale.z.toFixed(3)}`;
+  if (projected.has(key)) return projected.get(key);
+  const geo = boxUV(geometry, scale);
+  if (part === 'leaf') {                       // one tint per face: a plant is many leaves, not one green shell
+    const n = geo.getAttribute('position').count, col = new Float32Array(n * 3);
+    for (let i = 0; i < n; i += 3) { const f = 0.86 + 0.26 * hash(i * 0.37 + 11); for (let k = 0; k < 9; k++) col[i * 3 + k] = f; }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  }
+  geo.userData.shared = true;
+  projected.set(key, geo);
+  return geo;
+}
+
+/** The scale of a mesh inside a fitted model: the product of its own and its ancestors' up to the model root. */
+function meshScale(o, root) {
+  const s = new THREE.Vector3(1, 1, 1);
+  for (let p = o; p; p = p.parent) { s.multiply(p.scale); if (p === root) break; }
+  return s;
+}
+
+/** Which part of the palette a kit material is, for a piece: the spec's tone wins, the TV's dark panel is its screen. */
+function partFor(src, spec) {
+  if (spec && spec.model === 'televisionModern.glb' && /dark/i.test(src.name || '')) return 'screen';
+  const tone = spec && spec.tone;
+  if (tone && STYLES[DEFAULT_STYLE][tone] !== undefined) return tone;
+  const hsl = { h: 0, s: 0, l: 0.5 };
+  if (src.color) src.color.getHSL(hsl);
+  return partOf(src.name, hsl.l);
+}
+
+const styled = new Map();   // `${style}|${part}|${source material uuid}` -> the restyled material
+
+function styleMaterial(src, style, part) {
   const pal = STYLES[style] || STYLES[DEFAULT_STYLE];
-  const key = `${pal.name}|${tone || '-'}|${src.uuid}`;
+  part = part || partFor(src, null);
+  const key = `${pal.name}|${part}|${src.uuid}`;
   if (styled.has(key)) return styled.get(key);
 
   const hsl = { h: 0, s: 0, l: 0.5 };
   if (src.color) src.color.getHSL(hsl);
-  const part = tone && pal[tone] !== undefined ? tone : partOf(src.name, hsl.l);
   const m = src.clone();
-  m.color = new THREE.Color(pal[part]);
+  m.map = m.bumpMap = null; m.vertexColors = false; m.emissive.setHex(0); m.emissiveIntensity = 1;
+  m.color = new THREE.Color(pal[part] !== undefined ? pal[part] : 0x0a0b0d);
   // keep a little of the original light/dark variation, so pillows stay lighter than the duvet
   m.color.multiplyScalar(THREE.MathUtils.clamp(0.88 + 0.24 * hsl.l, 0.78, 1.18));
-  m.roughness = ROUGH[part] !== undefined ? ROUGH[part] : (ROUGH[part.replace(/Lt|Dk/, '')] || 0.85);
-  m.metalness = part === 'metal' ? 0.65 : 0;
+  const base = part.replace(/Lt|Dk/, '');
+  m.roughness = ROUGH[base] !== undefined ? ROUGH[base] : 0.85;
+  m.metalness = 0;
+  if (base === 'wood') {
+    m.map = woodTexture(); m.color.multiplyScalar(1.12);            // the grain's mean is below white: put some brightness back
+    m.roughness = 0.5; m.envMapIntensity = 0.9;
+  } else if (base === 'fabric') {
+    const t = weaveTextures();
+    m.map = t.map; m.bumpMap = t.bump; m.bumpScale = 0.0025; m.color.multiplyScalar(1.06);
+    m.roughness = 0.95;
+  } else if (part === 'metal') {
+    m.metalness = 0.8; m.roughness = 0.3;
+  } else if (part === 'leaf') {
+    m.roughness = 0.75; m.vertexColors = true;                       // surfaceGeometry gives leaf parts a colour attribute
+  } else if (part === 'shade') {
+    m.emissive.setHex(0xffc784); m.emissiveIntensity = 0.15;         // a lamp reads as a lamp even when it is off
+  } else if (part === 'screen') {
+    m.roughness = 0.2; m.metalness = 0.1; m.envMapIntensity = 1;     // near-black glass that reflects the room
+  }
+  m.userData.sharedMap = true;   // the textures are module singletons: not yours to dispose
   m.name = `${part}:${pal.name}`;
   styled.set(key, m);
   return m;
@@ -98,12 +254,12 @@ function styleMaterial(src, style, tone) {
 
 /** Re-material one piece (or everything under a group) in the given style. */
 export function applyStyle(root, style = currentStyle) {
-  const tone = (FURNITURE[root.userData.kind] || {}).tone;
+  const spec = FURNITURE[root.userData.kind];
   const pal = STYLES[style] || STYLES[DEFAULT_STYLE];
   root.traverse((o) => {
     if (!o.isMesh) return;
     if (o.userData.hero) o.material.color.setHex(pal.hero);   // tint the photo texture, keep its detail
-    else if (o.userData.styleSrc) o.material = styleMaterial(o.userData.styleSrc, style, tone);
+    else if (o.userData.styleSrc) o.material = styleMaterial(o.userData.styleSrc, style, o.userData.stylePart || partFor(o.userData.styleSrc, spec));
   });
   root.userData.style = style;
   return root;
@@ -133,7 +289,7 @@ let shadowTex;
 const shadows = new Set();
 let shadowOpacity = 0.45;
 
-function shadowTexture() {
+export function shadowTexture() {
   if (!shadowTex) {
     const c = document.createElement('canvas');
     c.width = c.height = 128;
@@ -249,7 +405,7 @@ export function buildBoxes(kind) {
 const loader = new GLTFLoader();
 const loads = new Map(); // file -> Promise<THREE.Object3D> (one fetch per file, cloned per item)
 
-function load(file) {
+export function load(file) {
   if (!loads.has(file)) {
     loads.set(file, loader.loadAsync(MODEL_DIR + file).then((gltf) => gltf.scene).catch((e) => {
       console.warn(`furniture: ${file} failed to load, using boxes`, e);
@@ -273,7 +429,7 @@ export function preloadHeroModels() {
  * Turn a glTF model (Y-up, arbitrary origin and scale) into our frame: x = width, y = depth with the front
  * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
  */
-function fitToSpec(src, spec, flipped, style, hero) {
+export function fitToSpec(src, spec, flipped, style, hero) {
   const b = new THREE.Box3().setFromObject(src);
   const size = b.getSize(new THREE.Vector3());
   const c = b.getCenter(new THREE.Vector3());
@@ -284,7 +440,8 @@ function fitToSpec(src, spec, flipped, style, hero) {
   src.traverse((o) => {
     if (!o.isMesh) return;
     o.renderOrder = 2;          // after the depth-only occluders
-    o.castShadow = o.receiveShadow = false;
+    o.castShadow = true;        // sun.js draws the sun's shadow of it; nothing is drawn onto it
+    o.receiveShadow = false;
     if (hero) {
       // These models ship real PBR maps — colour, roughness, metalness and normal — and the packed map
       // drives metalness to 1 on parts of them. A fully metallic surface with nothing to reflect renders
@@ -303,8 +460,14 @@ function fitToSpec(src, spec, flipped, style, hero) {
       o.userData.hero = true;                  // styles tint these instead of recolouring them
       o.material.color.setHex((STYLES[style] || STYLES[DEFAULT_STYLE]).hero);
     } else {
+      const part = partFor(o.material, spec);
       o.userData.styleSrc = o.material;        // the kit's own material, kept so the style can change
-      o.material = styleMaterial(o.material, style, spec.tone);
+      o.userData.stylePart = part;
+      // the kit's UVs are colour swatches: swap in the copy with UVs in world metres, shared by every
+      // item of this kind (the clone shares the GLB cache's geometry, which stays as it was)
+      o.geometry = surfaceGeometry(o.geometry, part, meshScale(o, src));
+      o.userData.sharedGeo = true;
+      o.material = styleMaterial(o.material, style, part);
     }
   });
 

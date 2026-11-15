@@ -19,7 +19,7 @@
 import { FURNITURE } from './furniture.js';
 
 export const WALK = 0.6;        // a walkway has to be this wide
-const CELL = 0.08;              // grid used for the walkway test
+export const CELL = 0.08;              // grid used for the walkway test
 const DOOR_STEP = 0.4;          // how far into the room the "standing in the doorway" point is
 export const DOOR_CLEAR = 0.8;  // depth of floor that has to stay clear in front of a doorway
 const MAX_CELLS = 40000;        // a 30 m2 room is ~4700 cells; this is just a guard
@@ -125,7 +125,7 @@ export function openings(room, house) {
  * Mark the room's floor as free / blocked / walkable (a WALK-wide circle fits), then flood fill from the
  * doors. Returns the grid plus how much of the free floor you can actually reach.
  */
-function walkGrid(room, blockers) {
+export function walkGrid(room, blockers) {
   const xs = room.poly.map((p) => p[0]), ys = room.poly.map((p) => p[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const nx = Math.ceil((x1 - x0) / CELL) + 1, ny = Math.ceil((y1 - y0) / CELL) + 1;
@@ -165,7 +165,7 @@ function walkGrid(room, blockers) {
 }
 
 /** Flood fill the walkable cells from one cell; returns the set of reached cells. */
-function reach(g, start) {
+export function reach(g, start) {
   const seen = new Uint8Array(g.nx * g.ny);
   const [sx, sy] = start;
   // start from the nearest walkable cell within 0.5 m, so a door sill doesn't fail the fill

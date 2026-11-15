@@ -8,10 +8,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // `against` says how a piece wants to be placed when staging a room:
 //   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall',
-    heroBy: { modern: 'hero/Sofa_01/Sofa_01_1k.gltf', scandi: 'hero/Sofa_01/Sofa_01_1k.gltf' } },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt',
-    heroBy: { modern: 'hero/ArmChair_01/ArmChair_01_1k.gltf', scandi: 'hero/ArmChair_01/ArmChair_01_1k.gltf' } },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
   queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
   king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
   table: { name: 'Dining table', w: 1.4, d: 0.7, h: 0.74, model: 'table.glb', hero: 'hero/objaverse/d7afff23c741411c82a5994ae9940669.glb', against: 'free' },

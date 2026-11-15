@@ -1,25 +1,25 @@
 // Finishing touches for a furnished room: the layer that makes it look lived in rather than staged.
 //
 //   walkin.styling.styleRoom({ room, accent, add })  -> { ok, added, say }
-//     add: any of 'pillows', 'throw', 'coffee_table', 'pouf', 'console', 'curtains', 'gallery', 'mirror'
-//     (empty = pillows, throw, coffee_table, pouf, console)
+//     add: any of 'throw', 'coffee_table', 'pouf', 'console', 'curtains', 'gallery', 'mirror'
+//     (empty = throw, coffee_table, pouf, console)
 //
-//  - pillows and a knitted throw on the sofa, in an accent colour. The seat and back are found by probing the
-//    sofa's own model, so they sit on whichever sofa model it is instead of floating at a guessed height
+//  - a knitted throw on the sofa, in an accent colour. The seat is found by probing the sofa's own model, so it
+//    lies on whichever sofa model it is instead of floating at a guessed height
 //  - the coffee table styled: a tray, a short stack of books, a ceramic vase of greenery, on its real top
 //  - a pouf by the coffee table and a console table with a lamp behind the sofa (catalog pieces: they move, fit
 //    check, delete and have a price like anything else)
 //  - curtains: pleated panels and a rod at the room's real windows, from the scan's wall openings
 //  - a gallery wall (three framed pieces, decor.js) and a round mirror (decor.js), only when asked
 //
-// Pillows, throw and table styling are children of the piece they sit on: they move with it, go with a delete,
+// The throw and table styling are children of the piece they sit on: they move with it, go with a delete,
 // and never take part in fit checks or physics. One John tool, style_room. Units: metres, Z up.
 import * as THREE from 'three';
 import { knit } from './furniture.js';
 
 const W = () => window.walkin;
 const lower = (s) => String(s || '').toLowerCase();
-const DEFAULT_ADD = ['pillows', 'throw', 'coffee_table', 'pouf', 'console'];   // curtains, gallery, mirror only when asked
+const DEFAULT_ADD = ['throw', 'coffee_table', 'pouf', 'console'];   // curtains, gallery, mirror only when asked
 const ACCENT = { cozy: '#b5643c', modern: '#d2a54a', scandi: '#8fa58a' };     // rust, mustard, sage
 
 // ------------------------------------------------------------------ materials
@@ -71,15 +71,6 @@ function topAt(item, lx, ly) {
   const h = ray.intersectObjects(body(item), false)[0];
   return h ? item.worldToLocal(h.point.clone()).z : null;
 }
-/** Local y of the first surface met going from the front (-y) towards the back at height z, or null. */
-function backAt(item, lx, z, d) {
-  item.updateMatrixWorld(true);
-  const o = new THREE.Vector3(lx, -d, z).applyMatrix4(item.matrixWorld);
-  const dir = new THREE.Vector3(0, 1, 0).transformDirection(item.matrixWorld);
-  ray.set(o, dir);
-  const h = ray.intersectObjects(body(item), false)[0];
-  return h ? item.worldToLocal(h.point.clone()).y : null;
-}
 /** Wait (briefly) for a piece's photoreal model to replace the instant stand-in, so we probe the real surfaces. */
 async function settled(item) {
   const spec = W().FURNITURE[item.userData.kind] || {};
@@ -91,39 +82,6 @@ function clearStyling(item, what) {
 }
 
 // ------------------------------------------------------------------ the pieces
-function pillowGeo(w, h, t) {
-  const g = new THREE.BoxGeometry(w, t, h, 10, 2, 10);
-  const p = g.attributes.position, v = new THREE.Vector3();
-  for (let i = 0; i < p.count; i++) {                  // puff: thick in the middle, pinched at the corners
-    v.fromBufferAttribute(p, i);
-    const ex = 1 - Math.pow(Math.abs(v.x) / (w / 2), 2), ez = 1 - Math.pow(Math.abs(v.z) / (h / 2), 2);
-    v.y *= 0.35 + 0.65 * Math.max(0, ex * ez);
-    p.setXYZ(i, v.x, v.y, v.z);
-  }
-  g.computeVertexNormals();
-  return g;
-}
-
-function addPillows(sofa, accent) {
-  const spec = W().FURNITURE[sofa.userData.kind];
-  clearStyling(sofa, 'pillows');
-  const seat = topAt(sofa, 0, -spec.d * 0.1) ?? 0.45;
-  const back = backAt(sofa, 0, seat + 0.25, spec.d) ?? spec.d / 2 - 0.22;
-  const g = new THREE.Group(); g.userData.styling = 'pillows';
-  const main = linen(accent), soft = linen(new THREE.Color(accent).lerp(new THREE.Color(0xf2ece0), 0.65));
-  const put = (x, size, mat, tilt, yaw) => {
-    const m = prop(pillowGeo(size, size, 0.15), mat);
-    m.position.set(x, back - 0.09, seat + size / 2 - 0.02);
-    m.rotation.set(-0.28 - tilt, 0, yaw);
-    g.add(m);
-  };
-  const edge = spec.w / 2 - 0.36;
-  put(-edge, 0.45, main, 0.02, 0.06); put(edge, 0.45, main, 0.0, -0.06);           // a pair at the arms
-  if (spec.w > 1.6) { put(-edge + 0.36, 0.38, soft, 0.05, 0.1); put(edge - 0.36, 0.38, soft, 0.04, -0.1); }
-  sofa.add(g);
-  return true;
-}
-
 function addThrow(sofa, accent) {
   const spec = W().FURNITURE[sofa.userData.kind];
   clearStyling(sofa, 'throw');
@@ -322,7 +280,6 @@ export async function styleRoom({ room, accent, add } = {}) {
   for (const it of [sofa, table]) if (it) await settled(it);
   const added = [], skipped = [];
   const did = (name, ok, why) => (ok ? added : skipped).push(ok ? name : `${name} (${why})`);
-  if (want.includes('pillows')) did('put cushions on the sofa', !!sofa && addPillows(sofa, col), 'no sofa here');
   if (want.includes('throw')) did('laid a knitted throw over it', !!sofa && addThrow(sofa, col), 'no sofa here');
   if (want.includes('coffee_table')) did('styled the coffee table with books and greenery', !!table && styleCoffeeTable(table), 'no coffee table');
   if (want.includes('pouf')) did('added a pouf', addPouf(r, sofa, table), 'no room for one');
@@ -355,15 +312,15 @@ export function clearStyle(roomName) {
 // ------------------------------------------------------------------ John: one tool, a narrow job
 const declarations = [{
   name: 'style_room',
-  description: 'Finishing touches on a room that already has furniture: throw pillows and a knitted throw on the sofa, the coffee table styled (tray, books, vase of greenery), a pouf, a console table with a lamp behind the sofa, curtains at the real windows, a gallery wall of three framed pieces, or a round mirror. Use for "make it prettier / cosier / more lived-in", "add cushions", "style the coffee table", "add curtains", "a gallery wall". Not for furnishing an empty room (suggest_room) or a themed makeover (decorate_room).',
+  description: 'Finishing touches on a room that already has furniture: a knitted throw on the sofa, the coffee table styled (tray, books, vase of greenery), a pouf, a console table with a lamp behind the sofa, curtains at the real windows, a gallery wall of three framed pieces, or a round mirror. Use for "make it prettier / cosier / more lived-in", "add a throw", "style the coffee table", "add curtains", "a gallery wall". Not for furnishing an empty room (suggest_room) or a themed makeover (decorate_room).',
   parameters: { type: 'object', properties: {
     room: { type: 'string', description: 'Room name; leave empty for the room the user is in.' },
     accent: { type: 'string', description: 'Accent colour in the user\'s words, e.g. "rust", "sage green", "navy". Leave empty to suit the room.' },
-    add: { type: 'array', items: { type: 'string', enum: ['pillows', 'throw', 'coffee_table', 'pouf', 'console', 'curtains', 'gallery', 'mirror'] },
-      description: 'What to add. Leave empty for pillows, throw, coffee_table, pouf and console. Only include curtains, gallery or mirror when asked.' },
+    add: { type: 'array', items: { type: 'string', enum: ['throw', 'coffee_table', 'pouf', 'console', 'curtains', 'gallery', 'mirror'] },
+      description: 'What to add. Leave empty for throw, coffee_table, pouf and console. Only include curtains, gallery or mirror when asked.' },
   } },
 }];
-const rules = `- Finishing touches on a furnished room ("make it prettier", "cosier", "add cushions", "style the coffee table", "add curtains", "gallery wall") -> style_room. An empty room gets suggest_room first. A theme ("as if I'm a Ronaldo fan", "make it Moroccan") stays decorate_room.`;
+const rules = `- Finishing touches on a furnished room ("make it prettier", "cosier", "add a throw", "style the coffee table", "add curtains", "gallery wall") -> style_room. An empty room gets suggest_room first. A theme ("as if I'm a Ronaldo fan", "make it Moroccan") stays decorate_room.`;
 
 (function attach(tries = 0) {
   const w = W();

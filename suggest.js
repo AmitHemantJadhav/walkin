@@ -203,8 +203,8 @@ export async function suggestRoom({ room, tier, budget } = {}) {
   const order = [...items].sort((a, b) => ((w.FURNITURE[b.userData.kind] || {}).flat ? 1 : 0) - ((w.FURNITURE[a.userData.kind] || {}).flat ? 1 : 0)
     || (w.FURNITURE[b.userData.kind].w * w.FURNITURE[b.userData.kind].d) - (w.FURNITURE[a.userData.kind].w * w.FURNITURE[a.userData.kind].d));
   if (!w.feel) dropIn(order);
-  // the soft layer: pillows and a throw on the sofa, the coffee table styled (no new priced pieces, so the total holds)
-  if (w.styling) w.styling.styleRoom({ room: r.id, add: ['pillows', 'throw', 'coffee_table'] }).catch(() => {});                            // feel.js animates every arrival; this is the fallback
+  // the soft layer: a throw on the sofa and the coffee table styled (no new priced pieces, so the total holds)
+  if (w.styling) w.styling.styleRoom({ room: r.id, add: ['throw', 'coffee_table'] }).catch(() => {});                            // feel.js animates every arrival; this is the fallback
 
   const lamp = light === 'low' && items.some((it) => it.userData.kind === 'floorlamp') ? ' and a floor lamp because it is a darker room' : '';
   const say = `It's ${pick.why}${lamp}. About ${usd(total)} for the ${label}`

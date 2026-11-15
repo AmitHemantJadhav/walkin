@@ -33,6 +33,7 @@ const MIN_EXIT_W = 0.7;            // narrower than this is a duct or a cupboard
 const MIN_ASIDE = 1.0;             // free floor a bench block needs beside it, so corridors stay empty
 const DRAW_CAP = 160;              // desks drawn when no headcount is asked for; the count is still the full one
 const DAYLIGHT_M = 7.5;            // "near a window" for the daylight count (WELL / LEED use 7.5 m)
+const EGRESS_SPRINKLERED = 91;     // IBC business occupancy: 300 ft travel distance with sprinklers (200 ft without)
 const SQFT = 0.09290304;
 const CODE_PER_PERSON = 150 * SQFT;    // IBC business occupancy, gross
 const TYPICAL_PER_PERSON = 100 * SQFT; // what brokers quote
@@ -93,10 +94,22 @@ function floorGrid(w, floorZ) {
     const minx = Math.floor((Math.min(ax, bx, cx) - x0) / CELL), maxx = Math.ceil((Math.max(ax, bx, cx) - x0) / CELL);
     const miny = Math.floor((Math.min(ay, by, cy) - y0) / CELL), maxy = Math.ceil((Math.max(ay, by, cy) - y0) / CELL);
     const det = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
-    if (Math.abs(det) < 1e-9) {                                      // a sliver: mark the cells under its edge
-      for (let ix = Math.max(0, minx); ix <= Math.min(nx - 1, maxx); ix++)
-        for (let iy = Math.max(0, miny); iy <= Math.min(ny - 1, maxy); iy++) layer[at(ix, iy)] = 1;
-      continue;
+    if (layer === block) {
+      // A wall face is near-vertical, so in plan it is a sliver a few millimetres wide that no cell
+      // centre ever lands in: the barycentric test below never marks it, the wall never reaches
+      // `block`, and the floor on both sides joins up - desks standing across walls (Amit, #133,
+      // measured: 234 of 692 wall samples on La Mirada sat on "free" floor). Stamp the cells under
+      // each edge instead; that is what a wall is in plan.
+      for (const [px, py, qx, qy] of [[ax, ay, bx, by], [bx, by, cx, cy], [cx, cy, ax, ay]]) {
+        const steps = Math.max(1, Math.ceil(Math.hypot(qx - px, qy - py) / (CELL / 2)));
+        for (let k = 0; k <= steps; k++) {
+          const ix = Math.floor((px + (qx - px) * k / steps - x0) / CELL), iy = Math.floor((py + (qy - py) * k / steps - y0) / CELL);
+          if (ix >= 0 && iy >= 0 && ix < nx && iy < ny) block[at(ix, iy)] = 1;
+        }
+      }
+      if (Math.abs(det) < 1e-9) continue;
+    } else if (Math.abs(det) < 1e-9) {
+      continue;                                                      // a degenerate floor face holds no floor
     }
     for (let ix = Math.max(0, minx); ix <= Math.min(nx - 1, maxx); ix++) {
       for (let iy = Math.max(0, miny); iy <= Math.min(ny - 1, maxy); iy++) {
@@ -115,6 +128,32 @@ function floorGrid(w, floorZ) {
     if (!block[at(ix, iy)]) continue;
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) grown[at(ix + dx, iy + dy)] = 1;
   }
+  // The API's wall graph is stamped in as well. The defurnished mesh loses some partitions along with
+  // the furniture - on Suite 300, 91 of 2,655 wall samples still sat on free floor with the mesh alone -
+  // and the graph knows where every wall is. Doorway spans are left open so the egress walk can use them.
+  for (const f of w.house.floors || []) {
+    if (currentFloor(w) && f.id && f.id !== currentFloor(w)) continue;
+    for (const wall of f.walls || []) {
+      const [ax, ay] = wall.a, [bx, by] = wall.b;
+      const L = Math.hypot(bx - ax, by - ay);
+      if (L < 0.05) continue;
+      const doors = (wall.openings || []).filter((o) => !/window/i.test(o.type || '')).map((o) => {
+        const t = o.at == null ? 0.5 : o.at, hw = ((o.width || 0.9) / 2 + 0.05) / L;
+        return [t - hw, t + hw];
+      });
+      const half = Math.max(CELL, (wall.thickness || 0.1) / 2 + CELL / 2);
+      const nxw = -(by - ay) / L, nyw = (bx - ax) / L;
+      for (let d = 0; d <= L; d += CELL / 2) {
+        const t = d / L;
+        if (doors.some(([t0, t1]) => t >= t0 && t <= t1)) continue;
+        for (let o = -half; o <= half; o += CELL / 2) {
+          const ix = Math.floor((ax + (bx - ax) * t + nxw * o - x0) / CELL), iy = Math.floor((ay + (by - ay) * t + nyw * o - y0) / CELL);
+          if (ix >= 0 && iy >= 0 && ix < nx && iy < ny) grown[at(ix, iy)] = 1;
+        }
+      }
+    }
+  }
+
   const free = new Uint8Array(nx * ny);
   let freeCount = 0;
   for (let i = 0; i < free.length; i++) if (floor[i] && !grown[i]) { free[i] = 1; freeCount++; }
@@ -388,7 +427,7 @@ function ribbon(points, floorZ, color, width = 0.25) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(shape, 3));
   geo.setIndex(idx);
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide }));
-  mesh.renderOrder = 1;
+  mesh.renderOrder = 1; mesh.userData.ours = true;
   return mesh;
 }
 
@@ -403,7 +442,7 @@ function label(text, x, y, z, scale = 1.2) {
   ctx.fillText(text, 512, 128);
   const tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
-  sp.scale.set(scale, scale / 4, 1); sp.position.set(x, y, z); sp.renderOrder = 20;
+  sp.scale.set(scale, scale / 4, 1); sp.position.set(x, y, z); sp.renderOrder = 20; sp.userData.ours = true;
   return sp;
 }
 
@@ -413,9 +452,11 @@ function ensureGroup(w) {
 }
 
 export function clearTestFit() {
-  const w = W();
   if (group) {
-    group.traverse((o) => { if (o.isMesh || o.isSprite) { o.geometry && o.geometry.dispose && o.geometry.dispose(); } });
+    // Only what we made ourselves is disposed. The instanced desks and chairs share their geometry and
+    // materials with the GLB cached by furniture.js's load(); disposing those would make the next real
+    // desk re-upload them (Amit, #133).
+    group.traverse((o) => { if (o.userData.ours) { o.geometry && o.geometry.dispose(); o.material && o.material.dispose && o.material.dispose(); } });
     if (group.parent) group.parent.remove(group);
     group = null;
   }
@@ -498,7 +539,8 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   const say = `${stations.length} seats${people && benching > people ? ` (room for ${benching} at benching density)` : ''}, ` +
     `${near} of them within ${DAYLIGHT_M} m of a window. ${Math.round(area)} m² of usable floor: ` +
     `${Math.floor(area / CODE_PER_PERSON)} people by code at 150 square feet each, ${Math.floor(area / TYPICAL_PER_PERSON)} at 100. ` +
-    (lit != null ? `Longest walk to an exit ${lit.toFixed(0)} m through ${exits.length} exit${exits.length === 1 ? '' : 's'}.` : `No exit door found on this floor.`);
+    (lit != null ? `Longest walk to an exit ${lit.toFixed(0)} m through ${exits.length} exit${exits.length === 1 ? '' : 's'} - ` +
+      (lit <= EGRESS_SPRINKLERED ? `inside the ${EGRESS_SPRINKLERED} m limit for a sprinklered office.` : `over the ${EGRESS_SPRINKLERED} m limit for a sprinklered office, so that corner needs a second exit.`) : '');
   const exitWhy = exits.map((e) => `${e.width.toFixed(2)} m (${e.why})`).join(', ');
   hud(`Test fit · ${stations.length} seats${drawn.length < stations.length ? ` (showing ${drawn.length})` : ''} · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
     (lit != null ? `\nlongest walk to exit ${lit.toFixed(0)} m` : '') + (zones.length ? `\n${zones.length} zone${zones.length === 1 ? '' : 's'}: ${zones.map((z) => z.name).join(', ')}` : ''));
@@ -623,14 +665,14 @@ function drawZone(z, frame, floorZ) {
   const H = 2.4;
   const box = new THREE.Mesh(new THREE.BoxGeometry(z.size[0], z.size[1], H),
     new THREE.MeshBasicMaterial({ color: z.type === 'meeting' ? 0x8fd3ff : z.type === 'kitchen' ? 0xffd27f : 0xc8f08f, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
-  box.position.set(cx, cy, floorZ + H / 2); box.rotation.z = frame.ang; box.renderOrder = 3;
+  box.position.set(cx, cy, floorZ + H / 2); box.rotation.z = frame.ang; box.renderOrder = 3; box.userData.ours = true;
   g.add(box);
   const plate = new THREE.Mesh(new THREE.PlaneGeometry(z.size[0], z.size[1]),
     new THREE.MeshBasicMaterial({ color: box.material.color, transparent: true, opacity: 0.28, depthWrite: false }));
-  plate.position.set(cx, cy, floorZ + 0.015); plate.rotation.z = frame.ang; plate.renderOrder = 1;
+  plate.position.set(cx, cy, floorZ + 0.015); plate.rotation.z = frame.ang; plate.renderOrder = 1; plate.userData.ours = true;
   g.add(plate);
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
-  edges.position.copy(box.position); edges.rotation.copy(box.rotation); edges.renderOrder = 3;
+  edges.position.copy(box.position); edges.rotation.copy(box.rotation); edges.renderOrder = 3; edges.userData.ours = true;
   g.add(edges);
   const put = (kind, du, dv, rot = 0) => {
     const item = buildFurniture(kind);

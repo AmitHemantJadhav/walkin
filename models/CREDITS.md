@@ -48,15 +48,15 @@ The full set, fetched by `tools/heroes.py` (Poly Haven asset id → catalog kind
 
 | Asset | Kind | Size (1k) |
 |---|---|---|
-| `Sofa_01` | sofa | 0.6 MB |
-| `ArmChair_01` | armchair | 0.6 MB |
+| `sofa_02` | sofa | 0.4 MB |
+| `modern_arm_chair_01` | armchair | 2.7 MB |
 | `GothicBed_01` | queen, king | 1.2 MB |
 | `dining_table` | table | 2.3 MB |
 | `metal_office_desk` | desk (and the office test fit) | 1.6 MB |
 | `dining_chair_02` | chair (and the office test fit) | 0.9 MB |
 | `ClassicNightstand_01` | nightstand | 0.4 MB |
-| `side_table_01` | sidetable | 0.5 MB |
-| `CoffeeTable_01` | coffeetable | 1.0 MB |
+| `side_table_tall_01` | sidetable | 1.6 MB |
+| `coffee_table_round_01` | coffeetable | 1.6 MB |
 | `modern_wooden_cabinet` | tvstand | 2.9 MB |
 | `wooden_display_shelves_01` | bookcase | 0.5 MB |
 | `potted_plant_02` | plant | 2.6 MB |

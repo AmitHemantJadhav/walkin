@@ -19,13 +19,13 @@ OUT = os.path.join('models', 'hero')
 
 # id -> what it is for. Kept here as the one list; furniture.js names the same files.
 HEROES = {
-    'Sofa_01': 'sofa',
-    'ArmChair_01': 'armchair',
+    'sofa_02': 'sofa',
+    'modern_arm_chair_01': 'armchair',
     'dining_chair_02': 'chair',
     'dining_table': 'table',
     'metal_office_desk': 'desk',
-    'CoffeeTable_01': 'coffeetable',
-    'side_table_01': 'sidetable',
+    'coffee_table_round_01': 'coffeetable',
+    'side_table_tall_01': 'sidetable',
     'ClassicNightstand_01': 'nightstand',
     'modern_wooden_cabinet': 'tvstand',
     'wooden_display_shelves_01': 'bookcase',

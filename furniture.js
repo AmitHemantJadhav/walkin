@@ -8,8 +8,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // `against` says how a piece wants to be placed when staging a room:
 //   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/Sofa_01/Sofa_01_1k.gltf', against: 'wall' },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/ArmChair_01/ArmChair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall' },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
   queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
   king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
   table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', hero: 'hero/dining_table/dining_table_1k.gltf', against: 'free' },
@@ -17,8 +17,8 @@ export const FURNITURE = {
   // pieces a staged room needs
   chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', hero: 'hero/dining_chair_02/dining_chair_02_1k.gltf', against: 'small' },
   nightstand: { name: 'Nightstand', w: 0.5, d: 0.45, h: 0.55, model: 'cabinetBedDrawer.glb', hero: 'hero/ClassicNightstand_01/ClassicNightstand_01_1k.gltf', against: 'small', tone: 'woodLt' },
-  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', hero: 'hero/side_table_01/side_table_01_1k.gltf', against: 'small', tone: 'woodLt' },
-  coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', hero: 'hero/CoffeeTable_01/CoffeeTable_01_1k.gltf', against: 'free' },
+  sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', hero: 'hero/side_table_tall_01/side_table_tall_01_1k.gltf', against: 'small', tone: 'woodLt' },
+  coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', hero: 'hero/coffee_table_round_01/coffee_table_round_01_1k.gltf', against: 'free' },
   tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', hero: 'hero/modern_wooden_cabinet/modern_wooden_cabinet_1k.gltf', against: 'wall', tone: 'woodLt' },
   tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
   bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', hero: 'hero/wooden_display_shelves_01/wooden_display_shelves_01_1k.gltf', heroYaw: Math.PI / 2, against: 'wall', tone: 'woodLt' },

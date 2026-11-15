@@ -14,8 +14,9 @@
 // URL: ?live=off disables it, ?voice=<name> picks a Gemini voice (Charon, Puck, Kore, Achird, Sulafat, …).
 
 const params = new URLSearchParams(location.search);
-const IDLE_MS = 9000;             // nobody spoke for this long: end the conversation, back to "Hey John" (short, so a
-                                  // presenter talking to the room isn't taken as more conversation for long)
+// nobody spoke for this long: end the conversation, back to waiting for "John". 30 s so a demo can carry on without
+// saying the name each time (Amit); "thanks John" / "bye" ends it at once. ?idle=<seconds> to change.
+const IDLE_MS = (Number(params.get('idle')) || 30) * 1000;
 const CONNECT_MS = 6000;          // venue Wi-Fi: give up on a connection that hangs
 const BYE = /\b(bye|goodbye|that'?s all|that'?s it|thanks?,? john|thank you,? john|cheers,? john|stop listening|we'?re done|perfect,? thanks)\b/i;
 const IN_RATE = 16000, OUT_RATE = 24000;

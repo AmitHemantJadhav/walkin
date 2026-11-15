@@ -3,21 +3,24 @@
 // and John's spoken reply is captioned too. The text box is collapsed into a small orb (tap it, or press /).
 // Talks to the rest only through window.walkin (agent.ask, agent.isSpeaking) and the 'walkin:speech' events.
 
-const WAKE = /\b(hey|hi|ok(?:ay)?)[\s,.!]+(john|jon)\b[\s,.!]*/i;
+// "John, add a sofa" is enough: the "hey" is optional (Amit: saying "hey John" before everything is no good in a demo)
+const WAKE = /\b(?:(?:hey|hi|ok(?:ay)?)[\s,.!]+)?(john|jon)\b[\s,.!]*/i;
+// after John answers, the next 30 s need no name at all: "now turn it", "make it blue" (?idle=<seconds> to change)
+const FOLLOW_MS = (Number(new URLSearchParams(location.search).get('idle')) || 30) * 1000;
 const END_SILENCE_MS = 1200;     // a command ends after this much silence
 const WAKE_TIMEOUT_MS = 6000;    // "Hey John" and then nothing: go back to listening
 const RESUME_AFTER_SPEECH_MS = 350;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const $ = (id) => document.getElementById(id);
-const state = { mode: 'off', heard: '', interim: '', carry: '', wakeIdx: -1, silenceTimer: 0, wakeTimer: 0, paused: false, rec: null, wanted: false };
+const state = { mode: 'off', heard: '', interim: '', carry: '', wakeIdx: -1, silenceTimer: 0, wakeTimer: 0, paused: false, rec: null, wanted: false, followUntil: 0 };
 
 // ------------------------------------------------------------------ DOM: glow, captions (one per eye in the headset), orb
 function el(tag, cls, parent = document.body) { const e = document.createElement(tag); e.className = cls; parent.appendChild(e); return e; }
 const glow = el('div', 'vx-glow');
 const capWrap = el('div', 'vx-captions');
-// captions are off: nothing but the scene on screen while John talks (Amit). ?captions=1 shows them.
-if (/[?&]captions=1\b/.test(location.search)) document.body.classList.add('captions');
+// captions: what you said and what John says, on by default (Amit wants them); ?captions=off hides them
+if (!/[?&]captions=off\b/.test(location.search)) document.body.classList.add('captions');
 const caps = [el('div', 'vx-cap', capWrap), el('div', 'vx-cap vx-cap-right', capWrap)];   // 2nd is only shown in the headset
 const orb = el('button', 'vx-orb');
 orb.type = 'button';
@@ -151,6 +154,8 @@ function onResult(e) {
   if (state.mode === 'listening') {
     for (let i = e.resultIndex; i < rs.length; i++) {
       if (WAKE.test(rs[i][0].transcript)) { wake(); state.wakeIdx = i; break; }
+      // still in the conversation: anything said is the next command, no name needed
+      if (performance.now() < state.followUntil && rs[i][0].transcript.trim()) { wake(true); state.wakeIdx = i; break; }
     }
   }
   if (state.mode !== 'awake') return;
@@ -177,13 +182,13 @@ function onCommandWords(finalPart, interimPart, allFinal) {
   state.silenceTimer = setTimeout(finishCommand, END_SILENCE_MS);
 }
 
-function wake() {
+function wake(followUp = false) {
   setMode('awake');
   try { const p = window.walkin && window.walkin.pointer; window.walkin.wakeWall = p && p.wall ? { wall: p.wall, at: performance.now() } : null; } catch (e) { /* no pointer */ }
   startPulse();
   state.wakeIdx = -1;
   state.carry = state.heard = state.interim = '';
-  chime();
+  if (!followUp) chime();                    // a follow-up just carries on, no chime
   showCaption('', '', 'user');
   clearTimeout(state.wakeTimer);
   state.wakeTimer = setTimeout(() => { if (state.mode === 'awake' && !state.heard && !state.interim) backToListening(); }, WAKE_TIMEOUT_MS);
@@ -217,6 +222,7 @@ async function classicAnswer(command) {
     if (w && w.agent) w.agent.speak("I can't reach my brain right now.");
   }
   setMode('replying');
+  state.followUntil = performance.now() + FOLLOW_MS;
   // back to listening once John has finished talking (the 'end' event resumes the microphone)
   if (!w || !w.agent || !w.agent.isSpeaking()) setTimeout(backToListening, 600);
 }
@@ -258,6 +264,7 @@ async function liveConversation(firstText) {
     if (!text) { backToListening(); return true; }   // nothing left unanswered: listen the classic way
     return { text };
   }
+  state.followUntil = performance.now() + FOLLOW_MS;
   backToListening();
   return true;
 }

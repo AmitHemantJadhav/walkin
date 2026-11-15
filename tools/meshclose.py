@@ -266,3 +266,37 @@ def orient(V, F):
             if s < 0:
                 out[idx] = out[idx][:, [0, 2, 1]]
     return out
+
+SMALL_MAX_EXTENT = 0.30  # m: a hole up to this long is a gap in a surface the scanner did see
+SMALL_MAX_RMS = 0.02     # m off its own plane: flat enough that a cap lies in the surface
+
+
+def close_small(V, F):
+    """Cap the small flat holes *with the surrounding texture*.
+
+    close() caps a missing side with new vertices that get a material square. The hundreds of
+    small holes in surfaces the scanner did see are different: they showed the inside of the shell
+    as flat patches on a sofa's seat. Here each such hole is triangulated on its rim's own vertices,
+    so the new faces carry the rim's UVs and the surrounding fabric or wood stretches across the
+    gap. Only small (SMALL_MAX_EXTENT) and flat (SMALL_MAX_RMS) loops: a big or crumpled loop is
+    a missing side, not a gap, and a cap across it would be a slab. Returns faces indexing V.
+    """
+    vid, nw = weld(V)
+    pos = np.zeros((nw, 3))
+    pos[vid] = V
+    first = {}                                   # welded id -> one original vertex carrying a UV
+    for i, w in enumerate(vid):
+        first.setdefault(int(w), i)
+    centroid = pos.mean(axis=0)
+    faces = []
+    for L in boundary_loops(F, vid):
+        P = pos[L]
+        c = P.mean(axis=0)
+        _, sv, vt = np.linalg.svd(P - c, full_matrices=False)
+        extent = 2 * sv[0] / np.sqrt(len(P))
+        rms = float(np.sqrt(np.mean(((P - c) @ vt[2]) ** 2)))
+        if extent > SMALL_MAX_EXTENT or rms > SMALL_MAX_RMS:
+            continue
+        for a, b, cc in cap_loop(L, pos, centroid):
+            faces.append((first[a], first[b], first[cc]))
+    return np.array(faces, np.uint32).reshape(-1, 3)

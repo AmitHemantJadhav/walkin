@@ -593,6 +593,12 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx, facing=1.0)
         else:
             cap_pos, cap_idx, open_before, open_after = None, (), 0, 0
+        # The small flat holes in seen surfaces close on their own rim vertices, with the rim's
+        # texture across them (meshclose.close_small). They go before the side caps so the side
+        # caps stay the last `capped` faces, which is what the viewer and capskin count on.
+        small = meshclose.close_small(pos.astype(np.float64), idx) if close_holes else np.zeros((0, 3), np.uint32)
+        if len(small):
+            idx = np.vstack([idx, small]).astype(np.uint32)
         if close_holes and len(cap_idx):
             flat = meshclose.representative_uv(built['image'] if built else None)
             idx = np.vstack([idx, cap_idx + len(pos)]).astype(np.uint32)
@@ -620,6 +626,7 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
             capped=int(len(cap_idx)) if close_holes else 0,
+            smallCapped=int(len(small)),
             capVerts=int(len(cap_pos)) if (close_holes and cap_pos is not None) else 0,
             openEdge=round(float(open_after) / max(int(len(idx)) * 1.5, 1), 4),
             fold=(None if fold != fold else round(float(fold), 1)),

@@ -249,7 +249,7 @@ export function buildBoxes(kind) {
 const loader = new GLTFLoader();
 const loads = new Map(); // file -> Promise<THREE.Object3D> (one fetch per file, cloned per item)
 
-function load(file) {
+export function load(file) {
   if (!loads.has(file)) {
     loads.set(file, loader.loadAsync(MODEL_DIR + file).then((gltf) => gltf.scene).catch((e) => {
       console.warn(`furniture: ${file} failed to load, using boxes`, e);
@@ -273,7 +273,7 @@ export function preloadHeroModels() {
  * Turn a glTF model (Y-up, arbitrary origin and scale) into our frame: x = width, y = depth with the front
  * on -y, z up from the floor, sized to the catalog's real `w x d x h`.
  */
-function fitToSpec(src, spec, flipped, style, hero) {
+export function fitToSpec(src, spec, flipped, style, hero) {
   const b = new THREE.Box3().setFromObject(src);
   const size = b.getSize(new THREE.Vector3());
   const c = b.getCenter(new THREE.Vector3());

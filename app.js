@@ -532,7 +532,8 @@ function checkFit() {
   if (!selected) { selBox.visible = false; el.textContent = ''; return; }
   const spec = FURNITURE[selected.userData.kind];
   const room = roomAt(selected.position.x, selected.position.y, selected.userData.floor);
-  const ok = !!room && footprint(selected).every(([x, y]) => pointInPoly(x, y, room.poly));
+  // a rug just has to be in the room: it goes under furniture and tucks up to the walls, it is never "too big"
+  const ok = !!room && (spec.flat || footprint(selected).every(([x, y]) => pointInPoly(x, y, room.poly)));
   pieceBox(selected, selBox.box);
   selBox.material.color.set(ok ? 0x3ccf8e : 0xff5a5f);
   selBox.visible = true;

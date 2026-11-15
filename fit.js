@@ -234,7 +234,7 @@ export function fitReport(opts = {}) {
   if (!room) {
     return { ok: false, room: null, reasons: ['not inside a room'], warnings: [] };
   }
-  if (!poly.every(([px, py]) => pointInPoly(px, py, room.poly))) {
+  if (!spec.flat && !poly.every(([px, py]) => pointInPoly(px, py, room.poly))) {   // a rug may tuck up to a wall
     reasons.push(`sticks out of the ${lower(room.label)}`);
   }
 

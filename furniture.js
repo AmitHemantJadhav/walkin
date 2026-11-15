@@ -8,8 +8,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 // `against` says how a piece wants to be placed when staging a room:
 //   'wall'   back to a wall        'free' anywhere        'small' a small object that sits beside something else
 export const FURNITURE = {
-  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall' },
-  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
+  sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall',
+    heroBy: { modern: 'hero/Sofa_01/Sofa_01_1k.gltf', scandi: 'hero/Sofa_01/Sofa_01_1k.gltf' } },
+  armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt',
+    heroBy: { modern: 'hero/ArmChair_01/ArmChair_01_1k.gltf', scandi: 'hero/ArmChair_01/ArmChair_01_1k.gltf' } },
   queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
   king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
   table: { name: 'Dining table', w: 1.4, d: 0.7, h: 0.74, model: 'table.glb', hero: 'hero/objaverse/d7afff23c741411c82a5994ae9940669.glb', against: 'free' },
@@ -30,12 +32,15 @@ export const FURNITURE = {
   floorlamp: { name: 'Floor lamp', w: 0.55, d: 0.48, h: 1.5, model: 'lampRoundFloor.glb', hero: 'hero/objaverse/c277c4d1742b4f118becbfefd325ce71.glb', against: 'small' },
   rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true, tone: 'fabricLt' },
   ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true, tone: 'fabricLt' },
-  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', hero: 'hero/potted_plant_02/potted_plant_02_1k.gltf', against: 'small' },
-  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', hero: 'hero/potted_plant_04/potted_plant_04_1k.gltf', against: 'small' },
+  plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', hero: 'hero/potted_plant_02/potted_plant_02_1k.gltf', against: 'small', fitBy: 'h' },
+  plantsmall: { name: 'Small plant', w: 0.22, d: 0.22, h: 0.32, model: 'plantSmall1.glb', hero: 'hero/potted_plant_04/potted_plant_04_1k.gltf', against: 'small', fitBy: 'h' },
   plantfern: { name: 'Fern', w: 0.24, d: 0.22, h: 0.34, model: 'plantSmall2.glb', against: 'small' },
   plantsucculent: { name: 'Succulent', w: 0.22, d: 0.2, h: 0.33, model: 'plantSmall3.glb', against: 'small' },
   cactus: { name: 'Cactus', w: 0.3, d: 0.3, h: 0.5, model: 'cactus_short.glb', against: 'small' },
   cactustall: { name: 'Tall cactus', w: 0.35, d: 0.3, h: 0.75, model: 'cactus_tall.glb', against: 'small' },
+  // styling pieces (styling.js): drawn here, no model file to load
+  pouf: { name: 'Pouf', w: 0.55, d: 0.55, h: 0.42, against: 'free', tone: 'fabricLt' },
+  console: { name: 'Console table', w: 1.3, d: 0.36, h: 0.78, against: 'wall', tone: 'woodLt' },
 };
 
 /** The six plants, for "what plant should go here" (R5). */
@@ -48,8 +53,9 @@ const MODEL_DIR = new URL('models/', import.meta.url).href;
 const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
 // Photoreal CC0 pieces from Poly Haven (see models/CREDITS.md). They are bigger than the kit models,
 // so they load after it: a piece appears instantly as the kit model and sharpens when the hero arrives.
-// hero models that face +z and need turning round (none at the moment)
-const HERO_FLIPPED = new Set();
+// hero models that face +z and need turning round. The Objaverse TV has its screen on +z: without the half turn it
+// stood on its stand showing the room its back panel (checked by rendering every piece from the front).
+const HERO_FLIPPED = new Set(['hero/objaverse/51cfe336d19243eba66c5fac64a81507.glb']);
 
 
 // ------------------------------------------------------------------ materials (S7)
@@ -316,6 +322,28 @@ const M = {
   sheet: mat(0xe6e2d9, 0.94), pillow: mat(0xcfc8bb, 0.94), top: mat(0xa9825a, 0.55),
 };
 
+// a knitted texture (cable rows) for the pouf and throws, drawn once per colour
+const knits = new Map();
+export function knit(color) {
+  const key = new THREE.Color(color).getHexString();
+  if (knits.has(key)) return knits.get(key);
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), base = new THREE.Color(color);
+  g.fillStyle = `#${key}`; g.fillRect(0, 0, 128, 128);
+  for (let y = 0; y < 128; y += 16) for (let x = 0; x < 128; x += 16) {   // V-shaped stitches
+    for (const [dx, a] of [[0, 0.16], [8, -0.16]]) {
+      const grad = g.createLinearGradient(x + dx, y, x + dx + 8, y + 16);
+      grad.addColorStop(0, `rgba(255,255,255,${0.16 + a})`); grad.addColorStop(1, 'rgba(0,0,0,0.22)');
+      g.fillStyle = grad;
+      g.beginPath(); g.ellipse(x + dx + 4, y + 8, 3.6, 7.4, dx ? -0.5 : 0.5, 0, Math.PI * 2); g.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(4, 3); t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.MeshStandardMaterial({ map: t, roughness: 1, metalness: 0, color: base.lerp(new THREE.Color(0xffffff), 0.35) });
+  knits.set(key, m);
+  return m;
+}
+
 // ------------------------------------------------------------------ contact shadow
 // A soft blob under each piece, not a shadow map: phones can't afford one, and the photo already
 // contains the room's real shadows. lighting.js sets the strength from how bright the pano is.
@@ -345,6 +373,8 @@ function shadow(w, d) {
     new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: shadowOpacity }));
   m.position.z = 0.002;
   m.renderOrder = 1;
+  m.userData.shadow = true;   // not part of the piece: the selection box and outline measure the furniture, not its shadow
+  m.raycast = () => {};       // and a click on the floor next to a piece doesn't pick up the piece
   shadows.add(m);
   return m;
 }
@@ -391,6 +421,27 @@ function legs(g, w, d, h, inset = 0.06, size = 0.05, material = M.dark) {
 }
 
 const BUILDERS = {
+  pouf(g, { w, h }) {                                              // a chunky knitted pouf, slightly domed
+    const r = w / 2, pts = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12, z = t * h;
+      const bulge = Math.sin(t * Math.PI) * 0.06 * r;              // fuller in the middle, rounded top and bottom edges
+      const edge = t < 0.08 ? (t / 0.08) * 0.94 + 0.06 : t > 0.86 ? 1 - ((t - 0.86) / 0.14) * 0.32 : 1;
+      pts.push(new THREE.Vector2(Math.max(0.001, (r - 0.02 + bulge) * edge), z));
+    }
+    pts.push(new THREE.Vector2(0.001, h));
+    const geo = new THREE.LatheGeometry(pts, 40);
+    geo.rotateX(Math.PI / 2);                                       // lathe is round y; ours stands on z
+    const m = new THREE.Mesh(geo, knit(0xd8cbb4));
+    m.castShadow = true; m.renderOrder = 2;
+    g.add(m);
+  },
+  console(g, { w, d, h }) {                                        // a slim walnut console with a lower shelf
+    const walnut = mat(0x5a3d29, 0.5);
+    box(g, w, d, 0.03, 0, 0, h - 0.03, walnut);
+    box(g, w - 0.08, d - 0.06, 0.02, 0, 0, 0.18, walnut);
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) box(g, 0.035, 0.035, h - 0.03, sx * (w / 2 - 0.04), sy * (d / 2 - 0.04), 0, walnut);
+  },
   sofa(g, { w, d }) {
     legs(g, w, d, 0.1);
     box(g, w, d, 0.32, 0, 0, 0.1, M.fabric);                       // base
@@ -456,7 +507,8 @@ export function preloadModels() {
 
 /** The photoreal pieces, fetched once something is actually placed (2.2 MB, so not on page load). */
 export function preloadHeroModels() {
-  return Promise.all([...new Set(Object.values(FURNITURE).map((s) => s.hero))].filter(Boolean).map(load));
+  return Promise.all([...new Set(Object.values(FURNITURE).flatMap((s) => [s.hero, ...Object.values(s.heroBy || {})]))]
+    .filter(Boolean).map(load));
 }
 
 /**
@@ -480,8 +532,11 @@ export function fitToSpec(src, spec, flipped, style, hero) {
     // box, a real coffee table squashed to 1.2 x 0.7 comes out as a skewed box. Fit inside the
     // catalog footprint and height uniformly; a little non-uniformity (10%) is allowed so a
     // nearly-right model still fills its box.
-    const u = Math.min(sx, sd, sh);
-    sx = Math.min(sx, u * 1.1); sd = Math.min(sd, u * 1.1); sh = Math.min(sh, u * 1.1);
+    // Plants go by height (fitBy 'h'): leaves spread wider than the pot, so fitting the 45 cm footprint left a
+    // 1.3 m floor plant 60 cm tall. Their footprint is the pot, which is what collides.
+    const u = spec.fitBy === 'h' ? Math.min(sh, sx * 1.5, sd * 1.5) : Math.min(sx, sd, sh);   // ...but not a pot wider than 1.5x its footprint
+    if (spec.fitBy === 'h') { sx = sd = sh = u; }
+    else { sx = Math.min(sx, u * 1.1); sd = Math.min(sd, u * 1.1); sh = Math.min(sh, u * 1.1); }
   }
   src.scale.set(sx, sh, sd);
   src.position.set(-c.x * sx, -b.min.y * sh, -c.z * sd); // centred on x/z, standing on y = 0
@@ -664,6 +719,9 @@ export function addProps(root, kind, spec) {
  */
 export function buildFurniture(kind, style = currentStyle) {
   const spec = FURNITURE[kind];
+  // a style may have its own photoreal model: a tint can't turn a black leather Chesterfield into pale linen,
+  // so modern and Scandinavian rooms get the grey fabric sofa and armchair, cozy ones keep the leather
+  const hero = (spec.heroBy && spec.heroBy[style]) || spec.hero;
   const g = new THREE.Group();
   g.userData.kind = kind;
   g.userData.style = style;
@@ -673,7 +731,7 @@ export function buildFurniture(kind, style = currentStyle) {
 
   let shown = boxes;
   const swapIn = (file, flipSet, isHero) => load(file).then((src) => {
-    if (!src || (spec.hero && g.userData.model === spec.hero)) return;  // load failed, or the hero already won
+    if (!src || (hero && g.userData.model === hero)) return;  // load failed, or the hero already won
     let model = src.clone(true);
     if (isHero && spec.heroYaw) {              // a model whose front is on x: turn it before it is measured
       const wrap = new THREE.Group(); model.rotation.y = spec.heroYaw; wrap.add(model); wrap.updateMatrixWorld(true); model = wrap;
@@ -687,7 +745,7 @@ export function buildFurniture(kind, style = currentStyle) {
   });
 
   if (spec.model) swapIn(spec.model, FLIPPED, false);
-  if (spec.hero) swapIn(spec.hero, HERO_FLIPPED, true);   // bigger, so it lands second and replaces it
+  if (hero) swapIn(hero, HERO_FLIPPED, true);   // bigger, so it lands second and replaces it
   return g;
 }
 

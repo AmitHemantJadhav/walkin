@@ -33,6 +33,9 @@
   #loading { position: fixed; inset: 0; display: grid; place-items: center; background: #000; z-index: 10; font-size: 16px; }
   #exitvr { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); display: none; z-index: 5; opacity: .7; }
   body.vr #info, body.vr #bar, body.vr #debug { display: none !important; }
+  /* the top-left card is hidden: the view is the interface (fit shows on the piece's outline, houses switch by voice).
+     It stays in the page because code writes to it; ?info shows it again for debugging. */
+  body:not(.show-info) #info { display: none !important; }
   body.vr #exitvr { display: block; }
   #handcam { position: fixed; right: 12px; top: 12px; width: 150px; max-width: 30vw; border-radius: 10px; display: none; opacity: .85; z-index: 3; }
   body.vr #handcam { display: none !important; }
@@ -49,6 +52,7 @@
 </head>
 <body>
 <div id="loading">Loading house…</div>
+<script>if (new URLSearchParams(location.search).has('info')) document.body.classList.add('show-info');</script>
 
 <div id="info" class="panel">
   <h1>Walk-In</h1>
@@ -120,6 +124,8 @@
 <script type="module" src="pointer.js"></script>
 <script type="module" src="ui.js"></script>
 <script type="module" src="suggest.js"></script>
+<script type="module" src="feel.js"></script>
+<script type="module" src="styling.js"></script>
 <script type="module" src="live.js"></script>
 <script type="module" src="voice.js"></script>
 </body>

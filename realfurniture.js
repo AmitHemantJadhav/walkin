@@ -511,28 +511,24 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
       map.magFilter = THREE.LinearFilter;
       map.flipY = true;
     }
-    // A piece tools/meshclose.py managed to close can be drawn front-faces-only: turn it round and you
-    // see its cap, not the inside of its own front, and we stop paying for the back faces. A piece that
-    // is still open keeps DoubleSide, because culling there would leave a hole you can see through.
-    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-      map, vertexColors: !map && !!p.col,
-      roughness: 0.85, metalness: 0,
-      // Front faces only once the export has made the piece wind consistently. DoubleSide costs
-      // 4.09 ms of GPU fill at the worst scan point in La Mirada against 0.14 ms for FrontSide:
-      // at close range the furniture covers most of the screen and every pixel gets shaded twice.
-      // A furniture.bin built before meshclose.orient() existed keeps DoubleSide, or it would show
-      // holes wherever two neighbouring triangles disagree about which side is out.
-      // Front faces only where the piece is nearly closed. DoubleSide costs 4.09 ms of GPU fill at
-      // the worst scan point in La Mirada against 0.14 ms - at close range furniture covers most of
-      // the screen and every pixel gets shaded twice - but it is also what hides the holes the scan
-      // left: cull the back faces of a holey piece and you see straight through it. So each piece
-      // picks: nearly closed means cheap, holey means correct. A furniture.bin built before
-      // meshclose.orient() existed keeps DoubleSide throughout, or its disagreeing triangles show.
-      side: (meta.oriented && (p.openEdge ?? 1) <= OPEN_EDGE_OK) ? THREE.FrontSide : THREE.DoubleSide }));
+    // Unlit. The MatterPak texture already holds the room's light - it is a photograph of the piece -
+    // and lighting it again (MeshStandardMaterial under the scene's ambient + environment) washed
+    // the contrast out of every texel, which read as blur. Drawn as scanned, the tufting on the sofa
+    // is tufting again. The sun's shadow is still cast (that is the geometry, not the material).
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      map, vertexColors: !map && !!p.col, toneMapped: false, side: THREE.FrontSide }));
+    // The inside of the shell, seen through the gaps the scan left, used to show at full brightness
+    // as bright brown flags on the seat. Drawn as a second pass, dark, a gap reads as the shadowed
+    // inside of a piece, which is what it is.
+    const inner = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      map, vertexColors: !map && !!p.col, toneMapped: false, side: THREE.BackSide, color: 0x8a8a8a }));
+    inner.renderOrder = 2;
+    inner.userData.inner = true;
     mesh.renderOrder = 2;
     mesh.castShadow = true;                // the sun (sun.js) throws its shadow like any catalog piece
     const grp = new THREE.Group();
     grp.add(mesh);
+    grp.add(inner);
     // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands at the
     // height it was measured at. Using the current pano's floor instead would put every piece on the
     // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).

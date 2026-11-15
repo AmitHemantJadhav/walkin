@@ -41,6 +41,7 @@ const TYPICAL_PER_PERSON = 100 * SQFT; // what brokers quote
 let group = null;                  // everything we drew
 let lastFit = null;                // the last layout, for zones to rebuild on top of
 let zones = [];                    // reserved rectangles in the row frame
+let lastPeople = null;             // the headcount last asked for, so 'add meeting rooms' keeps it
 
 const W = () => window.walkin;
 
@@ -470,7 +471,7 @@ export function clearTestFit() {
     if (group.parent) group.parent.remove(group);
     group = null;
   }
-  lastFit = null; zones = [];
+  lastFit = null; zones = []; lastPeople = null;
   hud(null);
   return { ok: true, say: 'Cleared the test fit.' };
 }
@@ -483,6 +484,12 @@ function hud(text) {
     Object.assign(el.style, { position: 'fixed', left: '16px', bottom: '72px', maxWidth: '46vw', padding: '10px 14px', borderRadius: '12px',
       background: 'rgba(20,20,24,0.72)', color: '#fff', font: '14px/1.4 -apple-system, Helvetica, Arial', backdropFilter: 'blur(8px)', zIndex: 30, whiteSpace: 'pre-line' });
     document.body.appendChild(el);
+    // the headset has no room for a card: John's voice is the HUD there
+    if (!document.getElementById('testfitHudStyle')) {
+      const st = document.createElement('style'); st.id = 'testfitHudStyle';
+      st.textContent = 'body.vr #testfitHud { display: none; }';
+      document.head.appendChild(st);
+    }
   }
   el.textContent = text;
 }
@@ -494,7 +501,11 @@ function hud(text) {
  */
 export async function testFit({ people = null, aisle = 1.2 } = {}) {
   const w = W();
+  if (people) lastPeople = people;
   if (!w || !w.house || !w.current) return { ok: false, say: 'the viewer is not ready' };
+  // The 50k-face mesh arrives a few seconds after the panos; a question asked before that should
+  // wait for it, not fail.
+  for (let i = 0; i < 60 && !w.occluderMesh; i++) await new Promise((r) => setTimeout(r, 250));
   if (!w.occluderMesh) return { ok: false, say: 'this space has no mesh yet, so I cannot see its floor' };
   const t0 = performance.now();
   const floorZ = w.current.floorZ ?? 0;
@@ -620,7 +631,9 @@ const ZONE_SIZE = {
  */
 export async function testFitZones({ zones: asked = [], people = null, aisle = 1.2 } = {}) {
   const w = W();
-  if (!w || !w.house || !w.current || !w.occluderMesh) return { ok: false, say: 'the viewer is not ready for a test fit' };
+  if (!w || !w.house || !w.current) return { ok: false, say: 'the viewer is not ready for a test fit' };
+  for (let i = 0; i < 60 && !w.occluderMesh; i++) await new Promise((r) => setTimeout(r, 250));
+  if (!w.occluderMesh) return { ok: false, say: 'this space has no mesh yet, so I cannot see its floor' };
   const floorZ = w.current.floorZ ?? 0;
   const g = floorGrid(w, floorZ);
   if (!g) return { ok: false, say: 'no floor' };
@@ -668,7 +681,8 @@ export async function testFitZones({ zones: asked = [], people = null, aisle = 1
         draw: (fr, fz) => drawZone({ type, size, u: best.u, v: best.v, seats: z.seats || 8, name }, fr, fz) });
     }
   }
-  const res = await testFit({ people, aisle });
+  // "add four meeting rooms" after "seat 150" keeps the 150: the follow-up rarely repeats the number
+  const res = await testFit({ people: people || lastPeople, aisle });
   if (!res.ok) return res;
   const names = zones.map((z) => z.name);
   res.zones = names;
@@ -760,6 +774,13 @@ function register() {
   );
 }
 if (window.walkin) register(); else addEventListener('walkin:ready', register, { once: true });
-// agent.js attaches walkin.agent a moment after the viewer is ready; try again then
-setTimeout(register, 1500);
-setTimeout(register, 5000);
+// agent.js attaches walkin.agent some time after the viewer is ready - later still on a phone over a
+// tunnel - so keep trying until the tools are on it, for up to a minute.
+{
+  let tries = 0;
+  const again = setInterval(() => {
+    register();
+    const a = window.walkin && window.walkin.agent;
+    if ((a && a.tools && a.tools.test_fit) || ++tries > 120) clearInterval(again);
+  }, 500);
+}

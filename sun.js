@@ -607,5 +607,13 @@ async function start() {
 }
 if (window.walkin) start(); else addEventListener('walkin:ready', start, { once: true });
 // agent.js attaches walkin.agent a moment after the viewer is ready; try again then
-setTimeout(registerTools, 1500);
-setTimeout(registerTools, 5000);
+// agent.js attaches walkin.agent some time after the viewer is ready - later still on a phone over a
+// tunnel - so keep trying until the tools are on it, for up to a minute.
+{
+  let tries = 0;
+  const again = setInterval(() => {
+    registerTools();
+    const a = window.walkin && window.walkin.agent;
+    if ((a && a.tools && a.tools.set_sun_time) || ++tries > 120) clearInterval(again);
+  }, 500);
+}

@@ -404,6 +404,16 @@ function exitDoors(g, w) {
 // procedural textures and instanced boxes - no new assets, nothing to download at the venue.
 
 let woodTex = null, screenTex = null;
+const screens = new Set();          // monitor materials, so night can turn them up
+// At night the view-level grade would dim the screens with everything else. Opaque objects always draw
+// before transparent ones, so a glowing screen has to become 'transparent' and sort after the grade
+// (renderOrder 1000 > 999) to punch through it; it still depth-tests against the room.
+addEventListener('walkin:sun', (e) => {
+  // the emissive map is a dark gradient (about 0.15 bright), so the night intensity has to be high to read as a lit screen
+  for (const m of screens) { m.emissiveIntensity = e.detail.night ? 16 : 0.55; m.emissive.set(e.detail.night ? 0xcfe0ff : 0x9fb4d0); m.transparent = !!e.detail.night; m.needsUpdate = true; }
+  for (const im of screenMeshes) im.renderOrder = e.detail.night ? 1000 : 2;
+});
+const screenMeshes = new Set();
 function wood() {
   if (woodTex) return woodTex;
   const c = document.createElement('canvas'); c.width = 512; c.height = 512;
@@ -493,6 +503,7 @@ async function instanced(kind, poses, floorZ) {
     const im = new THREE.InstancedMesh(d.geometry, d.material, poses.length);
     im.renderOrder = 2;
     im.frustumCulled = false;
+    im.castShadow = true;
     im.userData.ownGeo = d.geometry !== m.geometry;      // box-projected copies are ours to dispose; shared ones are not
     im.userData.ownMat = true;                            // every dressed material is ours, whatever geometry it sits on
     for (let i = 0; i < poses.length; i++) {
@@ -522,7 +533,8 @@ function deskTop(poses, floorZ) {
   const M = new THREE.Matrix4();
   for (const p of parts) {
     const im = new THREE.InstancedMesh(p.geo, p.mat, poses.length);
-    im.renderOrder = 2; im.frustumCulled = false; im.userData.ours = true;
+    im.renderOrder = 2; im.frustumCulled = false; im.userData.ours = true; im.castShadow = true;
+    if (p.mat.emissiveMap) { screens.add(p.mat); screenMeshes.add(im); }
     for (let i = 0; i < poses.length; i++) { M.makeRotationZ(poses[i].rot).setPosition(poses[i].x, poses[i].y, floorZ); im.setMatrixAt(i, M); }
     im.instanceMatrix.needsUpdate = true;
     out.add(im);

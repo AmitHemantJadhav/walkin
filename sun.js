@@ -17,6 +17,7 @@
 // sun_off. Also sets walkin.house.north the way agent.js already reads it. Talks to the viewer only through
 // window.walkin.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { pointInPoly } from './fit.js';
 
 const CELL = 0.15;                 // floor cell, metres
@@ -329,9 +330,14 @@ function ensureGroup() {
   if (group) return group;
   group = new THREE.Group();
   group.name = 'sunlight';
-  const mat = new THREE.MeshBasicMaterial({ color: 0xfff1c8, transparent: true, opacity: 0.35,
+  // Half the patch's light is its own glow and half comes from the sun light, so a chair standing in the
+  // patch casts a visible shadow inside it and nowhere else. The photographed floor keeps its own shading:
+  // the only thing that ever darkens is a patch we drew.
+  const mat = new THREE.MeshStandardMaterial({ color: 0xfff1c8, emissive: 0xfff1c8, emissiveIntensity: 0.55,
+    roughness: 1, metalness: 0, envMapIntensity: 0, transparent: true, opacity: 0.35,
     blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, side: THREE.DoubleSide });
   mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+  mesh.receiveShadow = true;
   mesh.renderOrder = 1;                      // after the depth-only occluders (0), before furniture (2)
   mesh.frustumCulled = false;
   group.add(mesh);
@@ -353,8 +359,16 @@ function draw(res, sun) {
   }
   attr.array.set(res.positions);
   attr.needsUpdate = true;
+  let nrm = g.getAttribute('normal');
+  if (!nrm || nrm.array.length < attr.array.length) {
+    const arr = new Float32Array(attr.array.length);
+    for (let i = 2; i < arr.length; i += 3) arr[i] = 1;      // every cell faces up
+    nrm = new THREE.BufferAttribute(arr, 3);
+    g.setAttribute('normal', nrm);
+  }
   g.setDrawRange(0, n / 3);
   mesh.material.color.set(sun.elevation < LOW_SUN ? 0xffb060 : 0xffe2a8);
+  mesh.material.emissive.set(sun.elevation < LOW_SUN ? 0xffb060 : 0xffe2a8);
   group.visible = state.show && n > 0;
 }
 
@@ -374,6 +388,7 @@ export function sun(opts = {}) {
   const s = sunVector(date, state.minutes);
   const res = computePatches(s);
   draw(res, s);
+  lightScene(s, res);
   const times = sunTimes(state.date);
   const rooms = [...new Set(res.lit.map((l) => l.window.room || 'the main floor'))];
   const when = `${fmtDate(date)}, ${fmtTime(state.minutes)}`;
@@ -404,6 +419,11 @@ export function sunOff() {
   stopPlay();
   state.show = false;
   if (group) group.visible = false;
+  if (fx.light) fx.light.intensity = 0;
+  if (fx.grade) fx.grade.visible = false;
+  if (fx.sprite) fx.sprite.visible = false;
+  if (fx.glass) fx.glass.visible = false;
+  if (fx.night) { fx.night = false; nightLamps(false); if (fx.envDay != null) W().scene.environmentIntensity = fx.envDay; dispatchEvent(new CustomEvent('walkin:sun', { detail: { night: false, elevation: 0 } })); }
   updatePanel(state.last);
   return { ok: true, say: 'Sunlight hidden.' };
 }
@@ -554,6 +574,261 @@ function stopPlay() {
   if (panel) els.play.textContent = '▶';
 }
 
+
+// ------------------------------------------------------------------ the sun as a light
+//
+// The floor patches say where the sun lands; this makes the rest of the room agree with them. A real
+// directional light stands where the sun is, and it shines through SHADOW CASTERS built from the wall
+// graph - every wall as an invisible slab with its windows cut out, plus a ceiling - so the light only
+// enters where the windows are. That gives, from one mechanism: window-shaped sun on the furniture,
+// furniture shadows on the floor that swing with the time slider, and interior walls blocking the beam.
+// Below 25 degrees the whole view warms up; below the horizon it goes to night and the screens and
+// lamps come up, because "show me this at 9 pm" should look like 9 pm.
+const fx = { light: null, target: null, plane: null, casters: null, castersFloor: null, grade: null, sprite: null, label: null, night: false };
+const SHADOW_MAP = 2048;
+const SHADOW_HALF = 16;            // metres around the viewer the shadow camera covers
+const WALL_H = 2.7, SLAB_T = 0.12;
+
+function ensureLight() {
+  const w = W();
+  if (fx.light) return;
+  // enabling shadow maps is a renderer setting; app.js owns the renderer, so this is the one thing here it
+  // did not already allow for (told Amit on #133). Nothing else about the renderer is touched.
+  w.renderer.shadowMap.enabled = true;
+  w.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  const light = new THREE.DirectionalLight(0xfff1d6, 0);
+  light.castShadow = true;
+  light.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
+  light.shadow.camera.near = 1; light.shadow.camera.far = 90;
+  light.shadow.camera.left = -SHADOW_HALF; light.shadow.camera.right = SHADOW_HALF;
+  light.shadow.camera.top = SHADOW_HALF; light.shadow.camera.bottom = -SHADOW_HALF;
+  light.shadow.bias = -0.0006; light.shadow.normalBias = 0.02;
+  const target = new THREE.Object3D();
+  w.scene.add(target); light.target = target; w.scene.add(light);
+  // the view-level grade: a quad on the camera, in both eyes, warm at dusk and dark at night
+  const grade = new THREE.Mesh(new THREE.PlaneGeometry(4, 4),
+    new THREE.MeshBasicMaterial({ color: 0xffa050, transparent: true, opacity: 0, depthTest: false, depthWrite: false }));
+  grade.position.z = -0.6; grade.renderOrder = 999; grade.frustumCulled = false; grade.visible = false;
+  w.camera.add(grade);
+  if (!w.camera.parent) w.scene.add(w.camera);
+  // the sun itself, out along its own direction: what you grab in the headset
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'); const rg = g.createRadialGradient(64, 64, 8, 64, 64, 62);
+  rg.addColorStop(0, 'rgba(255,250,220,1)'); rg.addColorStop(0.35, 'rgba(255,215,120,0.9)'); rg.addColorStop(1, 'rgba(255,180,60,0)');
+  g.fillStyle = rg; g.fillRect(0, 0, 128, 128);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  sprite.scale.setScalar(1.6); sprite.renderOrder = 50; sprite.visible = false;
+  w.scene.add(sprite);
+  Object.assign(fx, { light, target, grade, sprite });
+}
+
+/** Invisible slabs for every wall on this floor, with the windows cut out, and a ceiling: what the sun has to get past. */
+function ensureCasters(floorZ) {
+  const w = W();
+  const floorId = w.current && w.current.floor;
+  if (fx.casters && fx.castersFloor === floorId) return;
+  if (fx.casters) { w.scene.remove(fx.casters); fx.casters.traverse((o) => o.geometry && o.geometry.dispose()); }
+  const grp = new THREE.Group(); grp.name = 'sun-casters';
+  const mat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false });   // casts, never draws
+  const pieces = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const f of w.house.floors || []) {
+    if (floorId && f.id && f.id !== floorId) continue;
+    for (const wall of f.walls || []) {
+      const [ax, ay] = wall.a, [bx, by] = wall.b;
+      const L = Math.hypot(bx - ax, by - ay);
+      if (L < 0.05) continue;
+      x0 = Math.min(x0, ax, bx); x1 = Math.max(x1, ax, bx); y0 = Math.min(y0, ay, by); y1 = Math.max(y1, ay, by);
+      const ang = Math.atan2(by - ay, bx - ax);
+      // the wall as pieces: full height between windows, and above and below each window
+      const spans = [];                                   // along the wall: [t0, t1, zlo, zhi]
+      const wins = (wall.openings || []).filter((o) => /window/i.test(o.type || '') && o.at != null)
+        .map((o) => ({ t0: o.at - (o.width || 1) / 2 / L, t1: o.at + (o.width || 1) / 2 / L, lo: (o.bottom || 0) > 0 ? o.bottom : SILL_DEFAULT, hi: ((o.bottom || 0) > 0 ? o.bottom : SILL_DEFAULT) + (o.height || 1.2) }))
+        .sort((a, b) => a.t0 - b.t0);
+      let t = 0;
+      for (const o of wins) {
+        if (o.t0 > t) spans.push([t, o.t0, 0, WALL_H]);
+        spans.push([Math.max(t, o.t0), o.t1, 0, o.lo]);              // under the sill
+        spans.push([Math.max(t, o.t0), o.t1, Math.min(o.hi, WALL_H), WALL_H]);  // above the head
+        t = Math.max(t, o.t1);
+      }
+      if (t < 1) spans.push([t, 1, 0, WALL_H]);
+      for (const [s0, s1, zlo, zhi] of spans) {
+        if (s1 - s0 < 1e-3 || zhi - zlo < 1e-3) continue;
+        const box = new THREE.BoxGeometry((s1 - s0) * L, SLAB_T, zhi - zlo);
+        box.applyMatrix4(new THREE.Matrix4().makeRotationZ(ang).setPosition(
+          ax + (bx - ax) * (s0 + s1) / 2, ay + (by - ay) * (s0 + s1) / 2, floorZ + (zlo + zhi) / 2));
+        pieces.push(box);
+      }
+    }
+  }
+  if (isFinite(x0)) {
+    const ceil = new THREE.PlaneGeometry(x1 - x0 + 4, y1 - y0 + 4);
+    ceil.translate((x0 + x1) / 2, (y0 + y1) / 2, floorZ + WALL_H);
+    pieces.push(ceil);
+  }
+  if (pieces.length) {
+    // one mesh, one draw call into the shadow map - 122 separate slabs cost 122 draw calls each frame
+    const merged = mergeGeometries(pieces.map((g) => g.index ? g.toNonIndexed() : g), false);
+    for (const g of pieces) g.dispose();
+    const m = new THREE.Mesh(merged, mat);
+    m.castShadow = true; m.frustumCulled = false;
+    grp.add(m);
+  }
+  w.scene.add(grp);
+  fx.casters = grp; fx.castersFloor = floorId;
+}
+
+/** Point the sun light, size the shadows around the viewer, set the grade and the night lights. */
+function lightScene(s, res) {
+  const w = W();
+  if (!w.renderer || !w.camera) return;
+  ensureLight();
+  const floorZ = (w.current && w.current.floorZ) || 0;
+  ensureCasters(floorZ);
+  const up = s.elevation >= MIN_ELEV && state.show;
+  const here = w.current ? w.current.pos : [0, 0, floorZ];
+  fx.target.position.set(here[0], here[1], floorZ);
+  // light comes FROM the sun: sit it 40 m out along the sun vector (hx, hy point toward the sun, z up)
+  const dz = Math.tan(s.elevation * Math.PI / 180);
+  const len = Math.hypot(s.hx, s.hy, dz) || 1;
+  fx.light.position.set(here[0] + s.hx / len * 40, here[1] + s.hy / len * 40, floorZ + dz / len * 40);
+  fx.light.color.set(s.elevation < LOW_SUN ? 0xffc080 : 0xfff1d6);
+  fx.light.shadow.camera.updateProjectionMatrix();
+  fx.casters.visible = up;
+  // the sun has to light the patch brightly enough to show shade in it: compensate for the grazing angle
+  fx.light.intensity = up ? Math.min(6, 1.4 / Math.max(0.15, Math.sin(s.elevation * Math.PI / 180))) : 0;
+  // the sun in the sky, 9 m out, for the hand to grab
+  fx.sprite.position.set(here[0] + s.hx / len * 9, here[1] + s.hy / len * 9, (w.current ? here[2] : floorZ + 1.5) + dz / len * 9);
+  fx.sprite.visible = state.show && s.elevation > -8;
+  // grade: warm below 25 degrees, night below the horizon
+  const e = s.elevation;
+  // Night has no data behind it - nobody scanned the house in the dark - so it is built from what we
+  // do know: the windows go black, the room goes to a near-dark blue, the environment light drops to a
+  // quarter, and the lamps and screens become the only light. That reads as night; 0.6 of blue over a
+  // daylight photo read as a dim afternoon.
+  let op = 0, col = 0xffa050;
+  // the grade sits over the emissive screens and lamps too, so it stops at 0.76 and they are driven hard
+  if (e < -6) { op = 0.76; col = 0x05080f; }
+  else if (e < 0) { const k = -e / 6; op = 0.22 + 0.54 * k; col = new THREE.Color(0xff8040).lerp(new THREE.Color(0x05080f), k).getHex(); }
+  else if (e < 25) { op = 0.2 * (1 - e / 25); col = 0xffa050; }
+  fx.grade.material.color.set(col); fx.grade.material.opacity = op; fx.grade.visible = state.show && op > 0.01;
+  // night: screens and lamps come up
+  const night = state.show && e < 0;
+  nightGlass(night, floorZ);
+  if (night !== fx.night) {
+    fx.night = night;
+    if (fx.envDay == null) fx.envDay = w.scene.environmentIntensity;
+    w.scene.environmentIntensity = night ? fx.envDay * 0.25 : fx.envDay;
+    nightLamps(night);
+    dispatchEvent(new CustomEvent('walkin:sun', { detail: { night, elevation: e } }));
+    for (const o of (w.furniture ? w.furniture.children : [])) o.traverse((m) => {
+      if (m.isMesh && m.material && /shade|lamp|light/i.test(m.material.name || '')) {
+        m.material.emissive && m.material.emissive.set(0xffd9a0);
+        m.material.emissiveIntensity = night ? 5.0 : 0.15;
+        // draw after the grade so the shade glows instead of being dimmed with the room
+        m.material.transparent = night; m.material.needsUpdate = true;
+        m.renderOrder = night ? 1000 : 2;
+      }
+    });
+  }
+}
+
+
+/** The windows go dark after sunset: one near-black pane in every window rectangle, just inside the wall. */
+function nightGlass(on, floorZ) {
+  const w = W();
+  if (!on) { if (fx.glass) fx.glass.visible = false; return; }
+  const floorId = w.current && w.current.floor;
+  if (!fx.glass || fx.glassFloor !== floorId) {
+    if (fx.glass) { w.scene.remove(fx.glass); fx.glass.geometry.dispose(); }
+    const panes = [];
+    for (const win of ensureWindows()) {
+      const g = new THREE.PlaneGeometry(win.width, win.height);
+      // a plane faces +z; stand it up (rotate about x) and turn it to the wall, then slide it just inside
+      const ang = Math.atan2(win.uy, win.ux);
+      g.applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+      g.applyMatrix4(new THREE.Matrix4().makeRotationZ(ang));
+      g.translate(win.cx - win.nx * 0.04, win.cy - win.ny * 0.04, win.floorZ + win.sill + win.height / 2);
+      panes.push(g);
+    }
+    if (!panes.length) return;
+    const merged = mergeGeometries(panes.map((g) => g.index ? g.toNonIndexed() : g), false);
+    for (const g of panes) g.dispose();
+    fx.glass = new THREE.Mesh(merged, new THREE.MeshBasicMaterial({ color: 0x0a1424, transparent: true, opacity: 0.92, depthWrite: false, side: THREE.DoubleSide }));
+    fx.glass.renderOrder = 1; fx.glass.frustumCulled = false;
+    w.scene.add(fx.glass);
+    fx.glassFloor = floorId;
+  }
+  fx.glass.visible = true;
+}
+
+/** After dark, the staged lamps throw warm light: a point light at each floor lamp, up to four. */
+function nightLamps(on) {
+  const w = W();
+  for (const l of fx.lamps || []) w.scene.remove(l);
+  fx.lamps = [];
+  if (!on || !w.furniture) return;
+  const lamps = w.furniture.children.filter((o) => /lamp/i.test(o.userData.kind || '')).slice(0, 4);
+  for (const o of lamps) {
+    const l = new THREE.PointLight(0xffc27a, 9, 8, 1.6);
+    l.position.set(o.position.x, o.position.y, o.position.z + 1.45);
+    w.scene.add(l); fx.lamps.push(l);
+  }
+}
+
+// ------------------------------------------------------------------ the hand on the sun
+//
+// In the headset there is no slider. The sun is a sprite in the sky along its real direction: pinch
+// while pointing at it and drag across the sky, and time follows the hand - a full screen width is
+// twelve hours. Pinching with a raised hand anywhere does the same, for when the sun is behind you.
+let scrub = null;
+function handScrub() {
+  const w = W();
+  if (!w || !geo || !w.hands || !state.show) return;
+  const h = w.hands.find((x) => x.pinch) || null;
+  if (!h) { if (scrub) { scrub = null; if (fx.label) fx.label.visible = false; } return; }
+  if (!scrub) {
+    let atSun = false;
+    if (w.handRay && fx.sprite && fx.sprite.visible) {
+      const d = new THREE.Vector3(...w.handRay.dir);
+      const to = fx.sprite.position.clone().sub(new THREE.Vector3(...w.handRay.origin)).normalize();
+      atSun = d.dot(to) > Math.cos(14 * Math.PI / 180);
+    }
+    const raised = h.y < 0.22;                              // hand high in the view
+    if (!atSun && !raised) return;
+    scrub = { x0: h.x, m0: state.minutes, side: h.side };
+    return;
+  }
+  if (h.side !== scrub.side) return;
+  const minutes = Math.max(0, Math.min(1439, Math.round(scrub.m0 + (h.x - scrub.x0) * 720)));
+  if (minutes !== state.minutes) {
+    state.minutes = minutes;
+    sun({});
+    showSkyLabel();
+  }
+}
+function showSkyLabel() {
+  if (!fx.sprite) return;
+  if (!fx.label) {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+    fx.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+    fx.label.scale.set(2.4, 0.6, 1); fx.label.renderOrder = 51; fx.label.userData.canvas = c;
+    W().scene.add(fx.label);
+  }
+  const c = fx.label.userData.canvas, g = c.getContext('2d');
+  g.clearRect(0, 0, 512, 128); g.fillStyle = 'rgba(20,20,24,0.75)'; g.fillRect(0, 0, 512, 128);
+  g.fillStyle = '#fff'; g.font = 'bold 60px -apple-system, Helvetica, Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(`${fmtDate(parseDate(state.date))} · ${fmtTime(state.minutes)}`, 256, 64);
+  fx.label.material.map.needsUpdate = true;
+  fx.label.position.copy(fx.sprite.position); fx.label.position.z -= 1.2;
+  fx.label.visible = true;
+}
+function hookHands() {
+  const w = W();
+  if (w && w.beforeRender && !fx.hooked) { w.beforeRender.add(() => handScrub()); fx.hooked = true; }
+}
+
 // ------------------------------------------------------------------ wiring
 async function loadGeo() {
   const w = W();
@@ -595,6 +870,7 @@ function registerTools() {
 }
 
 async function start() {
+  hookHands();
   const w = W();
   if (!w || w.sun) return;
   w.sun = sun;

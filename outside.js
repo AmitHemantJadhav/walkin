@@ -137,7 +137,8 @@ async function init() {
   (function hook() { // expose once app.js has made window.walkin
     if (window.walkin) window.walkin.showOutside = show; else setTimeout(hook, 300);
   })();
-  const skip = params.get('outside') === 'off' || params.has('a1') || document.body.classList.contains('vr');
+  // resume: John switched house/office from inside At eyes; the phone is in the headset, so nothing to tap
+  const skip = params.get('outside') === 'off' || params.has('a1') || params.has('resume') || document.body.classList.contains('vr');
   if (!skip) show();
 }
 init();

@@ -3,19 +3,24 @@
 // and John's spoken reply is captioned too. The text box is collapsed into a small orb (tap it, or press /).
 // Talks to the rest only through window.walkin (agent.ask, agent.isSpeaking) and the 'walkin:speech' events.
 
-const WAKE = /\b(hey|hi|ok(?:ay)?)[\s,.!]+(john|jon)\b[\s,.!]*/i;
+// "John, add a sofa" is enough: the "hey" is optional (Amit: saying "hey John" before everything is no good in a demo)
+const WAKE = /\b(?:(?:hey|hi|ok(?:ay)?)[\s,.!]+)?(john|jon)\b[\s,.!]*/i;
+// after John answers, the next 30 s need no name at all: "now turn it", "make it blue" (?idle=<seconds> to change)
+const FOLLOW_MS = (Number(new URLSearchParams(location.search).get('idle')) || 30) * 1000;
 const END_SILENCE_MS = 1200;     // a command ends after this much silence
 const WAKE_TIMEOUT_MS = 6000;    // "Hey John" and then nothing: go back to listening
 const RESUME_AFTER_SPEECH_MS = 350;
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 const $ = (id) => document.getElementById(id);
-const state = { mode: 'off', heard: '', interim: '', carry: '', wakeIdx: -1, silenceTimer: 0, wakeTimer: 0, paused: false, rec: null, wanted: false };
+const state = { mode: 'off', heard: '', interim: '', carry: '', wakeIdx: -1, silenceTimer: 0, wakeTimer: 0, paused: false, rec: null, wanted: false, followUntil: 0 };
 
 // ------------------------------------------------------------------ DOM: glow, captions (one per eye in the headset), orb
 function el(tag, cls, parent = document.body) { const e = document.createElement(tag); e.className = cls; parent.appendChild(e); return e; }
 const glow = el('div', 'vx-glow');
 const capWrap = el('div', 'vx-captions');
+// captions: what you said and what John says, on by default (Amit wants them); ?captions=off hides them
+if (!/[?&]captions=off\b/.test(location.search)) document.body.classList.add('captions');
 const caps = [el('div', 'vx-cap', capWrap), el('div', 'vx-cap vx-cap-right', capWrap)];   // 2nd is only shown in the headset
 const orb = el('button', 'vx-orb');
 orb.type = 'button';
@@ -149,6 +154,8 @@ function onResult(e) {
   if (state.mode === 'listening') {
     for (let i = e.resultIndex; i < rs.length; i++) {
       if (WAKE.test(rs[i][0].transcript)) { wake(); state.wakeIdx = i; break; }
+      // still in the conversation: anything said is the next command, no name needed
+      if (performance.now() < state.followUntil && rs[i][0].transcript.trim()) { wake(true); state.wakeIdx = i; break; }
     }
   }
   if (state.mode !== 'awake') return;
@@ -175,13 +182,13 @@ function onCommandWords(finalPart, interimPart, allFinal) {
   state.silenceTimer = setTimeout(finishCommand, END_SILENCE_MS);
 }
 
-function wake() {
+function wake(followUp = false) {
   setMode('awake');
   try { const p = window.walkin && window.walkin.pointer; window.walkin.wakeWall = p && p.wall ? { wall: p.wall, at: performance.now() } : null; } catch (e) { /* no pointer */ }
   startPulse();
   state.wakeIdx = -1;
   state.carry = state.heard = state.interim = '';
-  chime();
+  if (!followUp) chime();                    // a follow-up just carries on, no chime
   showCaption('', '', 'user');
   clearTimeout(state.wakeTimer);
   state.wakeTimer = setTimeout(() => { if (state.mode === 'awake' && !state.heard && !state.interim) backToListening(); }, WAKE_TIMEOUT_MS);
@@ -196,8 +203,17 @@ async function finishCommand() {
   showCaption(command, '', 'user');
   setMode('thinking');
   stopRec();                                 // the agent's filler and reply will be spoken now
+  const live = await liveConversation(command);  // a real two-way conversation (live.js) when there's a Gemini key
+  if (live === true) return;
+  // Live is off or just failed (quota, network): the classic pipeline answers, so voice never goes silent
+  await classicAnswer((live && live.text) || command);
+}
+
+/** Speech-to-text already done: typed agent (Gemini, else OpenRouter) -> spoken reply, then back to listening. */
+async function classicAnswer(command) {
   const w = window.walkin;
-  if (await liveConversation(command)) return;   // a real two-way conversation (live.js) when there's a Gemini key
+  setMode('thinking');
+  stopRec();
   try {
     if (!w || !w.agent) throw new Error('agent not ready');
     await w.agent.ask(command);             // speaks a filler at once, then the reply (captioned via walkin:speech)
@@ -206,6 +222,7 @@ async function finishCommand() {
     if (w && w.agent) w.agent.speak("I can't reach my brain right now.");
   }
   setMode('replying');
+  state.followUntil = performance.now() + FOLLOW_MS;
   // back to listening once John has finished talking (the 'end' event resumes the microphone)
   if (!w || !w.agent || !w.agent.isSpeaking()) setTimeout(backToListening, 600);
 }
@@ -216,8 +233,7 @@ let liveOk = null;
 function tail(text, max = 90) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();   // one line: '.' in the split below doesn't cross a newline
   if (t.length <= max) return t;
-  // split after . ! ? only when a space or the end follows, so "0.9 m" stays whole; no lookbehind (Safari < 16.4)
-  const parts = (t.match(/.*?(?:[.!?]+(?=\s|$)|$)\s*/g) || [t]).map((s) => s.trim()).filter(Boolean);
+  const parts = (t.match(/[^.!?]+[.!?]*\s*/g) || [t]).map((s) => s.trim()); // no lookbehind: Safari < 16.4 can't parse it
   let out = parts.pop();
   while (parts.length && out.length + parts[parts.length - 1].length + 1 <= max) out = `${parts.pop()} ${out}`;
   return out.length > max ? `…${out.slice(-max + 1)}` : out;
@@ -229,20 +245,38 @@ async function liveAvailable() {
   return liveOk;
 }
 
-/** Hand the mic to Gemini Live for a back-and-forth; resolves true when it ran, false to use the old pipeline. */
+/**
+ * Hand the mic to Gemini Live for a back-and-forth. Resolves true when it ran to the end; false (Live off, or it
+ * could not connect) or { text } (it died mid-turn: these words still need an answer) to use the classic pipeline.
+ */
 async function liveConversation(firstText) {
   if (!(await liveAvailable())) return false;
   setMode('live');
   startPulse && startPulse();
-  const ran = await window.walkin.live.start({ firstText });
-  if (ran === false) {                         // couldn't connect (token, network): fall back for this command
+  let ran;
+  try { ran = await window.walkin.live.start({ firstText }); } catch (e) { ran = false; }
+  if (ran === false || (ran && ran.fallback)) {   // no connection, quota, or the socket died: the backup voice answers
     setMode('thinking');
-    liveOk = false;                            // don't retry on every command: try Live again in a minute
+    liveOk = false;                            // don't retry on every command (live.js also keeps itself off a while)
     setTimeout(() => { liveOk = null; }, 60000);
-    return false;
+    await backupNotice();
+    const text = ran && ran.text ? ran.text : firstText;
+    if (!text) { backToListening(); return true; }   // nothing left unanswered: listen the classic way
+    return { text };
   }
+  state.followUntil = performance.now() + FOLLOW_MS;
   backToListening();
   return true;
+}
+
+// Said once per page: the backup voice sounds different, so the user knows why.
+let noticed = false;
+async function backupNotice() {
+  if (noticed) return;
+  noticed = true;
+  showHint('Live voice is unavailable: using the backup voice.', 4000);
+  const a = window.walkin && window.walkin.agent;
+  if (a && a.speak) { try { await a.speak('Switching to my backup voice.'); } catch (e) { /* no audio */ } }
 }
 
 addEventListener('walkin:live', (e) => {
@@ -298,9 +332,13 @@ function talkNow() {
   unlock();
   if (state.mode === 'live') return window.walkin.live.stop('talk');   // Talk again = hang up
   if (state.mode === 'thinking') return;
-  liveAvailable().then((ok) => {               // push to talk: straight into a live conversation if we can
-    if (ok) { stopRec(); liveConversation(''); return; }
-    talkClassic();
+  liveAvailable().then(async (ok) => {         // push to talk: straight into a live conversation if we can
+    if (!ok) return talkClassic();
+    stopRec();
+    const r = await liveConversation('');
+    if (r === true) return;
+    if (r && r.text) return classicAnswer(r.text);
+    talkClassic();                             // Live failed before anything was said: listen the classic way
   });
 }
 
@@ -317,7 +355,8 @@ function talkClassic() {
   const w = window.walkin;
   if (!w || !w.agent) { if (tries < 600) setTimeout(() => attach(tries + 1), 200); return; }
   w.onTalk = talkNow;                        // replaces agent.js's own one-shot recognizer
-  w.voice = { talk: talkNow, state: () => state.mode, openPanel: () => setPanel(true), _onResult: onResult, _finish: finishCommand };
+  w.voice = { talk: talkNow, state: () => state.mode, openPanel: () => setPanel(true), _onResult: onResult, _finish: finishCommand,
+    _wake: wake };
   if (!SR) document.body.classList.add('vx-no-speech');
   setMode(state.wanted ? state.mode : 'off');
 })();

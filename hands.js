@@ -102,12 +102,34 @@ export function handDepth(L, W, vw, vh, hfovDeg = 63) {
   return Number.isFinite(best) ? best : null;
 }
 
+// Detection in a worker (hands-worker.js), so it never blocks rendering. Resolves to null when the worker can't run
+// MediaPipe here (no module workers, no OffscreenCanvas, ...): then detection stays on the main thread as before.
+const USE_WORKER = !/[?&]handworker=off\b/.test(location.search);
+const IDLE_HZ = 10; // no hand in view: look for one 10 times a second, not 30 (most of a demo has no hands up)
+function startWorker() {
+  if (!USE_WORKER || typeof Worker === 'undefined' || typeof createImageBitmap === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let w;
+    try { w = new Worker(new URL('./hands-worker.js', import.meta.url), { type: 'module' }); }
+    catch { resolve(null); return; }
+    const fail = (why) => { clearTimeout(to); w.terminate(); console.warn('[hands] worker unavailable, detecting on the main thread:', why); resolve(null); };
+    const to = setTimeout(() => fail('timeout'), 20000);
+    w.onerror = (e) => fail(e.message || 'error');
+    w.onmessage = (e) => {
+      if (e.data.type === 'ready') { clearTimeout(to); w.onerror = null; w.onmessage = null; resolve({ w, delegate: e.data.delegate }); }
+      else if (e.data.type === 'error') fail(e.data.message);
+    };
+    w.postMessage({ type: 'init', lib: LOCAL.lib, model: LOCAL.model });
+  });
+}
+
 // maxHz caps how often detection runs: detectForVideo blocks the main thread (~10-20 ms on a phone), so on a
 // phone every skipped detection is render time back. stats.ms is the smoothed cost of one detection.
 // aspect(): width / height of the view the hands are drawn in (one eye in the headset).
 // onFrame(cam): called right before each detection, so realhands.js can copy the very image the landmarks come from.
 export async function startHands({ video, facingMode = 'user', onHands, onFrame, maxHz = 30, aspect = () => innerWidth / innerHeight, viewFov = null, reach = false }) {
-  const lm = await getLandmarker();
+  let wk = await startWorker();
+  let lm = wk ? null : await getLandmarker();
   const stream = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } }, audio: false,
   });
@@ -117,23 +139,55 @@ export async function startHands({ video, facingMode = 'user', onHands, onFrame,
   const mirror = facingMode === 'user';
   const pinching = {}; // hysteresis per hand
   const filters = {};  // One Euro filters per hand
-  const stats = { maxHz, ms: 0, hfov: 63, src: handsSource };
-  let running = true, last = -1, nextRun = 0;
+  const stats = { maxHz, ms: 0, hfov: 63, src: wk ? `worker-${wk.delegate}` : handsSource };
+  let running = true, last = -1, nextRun = 0, seen = 0, busy = false, seq = 0, pending = null, results = 0;
+  if (wk) {
+    wk.w.onmessage = (e) => {
+      const m = e.data;
+      busy = false;
+      if (!running || !pending || m.id !== pending.id) return;
+      if (m.type === 'error') { console.warn('[hands] worker:', m.message); return; }
+      stats.ms = stats.ms ? stats.ms * 0.9 + m.ms * 0.1 : m.ms;
+      handle(m, pending.cam, pending.t);
+      // safety net: if this phone's worker is slow (its GPU path can be), go back to the main thread
+      if (++results === 60 && stats.ms > 60) {
+        console.warn(`[hands] worker detection ${stats.ms.toFixed(0)} ms, switching to the main thread`);
+        wk.w.terminate(); wk = null; stats.src = handsSource || 'main';
+        getLandmarker().then((l) => { lm = l; stats.src = handsSource; });
+      }
+    };
+  }
   function loop() {
     if (!running) return;
     requestAnimationFrame(loop);
     if (video.readyState < 2 || video.currentTime === last) return;
     const t = performance.now();
     if (t < nextRun - 4) return; // 4 ms slack for display-frame jitter
+    if (busy) return; // the worker still has the last frame
     // schedule from the due time, not from now, so 25 Hz on a 60 Hz display averages 25 instead of rounding to 20
-    nextRun = Math.max(nextRun + 1000 / stats.maxHz, t);
+    const hz = seen ? stats.maxHz : Math.min(stats.maxHz, IDLE_HZ);
+    nextRun = Math.max(nextRun + 1000 / hz, t);
     last = video.currentTime;
     // how screen units map back to the video (realhands.js draws the same rectangle)
     const cam = { mirror, ...cropFor(aspect(), video.videoWidth, video.videoHeight, viewFov && viewFov(), stats.hfov, reach) };
     onFrame?.(cam);
+    if (wk) {
+      busy = true;
+      pending = { id: ++seq, cam, t };
+      const id = pending.id;
+      createImageBitmap(video).then((bitmap) => {
+        if (!running) { bitmap.close(); return; }
+        wk.w.postMessage({ type: 'frame', id, t, bitmap }, [bitmap]);
+      }, () => { busy = false; });
+      return;
+    }
+    if (!lm) return; // switching from the worker: the main-thread model is still loading
     const t1 = performance.now(); // stats.ms is the detection alone
     const r = lm.detectForVideo(video, t);
     stats.ms = stats.ms ? stats.ms * 0.9 + (performance.now() - t1) * 0.1 : performance.now() - t1;
+    handle(r, cam, t);
+  }
+  function handle(r, cam, t) {
     const toScreen = (p) => ({ x: ((mirror ? 1 - p.x : p.x) - cam.cx) / cam.sx, y: (p.y - cam.cy) / cam.sy, z: p.z });
     const hands = (r.landmarks || []).map((L, i) => {
       // MediaPipe labels assume a mirrored (selfie) image; flip for the back camera
@@ -143,20 +197,32 @@ export async function startHands({ video, facingMode = 'user', onHands, onFrame,
       const d = (a, b) => Math.hypot(L[a].x - L[b].x, L[a].y - L[b].y);
       const size = d(0, 9) || 1e-3;                 // wrist to middle knuckle, in camera-image units
       const ratio = d(4, 8) / size;                  // thumb tip to index tip, relative to hand size
-      const was = pinching[side] || false;
-      const pinch = was ? ratio < 0.45 : ratio < 0.28;
-      pinching[side] = pinch;
+      // pinch with hysteresis, and a closing pinch must be seen twice (or be clearly closed) before it counts,
+      // so one noisy frame of a relaxed hand doesn't press a button or grab a sofa
+      const st = pinching[side] || (pinching[side] = { on: false, close: 0, hist: [], off: null });
+      if (st.on) st.on = ratio < 0.45;
+      else { st.close = ratio < 0.28 ? st.close + 1 : 0; st.on = st.close >= 2 || ratio < 0.18; }
+      const pinch = st.on;
       // pts stay raw so realhands.js cuts the camera pixels exactly where they are; the pinch point and the
-      // depth drive interaction, so those are smoothed
+      // depth drive interaction, so those are smoothed. Reach magnifies hand movement (and its jitter) by
+      // cam.gain, so the resting smoothing is stronger by the same token (One Euro still follows fast moves).
       const fl = filters[side] || (filters[side] = { x: new OneEuro(1, 4), y: new OneEuro(1, 4), d: new OneEuro(0.8, 3) });
+      fl.x.minCutoff = fl.y.minCutoff = 1 / Math.sqrt(cam.gain || 1);
       const s = t / 1000;
       const raw = handDepth(L, (r.worldLandmarks || [])[i], video.videoWidth, video.videoHeight, stats.hfov);
       const depth = raw == null ? null : fl.d.filter(raw, s);
-      return { side, pts, size, pinch, depth,
-        x: fl.x.filter((pts[4].x + pts[8].x) / 2, s), y: fl.y.filter((pts[4].y + pts[8].y) / 2, s) };
+      let x = fl.x.filter((pts[4].x + pts[8].x) / 2, s), y = fl.y.filter((pts[4].y + pts[8].y) / 2, s);
+      // Closing thumb and index moves the point between them, so a pinch landed beside what you aimed at. When a
+      // pinch starts, take the point from just before the fingers closed and keep that offset for the whole pinch.
+      if (pinch && !st.off) { const p0 = st.hist[0] || [x, y]; st.off = [p0[0] - x, p0[1] - y]; }
+      if (!pinch) st.off = null;
+      st.hist.push([x, y]); if (st.hist.length > 3) st.hist.shift();
+      if (st.off) { x += st.off[0]; y += st.off[1]; }
+      return { side, pts, size, pinch, depth, x, y };
     });
     for (const k of Object.keys(pinching)) if (!hands.some((h) => h.side === k)) delete pinching[k];
     for (const k of Object.keys(filters)) if (!hands.some((h) => h.side === k)) delete filters[k];
+    seen = hands.length;
     onHands(hands, cam);
   }
   loop();
@@ -164,6 +230,6 @@ export async function startHands({ video, facingMode = 'user', onHands, onFrame,
     facingMode, stats,
     setMaxHz(hz) { stats.maxHz = hz; },
     setFov(deg) { stats.hfov = deg; }, // calibrate depth: hold a hand 50 cm from the camera, tune until depth ≈ 0.5
-    stop() { running = false; stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; },
+    stop() { running = false; wk?.w.terminate(); stream.getTracks().forEach((t) => t.stop()); video.srcObject = null; },
   };
 }

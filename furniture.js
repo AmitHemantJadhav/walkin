@@ -10,9 +10,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 export const FURNITURE = {
   sofa: { name: 'Sofa', w: 2.1, d: 0.95, h: 0.95, model: 'loungeSofa.glb', hero: 'hero/sofa_02/sofa_02_1k.gltf', against: 'wall' },
   armchair: { name: 'Armchair', w: 0.9, d: 0.9, h: 0.95, model: 'loungeChair.glb', hero: 'hero/modern_arm_chair_01/modern_arm_chair_01_1k.gltf', against: 'free', tone: 'fabricLt' },
-  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
-  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/GothicBed_01/GothicBed_01_1k.gltf', against: 'wall' },
-  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', hero: 'hero/dining_table/dining_table_1k.gltf', against: 'free' },
+  queen: { name: 'Queen bed', w: 1.6, d: 2.1, h: 0.7, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
+  king: { name: 'King bed', w: 1.95, d: 2.15, h: 0.75, model: 'bedDouble.glb', hero: 'hero/objaverse/08f7f65edfea417b8ed9ca748381e507.glb', against: 'wall' },
+  table: { name: 'Dining table', w: 1.8, d: 0.9, h: 0.74, model: 'table.glb', hero: 'hero/objaverse/d7afff23c741411c82a5994ae9940669.glb', against: 'free' },
   desk: { name: 'Desk', w: 1.4, d: 0.7, h: 0.74, model: 'desk.glb', hero: 'hero/metal_office_desk/metal_office_desk_1k.gltf', against: 'wall' },
   // pieces a staged room needs
   chair: { name: 'Chair', w: 0.45, d: 0.5, h: 0.9, model: 'chairModernFrameCushion.glb', hero: 'hero/dining_chair_02/dining_chair_02_1k.gltf', against: 'small' },
@@ -20,9 +20,14 @@ export const FURNITURE = {
   sidetable: { name: 'Side table', w: 0.55, d: 0.45, h: 0.45, model: 'sideTable.glb', hero: 'hero/side_table_tall_01/side_table_tall_01_1k.gltf', against: 'small', tone: 'woodLt' },
   coffeetable: { name: 'Coffee table', w: 1.2, d: 0.7, h: 0.45, model: 'tableCoffee.glb', hero: 'hero/coffee_table_round_01/coffee_table_round_01_1k.gltf', against: 'free' },
   tvstand: { name: 'TV stand', w: 1.4, d: 0.4, h: 0.5, model: 'cabinetTelevision.glb', hero: 'hero/modern_wooden_cabinet/modern_wooden_cabinet_1k.gltf', against: 'wall', tone: 'woodLt' },
-  tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', against: 'small' },
+  tv: { name: 'Television', w: 1.25, d: 0.25, h: 0.78, model: 'televisionModern.glb', hero: 'hero/objaverse/51cfe336d19243eba66c5fac64a81507.glb', against: 'small' },
   bookcase: { name: 'Bookcase', w: 0.8, d: 0.35, h: 1.8, model: 'bookcaseOpen.glb', hero: 'hero/wooden_display_shelves_01/wooden_display_shelves_01_1k.gltf', heroYaw: Math.PI / 2, against: 'wall', tone: 'woodLt' },
-  floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', against: 'small' },
+  dresser: { name: 'Dresser', w: 1.4, d: 0.5, h: 0.8, hero: 'hero/objaverse/2a0141217f9b4ae99abaf1a1a01683f1.glb', against: 'wall' },
+  diningset: { name: 'Dining set', w: 2.4, d: 2.2, h: 0.75, hero: 'hero/objaverse/774971f63ea54cdba8119439f4ff09c5.glb', against: 'free' },
+  fridge: { name: 'Fridge', w: 0.9, d: 0.75, h: 1.8, hero: 'hero/objaverse/75a7a3a8146849dea698cfd04f73482b.glb', against: 'wall' },
+  stove: { name: 'Stove', w: 0.9, d: 0.65, h: 0.92, hero: 'hero/objaverse/b10785bcfc6e46a080614293c3ff6e1c.glb', against: 'wall' },
+  tablelamp: { name: 'Table lamp', w: 0.35, d: 0.35, h: 0.6, hero: 'hero/objaverse/8f4abf0c719d42109f316ecece72dd75.glb', against: 'small' },
+  floorlamp: { name: 'Floor lamp', w: 0.35, d: 0.35, h: 1.6, model: 'lampRoundFloor.glb', hero: 'hero/objaverse/c277c4d1742b4f118becbfefd325ce71.glb', against: 'small' },
   rug: { name: 'Rug', w: 2.4, d: 1.6, h: 0.015, model: 'rugRectangle.glb', against: 'free', flat: true, tone: 'fabricLt' },
   ruground: { name: 'Round rug', w: 1.8, d: 1.8, h: 0.015, model: 'rugRound.glb', against: 'free', flat: true, tone: 'fabricLt' },
   plant: { name: 'Plant', w: 0.45, d: 0.45, h: 1.3, model: 'pottedPlant.glb', hero: 'hero/potted_plant_02/potted_plant_02_1k.gltf', against: 'small' },
@@ -44,7 +49,7 @@ const FLIPPED = new Set(['loungeSofa.glb', 'loungeChair.glb']);
 // Photoreal CC0 pieces from Poly Haven (see models/CREDITS.md). They are bigger than the kit models,
 // so they load after it: a piece appears instantly as the kit model and sharpens when the hero arrives.
 // Poly Haven models that face +z: the gothic bed's headboard and the shelves' open side
-const HERO_FLIPPED = new Set(['hero/GothicBed_01/GothicBed_01_1k.gltf']);
+const HERO_FLIPPED = new Set();
 
 
 // ------------------------------------------------------------------ materials (S7)

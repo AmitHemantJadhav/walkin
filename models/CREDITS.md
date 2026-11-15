@@ -65,3 +65,22 @@ The full set, fetched by `tools/heroes.py` (Poly Haven asset id → catalog kind
 All CC0 (<https://polyhaven.com/license>). A hero keeps its proportions (`fitToSpec` fits it inside
 the catalog box uniformly, turning it 90° when its long side is on the other axis) and its own PBR
 materials; the kit's style tints only multiply them.
+
+## Sketchfab models via Objaverse (`hero/objaverse/`)
+
+Modern pieces Poly Haven does not have, from the Objaverse mirror of Sketchfab's Creative Commons
+models (Deitke et al., 2022; <https://objaverse.allenai.org>). Each is CC-BY 4.0: credit the author,
+link the model. Textures resized to 1k with gltf-transform; geometry untouched. Fetched by hand with
+`tools/heroes.py`'s Objaverse section (uids in the catalog).
+
+| File | Kind | Model | Author | License | Source |
+|---|---|---|---|---|---|
+| `08f7f65e…` | bed | Bed | [Ambriel](https://sketchfab.com/Ambriel) | CC-BY | [08f7f65edfea…](https://sketchfab.com/3d-models/08f7f65edfea417b8ed9ca748381e507) |
+| `2a014121…` | dresser | Y7VF00 | [Interiors3D](https://sketchfab.com/Interiors3D) | CC-BY | [2a0141217f9b…](https://sketchfab.com/3d-models/2a0141217f9b4ae99abaf1a1a01683f1) |
+| `d7afff23…` | table | Kitchen Table | [CioJay](https://sketchfab.com/CioJay) | CC-BY | [d7afff23c741…](https://sketchfab.com/3d-models/d7afff23c741411c82a5994ae9940669) |
+| `774971f6…` | diningset | set | [jeilocreativedesignworld](https://sketchfab.com/jeilocreativedesignworld) | CC-BY | [774971f63ea5…](https://sketchfab.com/3d-models/774971f63ea54cdba8119439f4ff09c5) |
+| `75a7a3a8…` | fridge | Rr | [jjjjeongggg](https://sketchfab.com/jjjjeongggg) | CC-BY | [75a7a3a81468…](https://sketchfab.com/3d-models/75a7a3a8146849dea698cfd04f73482b) |
+| `b10785bc…` | stove | Thor Kitchen 6 Burner Gas Range | [allenbranch](https://sketchfab.com/allenbranch) | CC-BY | [b10785bcfc6e…](https://sketchfab.com/3d-models/b10785bcfc6e46a080614293c3ff6e1c) |
+| `8f4abf0c…` | tablelamp | Modern lamp | [starkerg](https://sketchfab.com/starkerg) | CC-BY | [8f4abf0c719d…](https://sketchfab.com/3d-models/8f4abf0c719d42109f316ecece72dd75) |
+| `c277c4d1…` | floorlamp | Antique Lamp | [aya.albayati](https://sketchfab.com/aya.albayati) | CC-BY | [c277c4d1742b…](https://sketchfab.com/3d-models/c277c4d1742b4f118becbfefd325ce71) |
+| `51cfe336…` | tv | Tv_Sks | [Skippysnk](https://sketchfab.com/Skippysnk) | CC-BY | [51cfe336d192…](https://sketchfab.com/3d-models/51cfe336d19243eba66c5fac64a81507) |

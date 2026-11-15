@@ -861,12 +861,22 @@ function holdMenu(h, now) {
 const UI_SEL = 'button, input[type=range], select, [role=menuitem]';
 const uiDrag = {};
 let uiHover = null;
+const UI_MAGNET = 36; // px: a hand this close to a control counts as on it (a hand is not a mouse)
 function uiAt(h) {
   if (vr) return null;
-  const el = document.elementFromPoint(h.x * innerWidth, h.y * innerHeight);
-  if (!el || el === renderer.domElement) return null;
-  const c = el.closest(UI_SEL);
-  return c && !c.disabled ? c : null;
+  const px = h.x * innerWidth, py = h.y * innerHeight;
+  const el = document.elementFromPoint(px, py);
+  const c = el && el !== renderer.domElement ? el.closest(UI_SEL) : null;
+  if (c) return c.disabled ? null : c;
+  let best = null, bestD = UI_MAGNET; // nothing exactly under the hand: the nearest visible control, if close
+  for (const b of document.querySelectorAll('#bar button, #sunpanel button, #sunpanel input[type=range], .pop:not([hidden]) button')) {
+    if (b.disabled) continue;
+    const r = b.getBoundingClientRect();
+    if (!r.width) continue;
+    const d = Math.hypot(Math.max(r.left - px, 0, px - r.right), Math.max(r.top - py, 0, py - r.bottom));
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
 }
 function uiSlide(el, h) {
   const r = el.getBoundingClientRect();
@@ -1122,7 +1132,8 @@ const fpsAlways = params.has('fps');
 // `node tools/fps-report.mjs <server log>` reads them back. ?fpsreport=off stops it.
 const fpsReport = { on: params.get('fpsreport') !== 'off', sid: Math.random().toString(36).slice(2, 7), s: [] };
 function reportFps(fps, handHz) {
-  if (!fpsReport.on || !vr || !handsApi) { fpsReport.s.length = 0; return; }
+  const eyes = document.body.classList.contains('eyes');
+  if (!fpsReport.on || !(vr || eyes) || !handsApi) { fpsReport.s.length = 0; return; }
   fpsReport.s.push(fps);
   if (fpsReport.s.length < 10) return;
   const s = fpsReport.s.sort((a, b) => a - b);
@@ -1130,7 +1141,7 @@ function reportFps(fps, handHz) {
   const ua = navigator.userAgent;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const q = new URLSearchParams({
-    fpsreport: 1, sid: fpsReport.sid,
+    fpsreport: 1, sid: fpsReport.sid, mode: vr ? 'headset' : 'eyes',
     dev: /iPhone|iPad/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'desktop',
     scr: `${screen.width}x${screen.height}@${devicePixelRatio}`,
     med: s[5].toFixed(0), min: s[0].toFixed(0), pr: perf.pr, px: `${px.x}x${px.y}`,

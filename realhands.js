@@ -20,7 +20,7 @@
 const FINGERS = [[1, 2], [2, 3], [3, 4], [5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12],
   [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
 const PALM = [0, 1, 2, 5, 9, 13, 17];
-const MAX_W = 1280;       // canvas width cap: 720 was visibly soft on an iPhone screen (Amit, in the headset)
+const MAX_W = 1024;       // canvas width cap: 720 was visibly soft on an iPhone screen; more only costs fill
 const FRAME_W = 640;      // camera copy width: the whole 640 px camera frame, so the hand is as sharp as the camera allows
 const TIPS = new Set([4, 8, 12, 16, 20]);
 const ALPHA = 0.95;       // a resting hand
@@ -47,8 +47,15 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
   // Off-screen buffers, the whole camera image (not just the crop the view shows: a shrunk hand can reach past the
   // crop). iOS Safari ignores globalCompositeOperation when the source is a <video>, so the video is only ever drawn
   // plainly into `frame`; the masking is canvas-to-canvas in `mask`. `edge` fades the hand out at the camera's edges.
-  const frame = document.createElement('canvas'), fctx = frame.getContext('2d', { willReadFrequently: true });
-  const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: true });
+  // willReadFrequently (a CPU canvas) only for the skin-colour path, which reads pixels back; everything else stays
+  // on the GPU. On CPU canvases the old cut-out took ~9 ms per detection on a laptop, most of a phone's frame.
+  const frame = document.createElement('canvas'), fctx = frame.getContext('2d', { willReadFrequently: seg });
+  const mask = document.createElement('canvas'), mctx = mask.getContext('2d', { willReadFrequently: seg });
+  // the fast path works only in each hand's box: the mask at a quarter of the size (scaling it up feathers the
+  // edge for free, no shadowBlur), then the camera pixels cut by it at full size
+  const small = document.createElement('canvas'), sctx = small.getContext('2d');
+  const handc = document.createElement('canvas'), hctx = handc.getContext('2d');
+  const Q = 0.25;
   const skin = {}; // per hand: running skin colour model {m: [cb, cr], c: [cbb, cbr, crr]}
   const edge = document.createElement('canvas'), ectx = edge.getContext('2d');
   let fresh = false; // `frame` holds the image the current landmarks were found in
@@ -192,24 +199,43 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
       const span = Math.hypot(P[0][0] - P[9][0], P[0][1] - P[9][1]) || 1;
       // 1) this hand cut out by its skin colour; if that can't run, the landmark mask feathered with a blurred
       //    shadow of itself, and the camera kept inside it
+      let src = mask, sx0 = 0, sy0 = 0;
       if (seg && segment(h, P, span, fw, fh)) {
         mctx.globalCompositeOperation = 'destination-in';
         mctx.drawImage(edge, 0, 0);
         mctx.globalCompositeOperation = 'source-over';
       } else {
-      mctx.setTransform(1, 0, 0, 1, 0, 0);
-      mctx.globalCompositeOperation = 'source-over';
-      mctx.clearRect(0, 0, fw, fh);
-      mctx.fillStyle = mctx.strokeStyle = mctx.shadowColor = '#fff';
-      mctx.lineCap = mctx.lineJoin = 'round';
-      mctx.shadowBlur = span * 0.05;
-      maskPath(mctx, P, span);
-      mctx.shadowBlur = 0;
-      mctx.globalCompositeOperation = 'source-in';
-      mctx.drawImage(frame, 0, 0);
-      mctx.globalCompositeOperation = 'destination-in';
-      mctx.drawImage(edge, 0, 0);
-      mctx.globalCompositeOperation = 'source-over';
+        // the hand's box in frame px, padded for the stroke width
+        const pad = span * 0.3;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const [x, y] of P) { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; }
+        x0 = Math.max(0, Math.floor(x0 - pad)); y0 = Math.max(0, Math.floor(y0 - pad));
+        x1 = Math.min(fw, Math.ceil(x1 + pad)); y1 = Math.min(fh, Math.ceil(y1 + pad));
+        const bw = x1 - x0, bh = y1 - y0;
+        if (bw < 4 || bh < 4) continue;
+        const sw = Math.max(2, Math.ceil(bw * Q)), sh = Math.max(2, Math.ceil(bh * Q));
+        if (small.width < sw || small.height < sh) { small.width = Math.max(small.width, sw); small.height = Math.max(small.height, sh); }
+        sctx.setTransform(1, 0, 0, 1, 0, 0);
+        sctx.globalCompositeOperation = 'source-over';
+        sctx.clearRect(0, 0, small.width, small.height);
+        sctx.setTransform(Q, 0, 0, Q, -x0 * Q, -y0 * Q);
+        sctx.fillStyle = sctx.strokeStyle = '#fff';
+        sctx.lineCap = sctx.lineJoin = 'round';
+        maskPath(sctx, P, span);
+        sctx.setTransform(1, 0, 0, 1, 0, 0);
+        sctx.globalCompositeOperation = 'destination-in';   // fade at the camera's own edges
+        sctx.drawImage(edge, x0, y0, bw, bh, 0, 0, sw, sh);
+        sctx.globalCompositeOperation = 'source-over';
+        if (handc.width < bw || handc.height < bh) { handc.width = Math.max(handc.width, bw); handc.height = Math.max(handc.height, bh); }
+        hctx.globalCompositeOperation = 'source-over';
+        hctx.clearRect(0, 0, handc.width, handc.height);
+        hctx.drawImage(frame, x0, y0, bw, bh, 0, 0, bw, bh);
+        hctx.globalCompositeOperation = 'destination-in';
+        hctx.imageSmoothingEnabled = true;
+        hctx.drawImage(small, 0, 0, sw, sh, 0, 0, bw, bh); // bilinear upscale = a soft edge
+        hctx.globalCompositeOperation = 'source-over';
+        src = handc; sx0 = x0; sy0 = y0;
+        h._box = [bw, bh];
       }
 
       // 2) into each eye, shrunk by `scale` around the point between thumb and index tips
@@ -223,7 +249,8 @@ export function createRealHands(video, { scale = 0.6, seg = true } = {}) {
         ctx.save();
         ctx.beginPath(); ctx.rect(x0, 0, ew, H); ctx.clip();
         ctx.setTransform(sc * kx, 0, 0, sc * ky, Ax * (1 - sc) + sc * (x0 + ox), Ay * (1 - sc) + sc * oy);
-        ctx.drawImage(mask, 0, 0);
+        if (src === mask) ctx.drawImage(mask, 0, 0);
+        else ctx.drawImage(src, 0, 0, h._box[0], h._box[1], sx0, sy0, h._box[0], h._box[1]);
         ctx.restore();
       }
       ctx.setTransform(1, 0, 0, 1, 0, 0);

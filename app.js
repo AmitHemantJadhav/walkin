@@ -957,7 +957,9 @@ async function restartHands(mode) {
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
     onFrame: (cam) => { if (handStyle === 'real' && handsList.length) realHands.snap(cam); }, // same frame as the landmarks
-    viewFov: HAND_MAP === 'angle' ? () => (vr ? camera.fov : null) : null,
+    // the back camera sees what is in front of the phone, so its hand is drawn where it really is (passthrough):
+    // in the headset and with the phone held at your eyes. The front camera faces you: the zoomed crop.
+    viewFov: HAND_MAP === 'angle' && mode === 'environment' ? () => camera.fov : null,
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
@@ -1125,6 +1127,23 @@ $('bVR').onclick = () => toggleVR();
 $('exitvr').onclick = () => toggleVR(false);
 $('bHands').onclick = toggleHands;
 $('bCam').onclick = toggleCam;
+// "At eyes": the phone held up at your eyes like a window, full screen (no lenses needed): look around with the
+// gyro, hands seen by the back camera and drawn where they really are. One tap, since iOS needs a tap for motion.
+async function eyesMode() {
+  const b = $('bEyes');
+  if (b && b.classList.contains('on')) {             // second tap: back to the normal handheld setup
+    b.classList.remove('on');
+    if (handCam !== 'user') await toggleCam();
+    return;
+  }
+  if (vr) await toggleVR(false);
+  if (!gyro.on) await toggleGyro();
+  if (handCam !== 'environment') { handCam = 'environment'; $('bCam').textContent = '📷 Back'; }
+  if (handsApi) { if (handsApi.facingMode !== 'environment') await restartHands('environment'); }
+  else await toggleHands();
+  if (b) b.classList.add('on');
+}
+if ($('bEyes')) $('bEyes').onclick = eyesMode;
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
 $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
 // A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),

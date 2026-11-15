@@ -568,7 +568,11 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         # reads as a huge fold angle and would hide the thing we actually want to know.
         captured, fold, _, _ = meshquality.measure(pos.astype(np.float64), idx)
         if close_holes:
-            cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx)
+            # Cap everything, not just the undersides. A cap used to be a flat colour and read as a
+            # pasted-on slab, which is why it was limited to holes facing the floor. tools/capskin.py
+            # now gives the caps the piece's own material, so closing the back is worth doing: a
+            # piece can be turned round and show a back instead of the inside of its own front.
+            cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx, facing=1.0)
         else:
             cap_pos, cap_idx, open_before, open_after = None, (), 0, 0
         if close_holes and len(cap_idx):
@@ -598,6 +602,7 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
             capped=int(len(cap_idx)) if close_holes else 0,
+            capVerts=int(len(cap_pos)) if (close_holes and cap_pos is not None) else 0,
             openEdge=round(float(open_after) / max(int(len(idx)) * 1.5, 1), 4),
             fold=(None if fold != fold else round(float(fold), 1)),
             captured=(None if captured != captured else round(float(captured), 3)),

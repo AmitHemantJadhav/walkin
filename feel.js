@@ -25,9 +25,9 @@ const W = () => window.walkin;
 
 const st = new WeakMap();    // item -> { px, py, t, lift, liftV, lx, ly, arrive0, arriveDelay, flat }
 const seen = new WeakSet();
-let started = 0;
+let started = 0, houseKey = null;   // a house switched in place restores its pieces: they were already there
 // walkin.feel.slow = 4 plays arrivals four times slower (to show them off, or to check them frame by frame)
-const feel = { slow: 1, removeSelected: (...a) => removeSelected(...a), LIFT, LEAN };
+const feel = { slow: 1, LIFT, LEAN };
 
 // the parts of a piece that move with it visually: everything but its contact shadow and price tags
 const bodyParts = (item) => item.children.filter((c) => !c.userData.shadow && !c.userData.priceTag && !c.isSprite && !c.userData.feelRoll);
@@ -45,6 +45,8 @@ function tick(dt) {
   if (!w || !w.furniture) return;
   const now = performance.now();
   const k = Math.min(dt || 0.016, 0.05);
+  const hk = w.house && (w.house.model || w.house.name);
+  if (hk !== houseKey) { houseKey = hk; started = now; }   // the grace period starts again for the new house
   let arrivals = 0;
   for (const item of w.furniture.children) {
     if (!item.userData || !item.userData.kind) continue;
@@ -160,7 +162,7 @@ function rollOut(w, item, s, u) {
 }
 
 // ------------------------------------------------------------------ selection
-let outline = null, chip = null, chipFor = null, footCache = null;
+let outline = null, footCache = null;
 const baseColor = new THREE.Color(0x3ccf8e);
 const _m = new THREE.Matrix4(), _b = new THREE.Box3(), _v = new THREE.Vector3();
 
@@ -213,7 +215,7 @@ function selection(w) {
     outline.renderOrder = 1.5;
     w.scene.add(outline);
   }
-  if (!item) { outline.visible = false; hideChip(); footCache = null; return; }
+  if (!item) { outline.visible = false; footCache = null; return; }
   if (!footCache || footCache.item !== item || performance.now() - footCache.t > 600) {
     const fb = localFootprint(item);
     if (fb) {
@@ -235,60 +237,6 @@ function selection(w) {
   outline.translateX(footCache.cx); outline.translateY(footCache.cy);
   outline.visible = true;
   // no floating buttons on the piece: rotate and remove stay in the menu, on the keys (R, Delete) and by voice
-}
-
-function makeChip() {
-  const el = document.createElement('div');
-  el.id = 'feel-chip';
-  el.innerHTML = '<button data-a="rot" title="Turn 45°">⟳ Rotate</button><button data-a="del" title="Remove this piece">✕ Remove</button>';
-  const css = document.createElement('style');
-  css.textContent = `#feel-chip{position:fixed;z-index:8;display:flex;gap:4px;padding:4px;border-radius:999px;
-    background:rgba(20,22,26,.72);backdrop-filter:blur(14px) saturate(1.3);-webkit-backdrop-filter:blur(14px) saturate(1.3);
-    box-shadow:0 8px 30px rgba(0,0,0,.35);transform:translate(-50%,-100%);transition:opacity .18s;pointer-events:auto;opacity:0}
-    #feel-chip.on{opacity:1}
-    #feel-chip button{all:unset;cursor:pointer;color:#fff;font:600 12px/1 system-ui,-apple-system,sans-serif;padding:8px 12px;border-radius:999px;white-space:nowrap}
-    #feel-chip button:hover{background:rgba(255,255,255,.14)} #feel-chip button[data-a=del]:hover{background:rgba(255,90,95,.3)}`;
-  document.head.appendChild(css);
-  el.addEventListener('pointerdown', (e) => e.stopPropagation());
-  el.addEventListener('click', (e) => {
-    const a = e.target.closest('button')?.dataset.a;
-    if (a === 'rot') document.getElementById('bRotate')?.click();
-    if (a === 'del') removeSelected();
-  });
-  document.body.appendChild(el);
-  return el;
-}
-function hideChip() { if (chip) chip.classList.remove('on'); chipFor = null; }
-function showChip(w, item) {
-  if (!chip) chip = makeChip();
-  const top = _v.set(footCache.cx, footCache.cy, footCache.top + 0.12);
-  top.applyMatrix4(item.matrixWorld);
-  const p = top.clone().project(w.camera);
-  const behind = p.z > 1 || p.z < -1;
-  if (behind || Math.abs(p.x) > 1.05 || Math.abs(p.y) > 1.05) { chip.classList.remove('on'); return; }
-  chip.style.left = `${(p.x * 0.5 + 0.5) * innerWidth}px`;
-  chip.style.top = `${(-p.y * 0.5 + 0.5) * innerHeight - 8}px`;
-  chip.classList.add('on');
-  chipFor = item;
-}
-
-/** Remove the selected piece with a short shrink, then the dock's Delete (so app.js clears its state). */
-function removeSelected() {
-  const w = W(), item = w && w.selected;
-  if (!item) return;
-  const t0 = performance.now(), parts = bodyParts(item);
-  const bases = parts.map((p) => ({ p, s: p.scale.clone() }));
-  hideChip();
-  const step = () => {
-    const t = Math.min(1, (performance.now() - t0) / 180);
-    for (const { p, s } of bases) p.scale.set(s.x * (1 - 0.6 * t), s.y * (1 - 0.6 * t), s.z * (1 - t * 0.95));
-    if (t < 1) requestAnimationFrame(step);
-    else {
-      if (w.selected === item) document.getElementById('bDelete')?.click();
-      else if (item.parent) item.parent.remove(item);
-    }
-  };
-  requestAnimationFrame(step);
 }
 
 (function start(tries = 0) {

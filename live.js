@@ -44,7 +44,8 @@ let session = null, micStream = null, micCtx = null, micNode = null, playCtx = n
 let playing = [], nextAt = 0, idleTimer = 0, ending = false, resolveEnd = null, active = false;
 let pending = '', answered = false;              // words of the turn in flight, and whether John answered them yet
 
-const emit = (detail) => window.dispatchEvent(new CustomEvent('walkin:live', { detail }));
+let speakingNow = false; // for app.js: wait for John to finish before switching house and office
+const emit = (detail) => { if (detail.kind === 'speaking') speakingNow = !!detail.on; window.dispatchEvent(new CustomEvent('walkin:live', { detail })); };
 
 // ------------------------------------------------------------------ availability
 async function available() {
@@ -337,6 +338,6 @@ function stop(why = 'stop', result = true) {
 
 (function attach(tries = 0) {
   if (!window.walkin || !window.walkin.agent) { if (tries < 600) setTimeout(() => attach(tries + 1), 200); return; }
-  window.walkin.live = { available, start, stop, prime, sayExact, isActive: () => active, _onMessage: onMessage, _upperTypes: upperTypes,
+  window.walkin.live = { available, start, stop, prime, sayExact, isActive: () => active, isSpeaking: () => speakingNow, _onMessage: onMessage, _upperTypes: upperTypes,
     markDown, down: () => (Date.now() < downUntil ? downWhy : null), _fail: fail };
 })();

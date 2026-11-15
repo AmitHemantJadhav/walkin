@@ -16,6 +16,8 @@ const state = { mode: 'off', heard: '', interim: '', carry: '', wakeIdx: -1, sil
 function el(tag, cls, parent = document.body) { const e = document.createElement(tag); e.className = cls; parent.appendChild(e); return e; }
 const glow = el('div', 'vx-glow');
 const capWrap = el('div', 'vx-captions');
+// captions are off: nothing but the scene on screen while John talks (Amit). ?captions=1 shows them.
+if (/[?&]captions=1\b/.test(location.search)) document.body.classList.add('captions');
 const caps = [el('div', 'vx-cap', capWrap), el('div', 'vx-cap vx-cap-right', capWrap)];   // 2nd is only shown in the headset
 const orb = el('button', 'vx-orb');
 orb.type = 'button';

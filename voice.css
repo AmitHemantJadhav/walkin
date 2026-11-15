@@ -46,7 +46,7 @@ body.vr .vx-hint { display: none; }
 
 /* ------------------------------------------------------------------ the orb (typed fallback) and the collapsed Ask panel */
 .vx-orb {
-  position: fixed; left: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 6;
+  position: fixed; right: 16px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 122px); z-index: 6; /* above the sun panel */
   width: 44px; height: 44px; border-radius: 50%; border: 0; padding: 0; cursor: pointer;
   background: radial-gradient(circle at 35% 30%, #fff 0, #bcd2ff 18%, #8a7dff 50%, #ff7fbf 85%);
   box-shadow: 0 0 18px rgba(140, 120, 255, .6), 0 6px 20px rgba(0, 0, 0, .3), inset 0 0 0 1px rgba(255, 255, 255, .5);
@@ -63,7 +63,6 @@ body.agent-open #agent.panel { display: block; bottom: calc(max(16px, env(safe-a
 body.vr .vx-orb, body.vr #agent.panel { display: none !important; }
 
 @media (max-width: 1200px) {
-  .vx-orb { left: auto; right: 16px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 68px); }
   body.agent-open #agent.panel { bottom: calc(max(16px, env(safe-area-inset-bottom)) + 124px); }
   .vx-captions { bottom: calc(max(16px, env(safe-area-inset-bottom)) + 124px); }
 }
@@ -71,3 +70,6 @@ body.vr .vx-orb, body.vr #agent.panel { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .vx-glow, .vx-orb { transition: none; animation: none !important; }
 }
+
+/* no text over the scene unless asked for (?captions=1): John speaks, the screen stays the house */
+body:not(.captions) .vx-captions { display: none !important; }

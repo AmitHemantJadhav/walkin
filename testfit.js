@@ -42,6 +42,9 @@ let group = null;                  // everything we drew
 let lastFit = null;                // the last layout, for zones to rebuild on top of
 let zones = [];                    // reserved rectangles in the row frame
 let lastPeople = null;             // the headcount last asked for, so 'add meeting rooms' keeps it
+let lastLayout = { layout: 'rows', rows: null, pod: 4 }; // and the arrangement, for the same reason
+const CABIN_W = 2.6, CABIN_D = 3.0;  // a private office (cabin): one desk, a chair, room to walk round
+const CABIN_CORRIDOR = 1.5;
 
 const W = () => window.walkin;
 
@@ -267,7 +270,7 @@ function makeFrame(ang, ox, oy) {
  * Benching: pairs of desks back to back, chairs outward, an aisle between every pair of rows, a cross aisle
  * every few desks. Greedy, cell by cell, so a column or a reserved zone just leaves a gap.
  */
-function layoutDesks(g, frame, aisle, extraBlocked) {
+function layoutDesks(g, frame, aisle, extraBlocked, crossEvery = CROSS_EVERY) {
   // extent of the free floor in the row frame
   let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
   for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
@@ -280,7 +283,7 @@ function layoutDesks(g, frame, aisle, extraBlocked) {
 
   const half = DESK.d + CHAIR_ZONE + PULL_OUT;        // one side of a back-to-back pair, from the shared back line
   const stations = [];
-  let v = v0 + half + 0.1;
+  let v = v0 + half + 0.1, block = 0;
   while (v + half <= v1 + 1e-6) {
     let placedInBlock = 0;
     let u = u0 + DESK.w / 2 + 0.1, n = 0;
@@ -292,15 +295,85 @@ function layoutDesks(g, frame, aisle, extraBlocked) {
       for (const facing of beside ? [-1, 1] : []) {    // the pair: one desk faces -v, the other +v
         const centre = v + (DESK.d / 2) * facing;
         const r = stationRect(u, centre, facing);
-        if (isFree(r)) { stations.push({ u, v: centre, facing, rect: r }); placedInBlock++; }
+        if (isFree(r)) { stations.push({ u, v: centre, facing, rect: r, line: block * 2 + (facing > 0 ? 1 : 0) }); placedInBlock++; }
       }
       n++;
-      u += PITCH + (n % CROSS_EVERY === 0 ? CROSS_AISLE : 0);
+      u += PITCH + (n % crossEvery === 0 ? CROSS_AISLE : 0);
     }
+    if (placedInBlock) block++;
     v += 2 * half + aisle;
     if (!placedInBlock) v -= (2 * half + aisle) - CELL * 2;  // nothing fit on this line: creep forward instead
   }
   return stations;
+}
+
+/**
+ * Private offices (cabins): back-to-back rows of CABIN_W x CABIN_D rooms opening onto a corridor, one desk in each,
+ * facing the door. Same greedy sweep as the benching, so columns and zones just leave a gap.
+ */
+function layoutOffices(g, frame, corridor, extraBlocked) {
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (let iy = 0; iy < g.ny; iy++) for (let ix = 0; ix < g.nx; ix++) {
+    if (!g.free[g.at(ix, iy)]) continue;
+    const [u, v] = frame.toLocal(g.x0 + (ix + 0.5) * CELL, g.y0 + (iy + 0.5) * CELL);
+    u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v);
+  }
+  if (!isFinite(u0)) return [];
+  const isFree = (r) => rectFree(g, frame, r) && !extraBlocked.some((z) => !(r.u1 <= z.u0 || z.u1 <= r.u0 || r.v1 <= z.v0 || z.v1 <= r.v0));
+  const out = [];
+  let v = v0 + CABIN_D + 0.05, block = 0;                // v: the shared back wall of a pair of cabin rows
+  while (v + CABIN_D <= v1 + 1e-6) {
+    let placed = 0;
+    for (const side of [-1, 1]) {                       // -1: the row on the -v side of the back wall, door at -v
+      const vc = v + side * CABIN_D / 2;
+      // a corridor in front of the door, or this row is not reachable
+      const front = side > 0 ? { v0: v + CABIN_D, v1: v + CABIN_D + corridor } : { v0: v - CABIN_D - corridor, v1: v - CABIN_D };
+      for (let u = u0 + CABIN_W / 2 + 0.05; u + CABIN_W / 2 <= u1 + 1e-6; u += CABIN_W) {
+        const cab = { u0: u - CABIN_W / 2, u1: u + CABIN_W / 2, v0: vc - CABIN_D / 2, v1: vc + CABIN_D / 2 };
+        if (!isFree(cab) || !isFree({ u0: cab.u0, u1: cab.u1, ...front })) continue;
+        // the desk sits towards the back wall facing the door; the chair between desk and back wall
+        const deskV = v + side * (CHAIR_ZONE + PULL_OUT + 0.05 + DESK.d / 2);
+        out.push({ u, v: deskV, facing: -side, cabin: cab, door: side, line: block * 2 + (side > 0 ? 1 : 0),
+          rect: stationRect(u, deskV, -side) });
+        placed++;
+      }
+    }
+    if (placed) block++;
+    v += 2 * CABIN_D + corridor;
+    if (!placed) v -= (2 * CABIN_D + corridor) - CELL * 2;
+  }
+  return out;
+}
+
+/**
+ * `people` seats as a compact block of `rows` rows near the windows, instead of the `people` seats nearest a window
+ * (which along a long window wall is one long line: Amit's "50 desks in one line"). Rows are lines of desks; a
+ * back-to-back pair is two rows.
+ */
+function selectBlock(stations, people, rows) {
+  const byLine = new Map();
+  for (const s of stations) { if (!byLine.has(s.line)) byLine.set(s.line, []); byLine.get(s.line).push(s); }
+  const lines = [...byLine.keys()].sort((a, b) => a - b).map((k) => byLine.get(k).sort((a, b) => a.u - b.u));
+  if (!lines.length) return [];
+  const n = Math.max(1, Math.min(lines.length, rows || Math.round(people / 12) || 1));
+  const per = Math.ceil(people / n);
+  let best = null;
+  for (let i = 0; i + n <= lines.length; i++) {
+    const set = lines.slice(i, i + n);
+    // centre the block on the seat nearest a window among these rows
+    const anchor = set.flat().reduce((a, s) => (!a || s.window < a.window ? s : a), null);
+    const pick = set.map((L) => L.slice().sort((a, b) => Math.abs(a.u - anchor.u) - Math.abs(b.u - anchor.u)).slice(0, per));
+    const got = pick.reduce((a, L) => a + L.length, 0);
+    const score = (people - Math.min(people, got)) * 1000 + pick.flat().reduce((a, s) => a + s.window, 0) / Math.max(1, got);
+    if (!best || score < best.score) best = { score, pick };
+  }
+  let out = best.pick.flat();
+  // rows that came up short (a column, a zone): top up from the nearest-window seats left over
+  if (out.length < people) {
+    const have = new Set(out);
+    out = out.concat(stations.filter((s) => !have.has(s)).sort((a, b) => a.window - b.window).slice(0, people - out.length));
+  }
+  return out.slice(0, people);
 }
 
 // ------------------------------------------------------------------ daylight and egress
@@ -609,12 +682,14 @@ export function clearTestFit() {
   return { ok: true, say: 'Cleared the test fit.' };
 }
 
+// Off by default: the screen is the scene, and John says these numbers (Amit). ?testfithud=1 shows the box again.
+const SHOW_HUD = /[?&]testfithud=1\b/.test(location.search);
 function hud(text) {
   let el = document.getElementById('testfitHud');
-  if (!text) { if (el) el.remove(); return; }
+  if (!text || !SHOW_HUD) { if (el) el.remove(); return; }
   if (!el) {
     el = document.createElement('div'); el.id = 'testfitHud';
-    Object.assign(el.style, { position: 'fixed', left: '16px', bottom: '72px', maxWidth: '46vw', padding: '10px 14px', borderRadius: '12px',
+    Object.assign(el.style, { position: 'fixed', left: '150px', bottom: '16px', maxWidth: 'calc(100vw - 460px)', padding: '10px 14px', borderRadius: '12px',
       background: 'rgba(20,20,24,0.72)', color: '#fff', font: '14px/1.4 -apple-system, Helvetica, Arial', backdropFilter: 'blur(8px)', zIndex: 30, whiteSpace: 'pre-line' });
     document.body.appendChild(el);
     // the headset has no room for a card: John's voice is the HUD there
@@ -632,9 +707,15 @@ function hud(text) {
  * Lay the floor out with desks. `people` caps the seats (the ones nearest a window are kept); `aisle` is the
  * clear width between rows. Zones asked for earlier are kept out of the way.
  */
-export async function testFit({ people = null, aisle = 1.2 } = {}) {
+export async function testFit({ people = null, aisle = 1.2, layout = null, rows = null, pod = null } = {}) {
   const w = W();
   if (people) lastPeople = people;
+  // the arrangement sticks until it is changed, so "add a kitchen" after "make them cabins" keeps the cabins
+  layout = /office|cabin|private/i.test(layout || '') ? 'offices' : /pod|cluster|group/i.test(layout || '') ? 'pods'
+    : /row|bench|open/i.test(layout || '') ? 'rows' : lastLayout.layout;
+  if (rows == null && layout === lastLayout.layout) rows = lastLayout.rows;
+  pod = Math.max(4, Math.min(8, Math.round((pod || lastLayout.pod || 4) / 2) * 2));
+  lastLayout = { layout, rows: rows || null, pod };
   if (!w || !w.house || !w.current) return { ok: false, say: 'the viewer is not ready' };
   // The 50k-face mesh arrives a few seconds after the panos; a question asked before that should
   // wait for it, not fail.
@@ -648,11 +729,12 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   const ang = rowDirection(w);
   const frame = makeFrame(ang, 0, 0);
   const wins = windows(w);
-  let stations = layoutDesks(g, frame, aisle, zones);
+  let stations = layout === 'offices' ? layoutOffices(g, frame, Math.max(aisle, CABIN_CORRIDOR), zones)
+    : layoutDesks(g, frame, aisle, zones, layout === 'pods' ? pod / 2 : CROSS_EVERY);
   const benching = stations.length;
   for (const s of stations) { const [x, y] = frame.toWorld(s.u, s.v); s.x = x; s.y = y; s.rot = ang + (s.facing > 0 ? Math.PI : 0); s.window = nearestWindow(wins, x, y); }
   stations.sort((a, b) => a.window - b.window);        // daylight first: the seats nearest a window come first
-  if (people && people < stations.length) stations = stations.slice(0, people);
+  if (people && people < stations.length) stations = selectBlock(stations, people, rows);
   // Nobody asked for a number: say how many fit, but draw only the window-side DRAW_CAP. All 331 cost
   // 6.4 ms of GPU fill on the laptop against 3.7 for 150, and a phone in stereo cannot carry that.
   const drawn = people ? stations : stations.slice(0, DRAW_CAP);
@@ -687,6 +769,7 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   grp.add(await instanced('desk', deskPoses, floorZ));
   grp.add(deskTop(deskPoses, floorZ));
   grp.add(await instanced('chair', chairPoses, floorZ));
+  if (layout === 'offices') grp.add(drawCabins(drawn, frame, floorZ));
   for (const z of zones) grp.add(z.draw(frame, floorZ));
   if (worst) grp.add(ribbon(tracePath(g, field, worst.chair), floorZ, 0x3cb371));
 
@@ -695,17 +778,21 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   const lit = isFinite(worst?.toExit) ? worst.toExit : null;
   lastFit = { stations, g, frame, exits, floorZ, aisle, worst };
   w.testFitLast = lastFit;                               // read-only: where the desks and exits are
-  const say = `${stations.length} seats${people && benching > people ? ` (room for ${benching} at benching density)` : ''}, ` +
+  const nRows = new Set(stations.map((s) => s.line)).size;
+  const what = layout === 'offices' ? `${stations.length} private offices` : layout === 'pods' ? `${stations.length} seats in pods of ${pod}`
+    : `${stations.length} seats in ${nRows} row${nRows === 1 ? '' : 's'}`;
+  const say = `${what}${people && benching > people ? ` (room for ${benching} ${layout === 'offices' ? 'offices' : 'seats'} this way)` : ''}, ` +
     `${near} of them within ${DAYLIGHT_M} m of a window. ${Math.round(area)} m² of usable floor: ` +
     `${Math.floor(area / CODE_PER_PERSON)} people by code at 150 square feet each, ${Math.floor(area / TYPICAL_PER_PERSON)} at 100. ` +
     (lit != null ? `Longest walk to an exit ${lit.toFixed(0)} m through ${exits.length} exit${exits.length === 1 ? '' : 's'} - ` +
       (lit <= EGRESS_SPRINKLERED ? `inside the ${EGRESS_SPRINKLERED} m limit for a sprinklered office.` : `over the ${EGRESS_SPRINKLERED} m limit for a sprinklered office, so that corner needs a second exit.`) : '');
   const exitWhy = exits.map((e) => `${e.width.toFixed(2)} m (${e.why})`).join(', ');
-  hud(`Test fit · ${stations.length} seats${drawn.length < stations.length ? ` (showing ${drawn.length})` : ''} · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
+  hud(`Test fit · ${what}${drawn.length < stations.length ? ` (showing ${drawn.length})` : ''} · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
     (lit != null ? `\nlongest walk to exit ${lit.toFixed(0)} m` : '') + (zones.length ? `\n${zones.length} zone${zones.length === 1 ? '' : 's'}: ${zones.map((z) => z.name).join(', ')}` : ''));
   return { ok: true, ms: Math.round(performance.now() - t0), seats: stations.length, drawn: drawn.length, benching_max: benching, near_window: near,
     usable_m2: Math.round(area), code_occupancy: Math.floor(area / CODE_PER_PERSON), typical_occupancy: Math.floor(area / TYPICAL_PER_PERSON),
-    windows: wins.length, exits: exits.length, exit_doors: exitWhy, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle, say };
+    windows: wins.length, exits: exits.length, exit_doors: exitWhy, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle,
+    layout, rows: layout === 'offices' ? undefined : nRows, pod: layout === 'pods' ? pod : undefined, say };
 }
 
 /** Let go of everything this file made, and nothing it borrowed from the GLB cache. */
@@ -759,6 +846,38 @@ function tracePath(g, field, from) {
   return pts.filter((_, i) => i % 3 === 0 || i === pts.length - 1);
 }
 
+/** Cabin walls: frosted side and back walls, a clear glass front with a door gap. Instanced, one draw per part. */
+function drawCabins(stations, frame, floorZ) {
+  const H = 2.4, T = 0.06, out = new THREE.Group();
+  const walls = [], glass = [];
+  for (const s of stations) {
+    const c = s.cabin; if (!c) continue;
+    const back = s.door > 0 ? c.v0 : c.v1, front = s.door > 0 ? c.v1 : c.v0;
+    walls.push({ u: (c.u0 + c.u1) / 2, v: back, len: c.u1 - c.u0, along: true });   // back wall
+    walls.push({ u: c.u0, v: (c.v0 + c.v1) / 2, len: c.v1 - c.v0, along: false });  // side walls (shared ones overlap)
+    walls.push({ u: c.u1, v: (c.v0 + c.v1) / 2, len: c.v1 - c.v0, along: false });
+    const doorW = 0.9, glassLen = (c.u1 - c.u0) - doorW;                             // glass front, door at one end
+    glass.push({ u: c.u0 + glassLen / 2, v: front, len: glassLen, along: true });
+  }
+  const make = (list, mat) => {
+    const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0, 0.5);
+    const im = new THREE.InstancedMesh(geo, mat, list.length);
+    im.renderOrder = 3; im.frustumCulled = false; im.userData.ours = true;
+    const M = new THREE.Matrix4(), S = new THREE.Matrix4();
+    list.forEach((p, i) => {
+      const [x, y] = frame.toWorld(p.u, p.v);
+      S.makeScale(p.along ? p.len : T, p.along ? T : p.len, H);
+      M.makeRotationZ(frame.ang).setPosition(x, y, floorZ).multiply(S);
+      im.setMatrixAt(i, M);
+    });
+    im.instanceMatrix.needsUpdate = true;
+    return im;
+  };
+  out.add(make(walls, new THREE.MeshStandardMaterial({ color: 0xe9eef2, roughness: 0.6, transparent: true, opacity: 0.55, depthWrite: false })));
+  out.add(make(glass, new THREE.MeshStandardMaterial({ color: 0xbfe3ff, roughness: 0.1, metalness: 0.1, transparent: true, opacity: 0.18, depthWrite: false })));
+  return out;
+}
+
 // ------------------------------------------------------------------ zones by voice
 const ZONE_SIZE = {
   meeting: (seats) => (seats <= 4 ? [3.2, 2.8] : seats <= 6 ? [3.8, 3.0] : seats <= 8 ? [4.4, 3.2] : seats <= 12 ? [5.4, 3.6] : [6.4, 4.0]),
@@ -772,7 +891,7 @@ const ZONE_SIZE = {
  * Reserve floor for meeting rooms, a kitchen, a lounge, then lay the desks out around them.
  * `where`: "back" (farthest from the exits), "window", "entrance", or nothing (farthest from the windows).
  */
-export async function testFitZones({ zones: asked = [], people = null, aisle = 1.2 } = {}) {
+export async function testFitZones({ zones: asked = [], people = null, aisle = 1.2, layout = null, rows = null, pod = null } = {}) {
   const w = W();
   if (!w || !w.house || !w.current) return { ok: false, say: 'the viewer is not ready for a test fit' };
   for (let i = 0; i < 60 && !w.occluderMesh; i++) await new Promise((r) => setTimeout(r, 250));
@@ -825,7 +944,7 @@ export async function testFitZones({ zones: asked = [], people = null, aisle = 1
     }
   }
   // "add four meeting rooms" after "seat 150" keeps the 150: the follow-up rarely repeats the number
-  const res = await testFit({ people: people || lastPeople, aisle });
+  const res = await testFit({ people: people || lastPeople, aisle, layout, rows, pod });
   if (!res.ok) return res;
   const names = zones.map((z) => z.name);
   res.zones = names;
@@ -896,19 +1015,27 @@ if (window.walkin) register(); else addEventListener('walkin:ready', register, {
 // voice: through agent.js's registry, so John's instructions and Gemini Live get these tools and rules too
 (window.walkinTools = window.walkinTools || []).push({
   run: {
-    test_fit: (args = {}) => testFit({ people: args.people || null, aisle: args.aisle_m || 1.2 }),
-    test_fit_zones: (args = {}) => testFitZones({ zones: args.zones || [], people: args.people || null, aisle: args.aisle_m || 1.2 }),
+    test_fit: (args = {}) => testFit({ people: args.people || null, aisle: args.aisle_m || 1.2, layout: args.layout || null, rows: args.rows || null, pod: args.pod_size || null }),
+    test_fit_zones: (args = {}) => testFitZones({ zones: args.zones || [], people: args.people || null, aisle: args.aisle_m || 1.2,
+      layout: args.layout || null, rows: args.rows || null, pod: args.pod_size || null }),
     clear_test_fit: () => clearTestFit(),
   },
   rules: `- Office test fit ("how many people can I seat here", "fit 150 people", "lay out desks"): call test_fit. To add meeting rooms,
   a kitchen, a lounge, phone booths or reception, call test_fit_zones with the zones and the same headcount the user gave before.
-  Say seats, how many are within 7.5 m of a window, and the longest walk to an exit, in two short sentences.`,
+  Say seats, how many are within 7.5 m of a window, and the longest walk to an exit, in two short sentences.
+- Changing an office layout ("two rows", "in clusters", "pods of six", "cabins", "private offices", "wider aisles",
+  "more spread out"): call test_fit again with layout / rows / pod_size / aisle_m changed and the same people. Never repeat
+  the previous call unchanged. rows = rows of desks ("two rows" -> rows 2; "two aisles" -> rows 3); cabins or private
+  offices -> layout "offices" (one person each); clusters, groups, pods -> layout "pods".`,
   declarations: [
     { name: 'test_fit',
-      description: 'Office test fit: lay real-size desks out across this whole floor in benching rows with aisles, keeping every door clear. Use for "how many people can I seat here", "fit 150 people", "test fit", "lay out desks". Returns seats, the benching maximum, seats within 7.5 m of a window, code occupancy and the longest walk to an exit.',
+      description: 'Office test fit: lay real-size desks out on this floor (open-plan rows, pods, or private cabins), keeping every door clear. Call again with a different layout/rows to rearrange. Use for "how many people can I seat here", "fit 150 people", "test fit", "lay out desks". Returns seats, the benching maximum, seats within 7.5 m of a window, code occupancy and the longest walk to an exit.',
       parameters: { type: 'object', properties: {
         people: { type: 'number', description: 'How many seats to place. Leave empty for as many as fit.' },
-        aisle_m: { type: 'number', description: 'Clear aisle width between rows in metres, default 1.2.' } } } },
+        aisle_m: { type: 'number', description: 'Clear aisle width between rows in metres, default 1.2.' },
+        layout: { type: 'string', enum: ['rows', 'pods', 'offices'], description: 'rows: open-plan rows of desks (default). pods: clusters of pod_size desks with an aisle all round. offices: private cabins with glass fronts, one desk each. Keeps the last one if left empty.' },
+        rows: { type: 'number', description: 'For rows: how many rows of desks, e.g. 2 for "two rows". Leave empty for a compact block.' },
+        pod_size: { type: 'number', description: 'For pods: desks per pod, 4, 6 or 8.' }, } } },
     { name: 'test_fit_zones',
       description: 'Office test fit with zones: reserve meeting rooms, a kitchen, a lounge, phone booths or a reception where the user asks, then lay desks out around them. Use for "add four 8-person meeting rooms on the back wall", "kitchen by the entrance", "a lounge in the corner".',
       parameters: { type: 'object', properties: {
@@ -918,7 +1045,10 @@ if (window.walkin) register(); else addEventListener('walkin:ready', register, {
           count: { type: 'number', description: 'How many of this zone, default 1.' },
           where: { type: 'string', description: 'back, window, or entrance. Leave empty to keep the window line for desks.' } } } },
         people: { type: 'number', description: 'How many desks to place around the zones. Leave empty for as many as fit.' },
-        aisle_m: { type: 'number', description: 'Aisle width in metres, default 1.2.' } },
+        aisle_m: { type: 'number', description: 'Aisle width in metres, default 1.2.' },
+        layout: { type: 'string', enum: ['rows', 'pods', 'offices'], description: 'rows: open-plan rows of desks (default). pods: clusters of pod_size desks with an aisle all round. offices: private cabins with glass fronts, one desk each. Keeps the last one if left empty.' },
+        rows: { type: 'number', description: 'For rows: how many rows of desks, e.g. 2 for "two rows". Leave empty for a compact block.' },
+        pod_size: { type: 'number', description: 'For pods: desks per pod, 4, 6 or 8.' }, },
         required: ['zones'] } },
     { name: 'clear_test_fit', description: 'Take the test-fit desks and zones away again.', parameters: { type: 'object', properties: {} } }
   ],

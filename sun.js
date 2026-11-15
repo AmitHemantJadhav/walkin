@@ -500,7 +500,7 @@ function buildPanel() {
   if (panel) return;
   const css = document.createElement('style');
   css.textContent = `
-    #sunpanel { position: fixed; right: 12px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + 66px); z-index: 30;
+    #sunpanel { position: fixed; right: 12px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 30;
       background: rgba(18,18,22,.78); color: #f4f2ee; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
       border-radius: 14px; padding: 8px 10px; font: 13px/1.35 system-ui, -apple-system, "Inter", "Segoe UI", sans-serif;
       width: 260px; max-width: calc(100vw - 24px); box-shadow: 0 8px 32px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.25); }

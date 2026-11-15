@@ -444,6 +444,7 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
   // the first piece's footprint centre; without it the pieces land where they stood at home,
   // which means nothing here.
   const foreign = !!(model && model !== w.house.model);
+  let row = null;                     // where foreign pieces line up
   const base = location.pathname.replace(/[^/]*$/, '') + `data/${model || w.house.model}/`;
   let meta, buf;
   try {
@@ -527,11 +528,19 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
     // height it was measured at. Using the current pano's floor instead would put every piece on the
     // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).
     if (foreign) {
+      // a row of pieces, side by side: from `into`, or 2 m in front of the viewer (never on the
+      // viewer's own spot, which put every piece inside the camera), each one past the last
       const cur = w.current || {};
       const fz = cur.floorZ ?? floorZ;
-      grp.position.set(into ? into[0] : cur.pos ? cur.pos[0] : 0,
-                       into ? into[1] : cur.pos ? cur.pos[1] : 0, fz);
-      into = null;                       // only the first piece goes to the asked-for spot
+      if (!row) {
+        const yaw = (w.view && w.view.yaw) || 0, at = cur.pos || [0, 0];
+        row = { x: into ? into[0] : at[0] + Math.cos(yaw) * 2, y: into ? into[1] : at[1] + Math.sin(yaw) * 2,
+                sx: -Math.sin(yaw), sy: Math.cos(yaw), next: 0 };
+      }
+      const half = Math.max(p.size[0], p.size[1]) / 2;
+      const off = row.next ? row.next + half : 0;
+      grp.position.set(row.x + row.sx * off, row.y + row.sy * off, fz);
+      row.next = off + half + 0.3;       // 30 cm between pieces
     } else {
       grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
     }

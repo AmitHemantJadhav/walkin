@@ -442,13 +442,13 @@ function screen() {
 }
 
 /** Box-project UVs in metres onto a geometry, so a wood texture lands as grain and not as one swatch. */
-function boxUV(geometry, metresPerRepeat = 0.7) {
+function boxUV(geometry, metresPerRepeat = 0.7, scale = new THREE.Vector3(1, 1, 1)) {
   const geo = geometry.index ? geometry.toNonIndexed() : geometry.clone();
   const pos = geo.getAttribute('position');
   const uv = new Float32Array(pos.count * 2);
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
   for (let i = 0; i < pos.count; i += 3) {
-    a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+    a.fromBufferAttribute(pos, i).multiply(scale); b.fromBufferAttribute(pos, i + 1).multiply(scale); c.fromBufferAttribute(pos, i + 2).multiply(scale);
     n.subVectors(b, a).cross(c.clone().sub(a));
     const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
     for (let k = 0; k < 3; k++) {
@@ -466,9 +466,13 @@ function boxUV(geometry, metresPerRepeat = 0.7) {
 /** Nicer materials for the kit's office pieces: real-looking wood, dark metal, matte fabric, all env-lit. */
 function dressed(mesh, kind) {
   const name = (mesh.material.name || '');
+  const shared = (m) => { m.userData.sharedMap = true; return m; };
   if (kind === 'desk') {
     if (/metal/.test(name)) return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x3a3a3f, metalness: 0.85, roughness: 0.35 }) };
-    return { geometry: boxUV(mesh.geometry), material: new THREE.MeshStandardMaterial({ map: wood(), color: 0xffffff, roughness: 0.55, metalness: 0, envMapIntensity: 0.9 }) };
+    // UVs in world metres: fitToSpec has already scaled this clone (desk.glb is 0.73 wide -> 1.4 m), so
+    // the projection has to use the world scale or one wood repeat comes out ~1.3 m instead of 0.7 (Amit)
+    return { geometry: boxUV(mesh.geometry, 0.7, mesh.getWorldScale(new THREE.Vector3())),
+             material: shared(new THREE.MeshStandardMaterial({ map: wood(), color: 0xffffff, roughness: 0.55, metalness: 0, envMapIntensity: 0.9 })) };
   }
   if (/fabric/.test(name)) return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x33343a, roughness: 0.95, metalness: 0 }) };
   return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x1e1f23, metalness: 0.75, roughness: 0.4 }) };
@@ -489,7 +493,8 @@ async function instanced(kind, poses, floorZ) {
     const im = new THREE.InstancedMesh(d.geometry, d.material, poses.length);
     im.renderOrder = 2;
     im.frustumCulled = false;
-    im.userData.ours = d.geometry !== m.geometry;        // box-projected copies are ours to dispose; shared ones are not
+    im.userData.ownGeo = d.geometry !== m.geometry;      // box-projected copies are ours to dispose; shared ones are not
+    im.userData.ownMat = true;                            // every dressed material is ours, whatever geometry it sits on
     for (let i = 0; i < poses.length; i++) {
       const p = poses[i];
       P.makeRotationZ(p.rot).setPosition(p.x, p.y, floorZ);
@@ -509,7 +514,7 @@ function deskTop(poses, floorZ) {
     { geo: new THREE.BoxGeometry(0.22, 0.17, 0.012).translate(0, 0.14, H + 0.006), mat: new THREE.MeshStandardMaterial({ color: 0x202226, metalness: 0.6, roughness: 0.4 }) },   // stand base
     { geo: new THREE.BoxGeometry(0.035, 0.035, 0.26).translate(0, 0.19, H + 0.13), mat: new THREE.MeshStandardMaterial({ color: 0x202226, metalness: 0.6, roughness: 0.4 }) },    // neck
     { geo: new THREE.BoxGeometry(0.56, 0.028, 0.33).translate(0, 0.19, H + 0.31).applyMatrix4(new THREE.Matrix4().makeRotationX(-0.09)), mat: new THREE.MeshStandardMaterial({ color: 0x0f1013, roughness: 0.5 }) }, // bezel
-    { geo: new THREE.PlaneGeometry(0.52, 0.29).applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2 - 0.09)).translate(0, 0.174, H + 0.31), mat: new THREE.MeshStandardMaterial({ map: screen(), emissive: 0x9fb4d0, emissiveMap: screen(), emissiveIntensity: 0.55, roughness: 0.25 }) }, // screen
+    { geo: new THREE.PlaneGeometry(0.52, 0.29).applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2 - 0.09)).translate(0, 0.174, H + 0.31), mat: Object.assign(new THREE.MeshStandardMaterial({ map: screen(), emissive: 0x9fb4d0, emissiveMap: screen(), emissiveIntensity: 0.55, roughness: 0.25 }), { userData: { sharedMap: true } }) }, // screen
     { geo: new THREE.BoxGeometry(0.42, 0.14, 0.018).translate(0, -0.1, H + 0.009), mat: new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.8 }) },   // keyboard
     { geo: new THREE.BoxGeometry(0.06, 0.1, 0.03).translate(0.3, -0.1, H + 0.015), mat: new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.6 }) },    // mouse
   ];
@@ -529,6 +534,7 @@ function deskTop(poses, floorZ) {
 function shadows(poses, floorZ) {
   const geo = new THREE.PlaneGeometry(DESK.w + 0.5, DESK.d + CHAIR_ZONE + 0.5).translate(0, -0.3, 0);
   const mat = new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, opacity: 0.42, depthWrite: false });
+  mat.userData.sharedMap = true;                                  // furniture.js owns that texture
   const im = new THREE.InstancedMesh(geo, mat, poses.length);
   im.renderOrder = 1; im.frustumCulled = false; im.userData.ours = true;
   const M = new THREE.Matrix4();
@@ -694,11 +700,16 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
 function disposeOurs(root) {
   root.traverse((o) => {
     if (o.isInstancedMesh) o.dispose();                           // the instance buffers, not the shared geometry
-    if (!o.userData.ours) return;
-    if (o.geometry) o.geometry.dispose();
-    if (o.material) {
-      if (o.material.map) o.material.map.dispose();                // a label's canvas texture
-      o.material.dispose && o.material.dispose();
+    const own = o.userData;
+    if (own.ours || own.ownGeo) o.geometry && o.geometry.dispose();
+    if (own.ours || own.ownMat) {
+      for (const m of [].concat(o.material || [])) {
+        // wood(), screen() and the catalog's shadow blob are shared textures: freeing them here only
+        // makes three re-upload them next frame (Amit). A label's own canvas is ours to free.
+        if (m.map && !m.userData.sharedMap) m.map.dispose();
+        if (m.emissiveMap && !m.userData.sharedMap) m.emissiveMap.dispose();
+        m.dispose && m.dispose();
+      }
     }
   });
 }

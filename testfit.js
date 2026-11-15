@@ -890,13 +890,20 @@ function register() {
   w.testFit = testFit;
   w.testFitZones = testFitZones;
   w.clearTestFit = clearTestFit;
-  // voice: the agent keeps its tool table and declarations as live objects on walkin.agent
-  const a = w.agent;
-  if (!a || !a.tools || !a.declarations || a.tools.test_fit) return;
-  a.tools.test_fit = (args) => testFit({ people: args.people || null, aisle: args.aisle_m || 1.2 });
-  a.tools.test_fit_zones = (args) => testFitZones({ zones: args.zones || [], people: args.people || null, aisle: args.aisle_m || 1.2 });
-  a.tools.clear_test_fit = () => clearTestFit();
-  a.declarations.push(
+}
+if (window.walkin) register(); else addEventListener('walkin:ready', register, { once: true });
+
+// voice: through agent.js's registry, so John's instructions and Gemini Live get these tools and rules too
+(window.walkinTools = window.walkinTools || []).push({
+  run: {
+    test_fit: (args = {}) => testFit({ people: args.people || null, aisle: args.aisle_m || 1.2 }),
+    test_fit_zones: (args = {}) => testFitZones({ zones: args.zones || [], people: args.people || null, aisle: args.aisle_m || 1.2 }),
+    clear_test_fit: () => clearTestFit(),
+  },
+  rules: `- Office test fit ("how many people can I seat here", "fit 150 people", "lay out desks"): call test_fit. To add meeting rooms,
+  a kitchen, a lounge, phone booths or reception, call test_fit_zones with the zones and the same headcount the user gave before.
+  Say seats, how many are within 7.5 m of a window, and the longest walk to an exit, in two short sentences.`,
+  declarations: [
     { name: 'test_fit',
       description: 'Office test fit: lay real-size desks out across this whole floor in benching rows with aisles, keeping every door clear. Use for "how many people can I seat here", "fit 150 people", "test fit", "lay out desks". Returns seats, the benching maximum, seats within 7.5 m of a window, code occupancy and the longest walk to an exit.',
       parameters: { type: 'object', properties: {
@@ -913,17 +920,6 @@ function register() {
         people: { type: 'number', description: 'How many desks to place around the zones. Leave empty for as many as fit.' },
         aisle_m: { type: 'number', description: 'Aisle width in metres, default 1.2.' } },
         required: ['zones'] } },
-    { name: 'clear_test_fit', description: 'Take the test-fit desks and zones away again.', parameters: { type: 'object', properties: {} } },
-  );
-}
-if (window.walkin) register(); else addEventListener('walkin:ready', register, { once: true });
-// agent.js attaches walkin.agent some time after the viewer is ready - later still on a phone over a
-// tunnel - so keep trying until the tools are on it, for up to a minute.
-{
-  let tries = 0;
-  const again = setInterval(() => {
-    register();
-    const a = window.walkin && window.walkin.agent;
-    if ((a && a.tools && a.tools.test_fit) || ++tries > 120) clearInterval(again);
-  }, 500);
-}
+    { name: 'clear_test_fit', description: 'Take the test-fit desks and zones away again.', parameters: { type: 'object', properties: {} } }
+  ],
+});

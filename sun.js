@@ -420,6 +420,8 @@ export function sunOff() {
   state.show = false;
   if (group) group.visible = false;
   if (fx.light) fx.light.intensity = 0;
+  if (W() && W().renderer) W().renderer.shadowMap.autoUpdate = false;
+  if (fx.casters) fx.casters.visible = false;
   if (fx.grade) fx.grade.visible = false;
   if (fx.sprite) fx.sprite.visible = false;
   if (fx.glass) fx.glass.visible = false;
@@ -696,6 +698,8 @@ function lightScene(s, res) {
   fx.light.color.set(s.elevation < LOW_SUN ? 0xffc080 : 0xfff1d6);
   fx.light.shadow.camera.updateProjectionMatrix();
   fx.casters.visible = up;
+  w.renderer.shadowMap.autoUpdate = up;  // no shadow pass while the sun is off or down (phone fps)
+  if (up) w.renderer.shadowMap.needsUpdate = true;
   // the sun has to light the patch brightly enough to show shade in it: compensate for the grazing angle
   fx.light.intensity = up ? Math.min(6, 1.4 / Math.max(0.15, Math.sin(s.elevation * Math.PI / 180))) : 0;
   // the sun in the sky, 9 m out, for the hand to grab
@@ -849,13 +853,17 @@ async function loadGeo() {
 }
 
 function registerTools() {
-  const w = W();
-  const a = w && w.agent;
-  if (!a || !a.tools || !a.declarations || a.tools.set_sun_time) return;
-  a.tools.set_sun_time = (args = {}) => sun({ date: args.date, time: args.time, show: true });
-  a.tools.sun_report = (args = {}) => sunReport({ date: args.date });
-  a.tools.sun_off = () => sunOff();
-  a.declarations.push(
+  // through agent.js's registry, so John's instructions and Gemini Live get these tools and rules too
+  (window.walkinTools = window.walkinTools || []).push({
+    run: {
+      set_sun_time: (args = {}) => sun({ date: args.date, time: args.time, show: true }),
+      sun_report: (args = {}) => sunReport({ date: args.date }),
+      sun_off: () => sunOff(),
+    },
+    rules: `- Sunlight ("where does the sun come in", "show me 4 pm in December", "is this room bright in the morning"): call set_sun_time,
+  or sun_report for a whole day room by room. Say the time, how many windows are lit and which rooms; keep it to two sentences.
+  If the user gives no time, leave time empty. "Hide the sun" -> sun_off.`,
+    declarations: [
     { name: 'set_sun_time',
       description: 'Show where direct sunlight falls on the floor of this house through its real windows at a date and time. Use for "where does the sun come in", "morning light", "show me 4 pm in December", "is this room bright in the afternoon". Returns the lit windows, square metres of floor in direct sun, and the sun\'s elevation and compass direction.',
       parameters: { type: 'object', properties: {
@@ -865,8 +873,9 @@ function registerTools() {
       description: 'Which rooms get direct sun and when, over a whole day, from the real windows: hours per room, first and last lit hour, and the compass direction each window faces. Use for "does the kitchen get morning sun", "which room is sunniest", "which way does this house face".',
       parameters: { type: 'object', properties: {
         date: { type: 'string', description: 'YYYY-MM-DD or a month name. Leave empty for today.' } } } },
-    { name: 'sun_off', description: 'Hide the sunlight patches again.', parameters: { type: 'object', properties: {} } },
-  );
+    { name: 'sun_off', description: 'Hide the sunlight patches again.', parameters: { type: 'object', properties: {} } }
+    ],
+  });
 }
 
 async function start() {
@@ -878,18 +887,15 @@ async function start() {
   w.sunOff = sunOff;
   await loadGeo();
   buildPanel();
-  if (geo) sun({}); else updatePanel(noGeo());
-  registerTools();
+  if (!geo) updatePanel(noGeo());
+  else {
+    // a demo in the evening should not open at night: when the sun is down now, start the slider at 10 am
+    const t = sunTimes(state.date);
+    if (t.rise != null && t.set != null && (state.minutes < t.rise + 30 || state.minutes > t.set - 30)) state.minutes = 600;
+    // off until asked (tap the sun, or ask John), so the shadow pass costs nothing on the phone; ?sun=on starts it lit
+    if (/[?&]sun=on\b/.test(location.search)) sun({ show: true });
+    else { state.show = false; updatePanel(null); if (panel) { els.label.textContent = 'Sunlight · tap ☀ or ask John'; els.sub.textContent = ''; } }
+  }
 }
+registerTools();
 if (window.walkin) start(); else addEventListener('walkin:ready', start, { once: true });
-// agent.js attaches walkin.agent a moment after the viewer is ready; try again then
-// agent.js attaches walkin.agent some time after the viewer is ready - later still on a phone over a
-// tunnel - so keep trying until the tools are on it, for up to a minute.
-{
-  let tries = 0;
-  const again = setInterval(() => {
-    registerTools();
-    const a = window.walkin && window.walkin.agent;
-    if ((a && a.tools && a.tools.set_sun_time) || ++tries > 120) clearInterval(again);
-  }, 500);
-}

@@ -44,9 +44,13 @@ One screen. The whole run is in `demo-runbook.md`; this is what you hold while y
 3. Zones go where you say: *back* = farthest from the exits, *window*, *entrance*. Meeting rooms are glass boxes
    with a table and chairs inside; the HUD bottom-left lists them.
 4. The sun needs `data/<model>/geo.json` (`python tools/geo.py`) — La Mirada and the office both have one. The
-   slider is bottom-right; ▶ plays to sunset. Patches are only ever on the floor: at 4 pm in November John says the
-   light is on the far walls, and shows nothing, which is correct.
-5. Numbers you can quote: Suite 300 is 1,648 m² usable from the mesh, 118 windows, 3 exits. La Mirada's dining room
+   slider is bottom-right; ▶ plays to sunset. Furniture standing in a patch casts a shadow inside it that swings as
+   you drag. Below 25° the room warms; **after sunset it is night**: the windows go black, the room goes dark, lamps
+   and monitors come on. *"Show me this at 9 pm"* is a beat on its own in the office.
+5. **In the headset there is no slider.** The sun is a bright sprite in the sky where the sun really is: **pinch
+   while pointing at it and drag across the sky** — a screen width is twelve hours — and a time label rides under it.
+   A pinch with the hand raised high does the same when the sun is behind you. Voice always works too.
+6. Numbers you can quote: Suite 300 is 1,648 m² usable from the mesh, 118 windows, 3 exits. La Mirada's dining room
    gets 4.3 h of direct sun in November, the living room 8.8 h.
 
 ### Six things that will bite you

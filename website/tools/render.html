@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Walk-In fly-down renderer</title>
+<style>
+  html, body { margin: 0; background: #000; color: #9ab; font: 12px ui-monospace, monospace; }
+  canvas { display: block; }
+  #log { position: fixed; left: 8px; bottom: 8px; }
+</style>
+<script type="importmap">
+{ "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+</script>
+</head>
+<body>
+<div id="log">loading…</div>
+<script type="module">
+// Renders the landing page's scroll sequence: Vexcel aerial -> Matterport dollhouse -> through the front door ->
+// the real 360 photo just inside it. One frame per scroll step, posted to capture.py as website/frames/f_###.jpg.
+//   ?n=180      number of frames        ?w=1280&h=720  frame size
+//   ?only=120   render that frame and stay on screen (preview), no saving
+//   ?save=1     render all frames and post them
+// World frame = Vexcel ortho: metres east (x) / north (y) of outside.json's ortho centre, z up.
+// The scan goes in through align.json (website/tools: the wall graph fitted onto Vexcel's house footprint).
+import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+const q = new URLSearchParams(location.search);
+const MODEL = q.get('m') || 'zvKHR9DHNjJ';
+const N = +(q.get('n') || 180), W = +(q.get('w') || 1280), H = +(q.get('h') || 720);
+const ONLY = q.has('only') ? +q.get('only') : null, SAVE = q.get('save') === '1';
+const D = `/data/${MODEL}/`;
+const log = (s) => { document.getElementById('log').textContent = s; };
+const getJSON = (u) => fetch(u).then((r) => { if (!r.ok) throw new Error(u); return r.json(); });
+
+const [house, outside, wide, align] = await Promise.all([
+  getJSON(D + 'house.json'), getJSON(D + 'outside.json'), getJSON(D + 'outside/wide.json'), getJSON('align.json')]);
+
+// ------------------------------------------------------------------ renderer + scene
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(W, H);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const HAZE = new THREE.Color('#c9d3dc');
+scene.background = HAZE;
+scene.fog = new THREE.Fog(HAZE, 180, 520);
+const camera = new THREE.PerspectiveCamera(30, W / H, 0.05, 2000);
+// sky: haze at the horizon (same colour as the fog, so the ground melts into it), soft blue overhead
+const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16), new THREE.ShaderMaterial({
+  uniforms: { lo: { value: HAZE }, hi: { value: new THREE.Color('#7fa4c9') } },
+  vertexShader: `varying float h; void main() { h = normalize(position).z; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform vec3 lo, hi; varying float h; void main() { gl_FragColor = vec4(mix(lo, hi, smoothstep(0.0, 0.45, h)), 1.0);
+    #include <colorspace_fragment>
+  }`,
+  side: THREE.BackSide, depthWrite: false, fog: false,
+}));
+sky.renderOrder = -1;
+scene.add(sky);
+
+const tl = new THREE.TextureLoader();
+const tex = (u) => new Promise((ok, no) => tl.load(u, (t) => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; ok(t); }, undefined, no));
+
+// ground: the wide aerial (400 m) and the sharp one (64 m) on top of it, both just under the scan's floor
+const GROUND_Z = -0.5;
+function groundPlane(t, half, z) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(half * 2, half * 2), new THREE.MeshBasicMaterial({ map: t }));
+  m.position.z = z;
+  return m;
+}
+const [wideTex, orthoTex] = await Promise.all([tex(D + 'outside/wide.jpg'), tex(D + outside.ortho.file)]);
+scene.add(groundPlane(wideTex, wide.half_m, GROUND_Z - 0.02));
+// soften the sharp tile's edge into the wide one: alpha ramp over the outer 6 m
+const sharp = groundPlane(orthoTex, outside.ortho.half_m, GROUND_Z);
+sharp.material.transparent = true;
+sharp.material.onBeforeCompile = (s) => {
+  s.fragmentShader = s.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+    vec2 e = min(vMapUv, 1.0 - vMapUv); diffuseColor.a *= smoothstep(0.0, 0.09, min(e.x, e.y));`);
+};
+scene.add(sharp);
+
+// ------------------------------------------------------------------ the scan (MatterPak textured OBJ), as a dollhouse
+const ROT = THREE.MathUtils.degToRad(align.deg);
+const toWorld = (x, y, z = 0) => new THREE.Vector3(Math.cos(ROT) * x - Math.sin(ROT) * y + align.tx,
+  Math.sin(ROT) * x + Math.cos(ROT) * y + align.ty, z);
+const dollhouse = new THREE.Group();
+dollhouse.rotation.z = ROT;
+dollhouse.position.set(align.tx, align.ty, 0);
+scene.add(dollhouse);
+
+log('loading the scan…');
+const pakList = await fetch(D + 'pak/').then((r) => r.text());          // directory listing from capture.py
+const objName = (pakList.match(/href="([^"]+\.obj)"/) || [])[1];
+const mtl = await fetch(D + 'pak/' + objName.replace(/\.obj$/, '.mtl')).then((r) => r.text());
+const maps = {};
+let cur = null;
+for (const line of mtl.split('\n')) {
+  const [k, v] = line.trim().split(/\s+/);
+  if (k === 'newmtl') cur = v; else if (k === 'map_Kd' && cur) maps[cur] = v;
+}
+const mats = {};
+await Promise.all(Object.entries(maps).map(async ([name, file]) => {
+  // FrontSide: ceilings face down and outer walls face in, so from above you look into the rooms (Matterport's dollhouse)
+  mats[name] = new THREE.MeshBasicMaterial({ map: await tex(D + 'pak/' + file), side: THREE.FrontSide, transparent: true });
+}));
+const obj = new OBJLoader().parse(await fetch(D + 'pak/' + objName).then((r) => r.text()));
+obj.traverse((o) => {
+  if (!o.isMesh) return;
+  const pick = (m) => mats[m.name] || new THREE.MeshBasicMaterial({ color: 0xdddddd, transparent: true });
+  o.material = Array.isArray(o.material) ? o.material.map(pick) : pick(o.material);
+});
+dollhouse.add(obj);
+const allMats = Object.values(mats);
+
+// ------------------------------------------------------------------ the real photo just inside the front door
+const AXES = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1);
+const door = house.floors[0].walls[+(q.get('wall') || 13)];
+const op = door.openings.find((o) => o.type === 'doorway');
+const doorM = [door.a[0] + (door.b[0] - door.a[0]) * op.at, door.a[1] + (door.b[1] - door.a[1]) * op.at];
+const panoIn = house.panos.slice().sort((a, b) =>
+  Math.hypot(a.pos[0] - doorM[0], a.pos[1] - doorM[1]) - Math.hypot(b.pos[0] - doorM[0], b.pos[1] - doorM[1]))
+  .find((p) => house.rooms.length && insideHouse(p.pos));
+function insideHouse(p) {                    // inside = on the far side of the door wall from the porch (the house's side)
+  const wx = house.floors[0].walls.flatMap((w) => [w.a[0], w.b[0]]);
+  const cx = (Math.min(...wx) + Math.max(...wx)) / 2;
+  return Math.sign(p[0] - doorM[0]) === Math.sign(cx - doorM[0]);
+}
+// The real 360 photos at the front door: one on the porch just outside, one just inside. The flight hands over to them
+// because the scan is too coarse up close, and they are sharp. Each is a sphere in its own scene, drawn on top.
+const panoOut = house.panos.slice().sort((a, b) =>
+  Math.hypot(a.pos[0] - doorM[0], a.pos[1] - doorM[1]) - Math.hypot(b.pos[0] - doorM[0], b.pos[1] - doorM[1]))
+  .find((p) => !insideHouse(p.pos));
+async function photo(pano) {
+  // app.js invLocalToModel (cal {qMode:1, yaw:90, mirror:1}), then world -> model (undo the alignment's turn)
+  const qn = new THREE.Quaternion(...pano.rot).normalize();
+  const M = new THREE.Matrix4().makeRotationFromQuaternion(qn).multiply(AXES)
+    .multiply(new THREE.Matrix4().makeRotationY(Math.PI / 2)).multiply(new THREE.Matrix4().makeScale(-1, 1, 1));
+  const inv = new THREE.Matrix3().setFromMatrix4(M).invert()
+    .multiply(new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationZ(-ROT)));
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(50, 64, 32), new THREE.ShaderMaterial({
+    uniforms: { t: { value: await tex(D + pano.img) }, inv: { value: inv }, a: { value: 0 } },
+    vertexShader: `varying vec3 vDir; void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform sampler2D t; uniform mat3 inv; uniform float a; varying vec3 vDir;
+      void main() {
+        vec3 l = normalize(inv * vDir);
+        vec2 uv = vec2(atan(l.x, l.z) / 6.28318530718 + 0.5, 0.5 + asin(clamp(l.y, -1.0, 1.0)) / 3.14159265359);
+        gl_FragColor = vec4(texture2D(t, uv).rgb, a);
+        #include <colorspace_fragment>
+      }`,
+    side: THREE.BackSide, transparent: true, depthTest: false, depthWrite: false,
+  }));
+  const scene = new THREE.Scene();
+  scene.add(sphere);
+  const pos = toWorld(pano.pos[0], pano.pos[1], pano.pos[2]);
+  sphere.position.copy(pos);
+  return { pano, pos, sphere, scene, cam: new THREE.PerspectiveCamera(60, W / H, 0.05, 200) };
+}
+const [porch, hall] = await Promise.all([photo(panoOut), photo(panoIn)]);
+renderer.autoClear = false;
+
+// ------------------------------------------------------------------ the camera path
+const fpRing = outside.structures.find((s) => s.primary).footprint[0];
+const hc = new THREE.Vector3(fpRing.reduce((s, p) => s + p[0], 0) / fpRing.length, fpRing.reduce((s, p) => s + p[1], 0) / fpRing.length, 0);
+const doorW = toWorld(doorM[0], doorM[1], 0);
+const inW = toWorld(panoIn.pos[0], panoIn.pos[1], panoIn.pos[2]);
+const outDir = doorW.clone().sub(inW).setZ(0).normalize();          // from inside, out through the door (to the street)
+const at = (base, out, side, z) => base.clone().addScaledVector(outDir, out)
+  .addScaledVector(new THREE.Vector3(-outDir.y, outDir.x, 0), side).setZ(z);
+const eyeZ = panoIn.pos[2];
+// keyframes: [time 0..1, camera position, look-at point, vertical fov]
+const K = [
+  [0.00, at(hc, 0.01, 0, 260), hc.clone(), 32],
+  [0.22, at(hc, 26, -6, 96), at(hc, -2, 0, 0), 34],
+  [0.42, at(hc, 24, 5, 34), at(hc, -3, 0, 0), 40],
+  [0.62, at(doorW, 11, 1.5, 6.5), at(doorW, 0, 0, 1.6), 46],
+  [0.82, at(doorW, 7.5, 0, eyeZ + 0.3), at(doorW, -4, 0, eyeZ), 48],
+  [1.00, at(doorW, 4.2, 0, eyeZ + 0.05), at(inW, -10, 0, eyeZ - 0.08), 48],      // on the path to the porch: the flight ends here
+];
+// After the threshold the sharp 360 photo takes over (the scan is too coarse up close): a dissolve, then a slow push.
+const FLIGHT = 0.74;                         // share of the frames for the flight; the rest is the two photos
+const ROOM_D = 1.8;                          // where the room's main content sits from the door, measured on the frames: matches sizes in the dissolve
+const lastPos = K[K.length - 1][1], lastLook = K[K.length - 1][2];
+const posC = new THREE.CatmullRomCurve3(K.map((k) => k[1]), false, 'centripetal');
+const lookC = new THREE.CatmullRomCurve3(K.map((k) => k[2]), false, 'centripetal');
+const smooth = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+function segParam(t) {                       // time -> curve parameter, each keyframe at its own time
+  for (let i = 0; i < K.length - 1; i++) {
+    if (t <= K[i + 1][0]) {
+      const f = (t - K[i][0]) / (K[i + 1][0] - K[i][0]);
+      return { u: (i + f) / (K.length - 1), fov: K[i][3] + (K[i + 1][3] - K[i][3]) * f * f * (3 - 2 * f) };
+    }
+  }
+  return { u: 1, fov: K[K.length - 1][3] };
+}
+const UP_TOP = outDir.clone().negate(), UP = new THREE.Vector3(0, 0, 1);
+
+// Pace it like a camera move, not like keyframes: what you *see* should move at a steady rate. A metre at 200 m up
+// is nothing, a metre at the door is a lot, so distance is divided by height above the ground, and turning the view
+// counts too. The flight then walks this "seen distance" at an eased, continuous speed (no jumps at the keyframes).
+const NS = 6000, seen = new Float32Array(NS + 1);
+{
+  let prevP = posC.getPoint(0), prevL = lookC.getPoint(0).sub(prevP).normalize();
+  for (let k = 1; k <= NS; k++) {
+    const u = k / NS, p = posC.getPoint(u), l = lookC.getPoint(u).sub(p).normalize();
+    const h = Math.max(1.4, p.z - GROUND_Z);
+    seen[k] = seen[k - 1] + p.distanceTo(prevP) / h + 0.55 * Math.acos(Math.min(1, l.dot(prevL)));
+    prevP = p; prevL = l;
+  }
+}
+function uForSeen(f) {                       // inverse of seen(u), by binary search
+  const target = f * seen[NS];
+  let lo = 0, hi = NS;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (seen[m] < target) lo = m; else hi = m; }
+  const a = seen[lo], b = seen[hi];
+  return (lo + (b > a ? (target - a) / (b - a) : 0)) / NS;
+}
+function fovAt(u) {
+  const x = u * (K.length - 1), i = Math.min(K.length - 2, Math.floor(x)), f = x - i;
+  return K[i][3] + (K[i + 1][3] - K[i][3]) * f * f * (3 - 2 * f);
+}
+
+const dirTo = (a, b) => b.clone().sub(a).normalize();
+function frame(i) {
+  const T = i / (N - 1);
+  if (T > FLIGHT) return photoFrame((T - FLIGHT) / (1 - FLIGHT));
+  const t = T / FLIGHT;
+  // ease in, then arrive at the threshold still moving a little, so the push into the photo carries on smoothly
+  const s = 0.3 * t + 0.7 * (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+  const u = uForSeen(Math.min(1, s)), fov = fovAt(u);
+  camera.position.copy(posC.getPoint(u));
+  camera.up.copy(UP_TOP).lerp(UP, smooth(0.0, 0.3, s)).normalize();      // street at the bottom while looking down
+  camera.fov = fov; camera.updateProjectionMatrix();
+  camera.lookAt(lookC.getPoint(u));
+  // the house rises out of its aerial photo, then the photo inside the door takes over
+  const rise = smooth(0.08, 0.3, s);
+  dollhouse.scale.z = Math.max(0.001, rise);
+  for (const m of allMats) { m.opacity = smooth(0.06, 0.2, s); m.depthWrite = m.opacity > 0.98; }
+  dollhouse.visible = s > 0.06;
+  sky.position.copy(camera.position);
+  renderer.clear();
+  renderer.render(scene, camera);
+}
+
+// p 0..1 after the flight. A virtual camera walks on: to the porch photo, then through the door to the hall photo,
+// then a slow push into the room. Whatever is drawn (scan or photo) is sized for the virtual camera: the room's content
+// sits on a plane ROOM_D past the hall photo, and each view's field of view is set so that plane fills the same part of
+// the screen as from the virtual camera. So each dissolve lines up, and ends exactly when the camera reaches the photo.
+const MESH_FOV = 48, END_FOV = 41;
+const look = dirTo(lastPos, lastLook);
+// what to match on: the front of the house on the way up to the porch, the room once through the door. The switch
+// happens with the camera exactly on the porch photo, where every plane gives the same size, so it doesn't jump.
+const DOOR_PLANE = doorW.clone().setZ(eyeZ), ROOM_PLANE = hall.pos.clone().addScaledVector(look, ROOM_D);
+const depth = (plane, from) => Math.max(0.15, plane.clone().sub(from).dot(look));
+const fovSeen = (vFov, vPos, fromPos, plane) => THREE.MathUtils.radToDeg(2 * Math.atan(
+  Math.min(4, Math.tan(THREE.MathUtils.degToRad(vFov) / 2) * depth(plane, vPos) / depth(plane, fromPos))));
+function drawPhoto(ph, vPos, vFov, alpha, plane) {
+  ph.cam.position.copy(ph.pos); ph.cam.up.copy(UP);
+  ph.cam.fov = fovSeen(vFov, vPos, ph.pos, plane); ph.cam.updateProjectionMatrix();
+  ph.cam.lookAt(ph.pos.clone().add(look));
+  ph.sphere.material.uniforms.a.value = alpha;
+  if (alpha > 0) renderer.render(ph.scene, ph.cam);
+}
+const ease = (x) => x * x * (3 - 2 * x);
+function photoFrame(p) {
+  const A = 0.4, B = 0.7;                                                // to the porch | through the door | push in
+  const v = new THREE.Vector3();
+  let vFov = MESH_FOV;
+  if (p < A) v.copy(lastPos).lerp(porch.pos, ease(p / A));
+  else if (p < B) v.copy(porch.pos).lerp(hall.pos, ease((p - A) / (B - A)));
+  else { v.copy(hall.pos); vFov = MESH_FOV + (END_FOV - MESH_FOV) * (1 - Math.pow(1 - (p - B) / (1 - B), 2.4)); }
+  const toPorch = smooth(0.0, A * 0.45, p);                               // the photo leads: the coarse scan barely shows
+  const toHall = smooth(A + 0.06, B - 0.04, p);
+  renderer.clear();
+  if (toPorch < 1) {
+    camera.position.copy(v); camera.up.copy(UP); camera.fov = vFov; camera.updateProjectionMatrix();
+    camera.lookAt(v.clone().add(look));
+    sky.position.copy(v);
+    renderer.render(scene, camera);
+  }
+  const plane = p < A ? DOOR_PLANE : ROOM_PLANE;
+  if (toHall < 1) drawPhoto(porch, v, vFov, toPorch, plane);           // the hall photo dissolves in on top of it
+  drawPhoto(hall, v, vFov, toHall, plane);
+}
+
+if (ONLY != null) {
+  frame(ONLY);
+  log(`frame ${ONLY}/${N - 1}  pano ${panoIn.label} (${panoIn.id})`);
+  window.__done = true;
+} else {
+  for (let i = 0; i < N; i++) {
+    frame(i);
+    if (SAVE) {
+      const blob = await new Promise((r) => renderer.domElement.toBlob(r, 'image/jpeg', 0.8));
+      await fetch(`/save/f_${String(i).padStart(3, '0')}.jpg`, { method: 'POST', body: blob });
+    }
+    log(`frame ${i + 1}/${N}`);
+  }
+  window.__done = true;
+  document.title = 'DONE';
+}
+</script>
+</body>
+</html>

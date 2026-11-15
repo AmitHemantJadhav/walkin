@@ -214,6 +214,29 @@ function partFor(src, spec) {
 
 const styled = new Map();   // `${style}|${part}|${source material uuid}` -> the restyled material
 
+
+let quiltTex = null;
+/** A quilted duvet: soft square bumps about 30 cm apart, with a stitch line between. Height map for bumpMap. */
+function quiltTexture() {
+  if (quiltTex) return quiltTex;
+  const N = 256; const c = document.createElement('canvas'); c.width = c.height = N;
+  const g = c.getContext('2d'); const img = g.createImageData(N, N), d = img.data;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const u = x / N, v = y / N;
+    const puff = Math.sin(u * Math.PI) * Math.sin(v * Math.PI);           // one pillow-shaped square per tile
+    const seam = Math.min(Math.min(u, 1 - u), Math.min(v, 1 - v));         // dark line at the stitching
+    let h = 110 + 120 * Math.pow(puff, 0.6) - (seam < 0.03 ? 60 * (1 - seam / 0.03) : 0);
+    h += (Math.sin(x * 0.7) * Math.cos(y * 0.9)) * 4;                       // a little cloth noise
+    const i = (y * N + x) * 4; d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, h)); d[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  quiltTex = new THREE.CanvasTexture(c);
+  quiltTex.wrapS = quiltTex.wrapT = THREE.RepeatWrapping;
+  quiltTex.repeat.set(1 / 3.75, 1 / 3.75);          // fabric UVs are 1 unit per 8 cm: one square every 30 cm
+  quiltTex.colorSpace = THREE.NoColorSpace;
+  return quiltTex;
+}
+
 function styleMaterial(src, style, part) {
   const pal = STYLES[style] || STYLES[DEFAULT_STYLE];
   part = part || partFor(src, null);
@@ -233,6 +256,11 @@ function styleMaterial(src, style, part) {
   if (base === 'wood') {
     m.map = woodTexture(); m.color.multiplyScalar(1.12);            // the grain's mean is below white: put some brightness back
     m.roughness = 0.5; m.envMapIntensity = 0.9;
+  } else if (part === 'quilt') {
+    // the duvet: the palette's fabric colour, lifted, with a quilted relief instead of a flat weave
+    m.color = new THREE.Color(pal.fabric).multiplyScalar(1.15);
+    m.map = weaveTextures().map; m.bumpMap = quiltTexture(); m.bumpScale = 0.02;
+    m.roughness = 0.95;
   } else if (base === 'fabric') {
     const t = weaveTextures();
     m.map = t.map; m.bumpMap = t.bump; m.bumpScale = 0.0025; m.color.multiplyScalar(1.06);
@@ -460,12 +488,13 @@ export function fitToSpec(src, spec, flipped, style, hero) {
       o.userData.hero = true;                  // styles tint these instead of recolouring them
       o.material.color.setHex((STYLES[style] || STYLES[DEFAULT_STYLE]).hero);
     } else {
-      const part = partFor(o.material, spec);
+      let part = partFor(o.material, spec);
+      if (/cover/i.test(o.name || '') && /bedDouble/.test((spec && spec.model) || '')) part = 'quilt';   // the duvet, not the sheet
       o.userData.styleSrc = o.material;        // the kit's own material, kept so the style can change
       o.userData.stylePart = part;
       // the kit's UVs are colour swatches: swap in the copy with UVs in world metres, shared by every
       // item of this kind (the clone shares the GLB cache's geometry, which stays as it was)
-      o.geometry = surfaceGeometry(o.geometry, part, meshScale(o, src));
+      o.geometry = surfaceGeometry(o.geometry, part === 'quilt' ? 'fabric' : part, meshScale(o, src));
       o.userData.sharedGeo = true;
       o.material = styleMaterial(o.material, style, part);
     }
@@ -479,6 +508,132 @@ export function fitToSpec(src, spec, flipped, style, hero) {
   if (flipped) g.rotation.z = Math.PI;
   g.add(zUp);
   return g;
+}
+
+
+// ------------------------------------------------------------------ props
+//
+// What made the test-fit desks read as desks was not polygons: it was the monitor and keyboard on
+// top. The kit's bed is a slab, its bookcase is an empty frame, its nightstand a box. A few small,
+// cheap things on them - cushions and a folded throw, rows of books, a mug - do more for the eye in
+// a headset than any amount of texture. All procedural, built in the item's own frame (width along
+// x, depth along y, front at -y, standing on z = 0), so they move, rotate and style with the piece.
+const PROP_COLOURS = [0x6b4e3d, 0x2f4858, 0x8c3b3b, 0x3d5a4c, 0xa67c52, 0x4a4a68, 0x9c6b4a, 0x586b8c, 0xb08a5a, 0x5e4b56];
+let propMats = null;
+function propMaterials() {
+  if (propMats) return propMats;
+  const weave = weaveTextures();
+  propMats = {
+    books: PROP_COLOURS.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85 })),
+    pages: new THREE.MeshStandardMaterial({ color: 0xf1ead9, roughness: 0.95 }),
+    cushion: PROP_COLOURS.map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.95, bumpMap: weave.bump, bumpScale: 0.0025 })),
+    throw: new THREE.MeshStandardMaterial({ color: 0x8c6d5b, roughness: 0.95, bumpMap: weave.bump, bumpScale: 0.003 }),
+    mug: new THREE.MeshStandardMaterial({ color: 0xe8e2d6, roughness: 0.35 }),
+    bowl: new THREE.MeshStandardMaterial({ color: 0x2f3b45, roughness: 0.3, metalness: 0.1, side: THREE.DoubleSide }),
+  };
+  for (const m of [...propMats.cushion, propMats.throw]) m.userData.sharedMap = true;
+  return propMats;
+}
+const seeded = (i) => { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return x - Math.floor(x); };
+
+function mesh(geo, mat) { const m = new THREE.Mesh(geo, mat); m.castShadow = true; m.renderOrder = 2; m.userData.prop = true; return m; }
+
+/** A row of books between x0 and x1 on a shelf at height z, depth d available: thin boxes, varied. */
+function bookRow(group, x0, x1, z, d, seed) {
+  const M = propMaterials();
+  let x = x0 + 0.02, i = 0;
+  while (x < x1 - 0.04) {
+    const t = 0.022 + seeded(seed + i) * 0.03, h = 0.17 + seeded(seed + i + 7) * 0.1, dd = Math.min(d - 0.03, 0.16 + seeded(seed + i + 3) * 0.05);
+    const lean = (seeded(seed + i + 11) < 0.12) ? 0.12 : 0;
+    const b = mesh(new THREE.BoxGeometry(t, dd, h), M.books[(seed + i) % M.books.length]);
+    b.position.set(x + t / 2, 0.01, z + h / 2); b.rotation.y = lean;
+    group.add(b);
+    x += t + 0.004; i++;
+    if (seeded(seed + i + 5) < 0.08) x += 0.06;              // a gap now and then, like a real shelf
+  }
+}
+
+/** Shelf heights of a bookcase, read from its own geometry: the upward-facing faces, clustered by height. */
+function shelfHeights(root, spec) {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const zs = [];
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  root.traverse((m) => {
+    if (!m.isMesh || m.userData.prop) return;
+    const pos = m.geometry.getAttribute('position'), idx = m.geometry.getIndex();
+    const M = new THREE.Matrix4().multiplyMatrices(inv, m.matrixWorld);
+    const cnt = idx ? idx.count : pos.count;
+    for (let i = 0; i < cnt; i += 3) {
+      const ia = idx ? idx.getX(i) : i, ib = idx ? idx.getX(i + 1) : i + 1, ic = idx ? idx.getX(i + 2) : i + 2;
+      a.fromBufferAttribute(pos, ia).applyMatrix4(M); b.fromBufferAttribute(pos, ib).applyMatrix4(M); c.fromBufferAttribute(pos, ic).applyMatrix4(M);
+      n.subVectors(b, a).cross(c.clone().sub(a));
+      const area = n.length() / 2;
+      if (area < 0.01 || n.z / (area * 2) < 0.9) continue;        // only sizeable faces that face up
+      zs.push(((a.z + b.z + c.z) / 3));
+    }
+  });
+  zs.sort((p, q) => p - q);
+  const shelves = [];
+  for (const z of zs) { if (z < 0.05 || z > spec.h - 0.12) continue; if (!shelves.length || z - shelves[shelves.length - 1] > 0.12) shelves.push(z); }
+  return shelves;
+}
+
+/** Add the props that make a piece read as itself. `root` is the fitted model group in the item's frame. */
+export function addProps(root, kind, spec) {
+  if (!root || root.userData.propped) return;
+  root.userData.propped = true;
+  const M = propMaterials();
+  const grp = new THREE.Group(); grp.name = 'props';
+  const w = spec.w, d = spec.d, h = spec.h;
+  if (kind === 'queen' || kind === 'king') {
+    // two accent cushions against the pillows, a folded throw across the foot
+    const top = h * 0.78;                                            // the mattress top, roughly: the frame is the rest
+    // cushions are puffy, not boxes: a flattened sphere leaning on the pillows
+    for (let i = 0; i < 2; i++) {
+      const cu = mesh(new THREE.SphereGeometry(1, 24, 16).scale(0.21, 0.075, 0.2), M.cushion[(i * 3 + 1) % M.cushion.length]);
+      cu.position.set((i ? 1 : -1) * w * 0.2, d * 0.5 - 0.38, top + 0.16);
+      cu.rotation.x = -0.95 + (i ? 0.08 : -0.05); cu.rotation.z = (i ? -1 : 1) * 0.1;
+      grp.add(cu);
+    }
+    // a throw rolled across the foot of the bed reads as a blanket; a flat slab reads as a plank
+    const th = mesh(new THREE.CapsuleGeometry(0.085, w * 0.7, 6, 14), M.throw);
+    th.rotation.z = Math.PI / 2; th.rotation.y = 0.04;
+    th.position.set(w * 0.03, -d * 0.5 + 0.5, top + 0.085);
+    grp.add(th);
+  } else if (kind === 'bookcase') {
+    const shelves = shelfHeights(root, spec);
+    const inner = w - 0.08;
+    shelves.forEach((z, i) => { if (i % 4 !== 3) bookRow(grp, -inner / 2, inner / 2 - (i % 2 ? 0.18 : 0), z + 0.005, d, 17 + i * 31); });
+    if (shelves.length) {                                             // a leaning book or a bowl on one shelf
+      const z = shelves[Math.min(1, shelves.length - 1)];
+      const bw = mesh(new THREE.SphereGeometry(0.07, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), M.bowl);
+      bw.position.set(inner / 2 - 0.1, 0, z + 0.075); bw.rotation.x = -Math.PI / 2; // sphere poles are on Y, the item is Z up: this puts the rim flat and up
+      grp.add(bw);
+    }
+  } else if (kind === 'nightstand' || kind === 'sidetable') {
+    let z = h + 0.002;
+    for (let i = 0; i < 2; i++) {
+      const b = mesh(new THREE.BoxGeometry(0.19 - i * 0.02, 0.14 - i * 0.015, 0.025), M.books[(i * 4 + 2) % M.books.length]);
+      b.position.set(-w * 0.12, 0, z + 0.0125); b.rotation.z = i * 0.18; grp.add(b); z += 0.025;
+    }
+    const mug = mesh(new THREE.CylinderGeometry(0.038, 0.034, 0.095, 16), M.mug);
+    mug.rotation.x = Math.PI / 2; mug.position.set(w * 0.25, -0.05, h + 0.05); grp.add(mug);
+  } else if (kind === 'coffeetable') {
+    const b = mesh(new THREE.BoxGeometry(0.3, 0.23, 0.025), M.books[5]); b.position.set(-w * 0.2, 0.05, h + 0.0125); b.rotation.z = 0.2; grp.add(b);
+    const b2 = mesh(new THREE.BoxGeometry(0.28, 0.21, 0.02), M.books[8]); b2.position.set(-w * 0.2, 0.05, h + 0.035); b2.rotation.z = -0.1; grp.add(b2);
+    const bw = mesh(new THREE.SphereGeometry(0.11, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.bowl);
+    bw.position.set(w * 0.22, -0.02, h + 0.11); bw.rotation.x = Math.PI / 2; grp.add(bw);
+  } else if (kind === 'table') {
+    const bw = mesh(new THREE.SphereGeometry(0.13, 18, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), M.bowl);
+    bw.position.set(0, 0, h + 0.13); bw.rotation.x = Math.PI / 2; grp.add(bw);
+  } else if (kind === 'desk') {
+    const b = mesh(new THREE.BoxGeometry(0.24, 0.17, 0.03), M.books[3]); b.position.set(w * 0.3, 0.12, h + 0.015); b.rotation.z = -0.3; grp.add(b);
+    const mug = mesh(new THREE.CylinderGeometry(0.038, 0.034, 0.095, 16), M.mug); mug.rotation.x = Math.PI / 2; mug.position.set(-w * 0.35, 0.1, h + 0.05); grp.add(mug);
+  } else {
+    return;
+  }
+  root.add(grp);
 }
 
 /**
@@ -502,6 +657,7 @@ export function buildFurniture(kind, style = currentStyle) {
     g.add(next);
     shown = next;
     g.userData.model = file;
+    addProps(next, kind, spec);
   });
 
   if (spec.model) swapIn(spec.model, FLIPPED, false);

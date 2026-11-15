@@ -46,8 +46,10 @@ const SPAN = 0.7, MAX_SPAN = 0.9;
 // ?handmap=crop in app.js keeps the old zoomed crop.
 export function cropFor(viewAspect, vw, vh, viewVfov, camHfov) {
   if (viewVfov && camHfov && vw && vh) {
-    const tV = Math.tan((viewVfov * Math.PI) / 360), tC = Math.tan((camHfov * Math.PI) / 360);
-    const sx = (tV * viewAspect) / tC, sy = tV / ((tC * vh) / vw);
+    // camHfov is along the camera's long side (a phone held upright delivers a portrait video)
+    const tV = Math.tan((viewVfov * Math.PI) / 360), tL = Math.tan((camHfov * Math.PI) / 360);
+    const tW = vw >= vh ? tL : (tL * vw) / vh, tH = (tW * vh) / vw; // half-angle tangents across and up the video
+    const sx = (tV * viewAspect) / tW, sy = tV / tH;
     return { cx: (1 - sx) / 2, cy: (1 - sy) / 2, sx, sy };
   }
   const va = vw / vh || 4 / 3;

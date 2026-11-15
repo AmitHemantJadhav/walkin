@@ -17,7 +17,8 @@ and only from donors whose detail is mostly in that band: a tufting seam or a cu
 energy at every scale and would paste as a stripe, a weave has it in the fine band alone. The first
 version borrowed the whole high-pass from any sharp block and the sofa came out scratched.
 
-Runs on the atlases tools/meshdiff.py wrote, in place, and keeps the originals once in
+Order per house: meshdiff export -> superres (optional) -> meshsharp -> capskin (optional).
+Runs on the atlases tools/meshdiff.py (and superres) wrote, in place, and keeps the originals once in
 furniture-tex-orig/ so a run can be compared or undone. Idempotent: an atlas already marked done in
 furniture.json is skipped unless --force.
 
@@ -332,6 +333,7 @@ def run(model, force=False, report=False):
         Image.fromarray(out.astype(np.uint8)).save(cur, quality=88, optimize=True)
         rewritten.add(p['tex'])
         p['sharpened'] = True
+        p['capSkin'] = False                         # its square (if any) is rebuilt below
         p['smear'] = st['smear']
         done += 1
     if not report:

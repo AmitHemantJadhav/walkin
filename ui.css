@@ -150,6 +150,12 @@ body { -webkit-font-smoothing: antialiased; }
 /* ------------------------------------------------------------------ headset: no DOM UI (it can't render in stereo) */
 body.vr #bar, body.vr .pop, body.vr #agent, body.vr #info, body.vr #debug { display: none !important; }
 
+/* At eyes (phone held up, hands from the back camera): nothing in the corners. The dock and the sun slider stay,
+   because your hands can press them (app.js uiHand); the one your hand points at lights up. */
+body.eyes #info, body.eyes #handcam, body.eyes #debug { display: none !important; }
+.hand-hover { outline: 3px solid #00e5ff !important; outline-offset: 2px; box-shadow: 0 0 18px rgba(0,229,255,.65) !important; }
+input[type=range].hand-hover { outline-offset: 6px; }
+
 @media (prefers-reduced-motion: reduce) {
   #bar.dock, .pop, .panel button, .glass button { transition: none; }
 }

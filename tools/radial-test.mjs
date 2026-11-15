@@ -7,7 +7,10 @@ const threeUrl = new URL('vendor/three/build/three.module.js', root).href;
 const src = readFileSync(new URL('radial.js', root), 'utf8').replace("from 'three'", `from '${threeUrl}'`);
 const tmp = new URL('tools/.radial-under-test.mjs', root);
 writeFileSync(tmp, src);
-const ctx = new Proxy({}, { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => ((t[k] = v), true) });
+// measureText is the one canvas call radial.js reads a value from (it shrinks a label until it fits): answer
+// like a canvas would, about 0.55 em per character, so the shrink loop ends
+const ctx = new Proxy({ measureText: (s) => ({ width: String(s).length * 0.55 * (parseInt(String(ctx.font || '').match(/(\d+)px/)?.[1], 10) || 16) }) },
+  { get: (t, k) => (k in t ? t[k] : () => {}), set: (t, k, v) => ((t[k] = v), true) });
 globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) };
 const THREE = await import(threeUrl);
 const { createRadial } = await import(tmp.href);

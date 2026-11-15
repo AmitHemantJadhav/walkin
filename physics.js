@@ -21,7 +21,7 @@ const MASS = {
   sofa: 60, armchair: 28, queen: 55, king: 65, table: 25, desk: 22, chair: 7, nightstand: 12,
   sidetable: 9, coffeetable: 16, tvstand: 20, tv: 12, bookcase: 35, floorlamp: 6,
   rug: 4, ruground: 4, plant: 8, plantsmall: 1.5, plantfern: 1.5, plantsucculent: 1.5,
-  cactus: 3, cactustall: 5,
+  cactus: 3, cactustall: 5, pouf: 4, console: 14,
 };
 const DEFAULT_MASS = 15;
 // Telling a placement from a push. Distance alone isn't enough: hold a sofa against a wall and the hand
@@ -34,6 +34,7 @@ const HOLD_BLOCK = 2000;       // ...and a piece that is stuck is never a placem
                                // the cursor is now a metre past the wall. That must not read as "put it there".
 const MAX_LAG = 0.3;           // how far a piece may fall behind the hand while it is moving freely
 const SKIN = 0.012;            // shrink the footprint slightly so a piece doesn't stick to a wall it touches
+const DOOR_SAY_MS = 900;       // a doorway sentence only after pushing into one this long, once per carry
 const FRICTION = 0.6;          // floor friction, as a deceleration of mu * g
 const G = 9.81;
 const STOP = 0.06;             // below this speed a sliding piece is parked
@@ -60,9 +61,12 @@ const stats = { frames: 0, moved: 0, blocked: 0, teleports: 0, assisted: 0, push
 export const physics = {
   enabled: true,
   jambSlide: true,              // #55: slide along a doorway's jamb, not into it (?jambslide=off)
-  doorRail: true,               // #55: a piece pushed at a doorway it fits commits to that door (?doorrail=off)
+  doorRail: false,              // #55: a piece pushed at a doorway it fits commits to that door (?doorrail=on).
+                                // Off by default: refurbishing is the point, and the rail dragged pieces towards
+                                // the front door when they were only being nudged near it.
   neighbourState: true,         // #63: bump into where physics has a piece, not what ⟳ just wrote (?neighbourstate=off)
-  pushAside: true,              // #57: a carried sofa shoves a coffee table instead of stopping dead (?pushaside=off)
+  pushAside: false,             // #57: a carried sofa shoves a coffee table instead of stopping dead (?pushaside=on).
+                                // Off by default: a carried piece slides along what it meets, nothing gets knocked about.
   MASS,
   stats,
   grab, moveTarget, release, shove,
@@ -160,10 +164,38 @@ function clearPath(item, st, nx, ny, rot, walls) {
 /** Is this footprint clear of walls and of other pieces? Returns null, or what it hit. */
 function blockedBy(poly, item, walls) {
   for (const s of walls.segs) if (overlaps(poly, s.poly)) return { kind: 'wall', dir: s.dir, seg: s };
+  const ex = nested.get(item);
   for (const o of neighbours(item)) {
+    if (ex && ex.has(o)) continue;                        // overlapping as found: leave them be
     if (overlaps(poly, whereIs(o))) return { kind: 'piece', item: o };
   }
   return null;
+}
+
+// Pieces that already overlap when physics first meets them are left to overlap. The home's own furniture is
+// collided as rectangles, and a coffee table that really stands inside an L-shaped sectional sits inside the
+// sectional's rectangle: the first touch "escaped" it and carried it across the room (it ended at the front
+// door). The pair is let go of as soon as they are moved apart; after that they bump like anything else.
+const nested = new WeakMap();      // item -> Set of pieces it may overlap
+function noteNested(item) {
+  if (!item.userData.meshPiece) return;               // only the home's own furniture is collided as crude rectangles
+  const here = fp(item, item.position.x, item.position.y, item.rotation.z);
+  for (const o of neighbours(item)) {
+    if (!o.userData.meshPiece || !overlaps(here, whereIs(o))) continue;
+    if (!nested.has(item)) nested.set(item, new Set());
+    if (!nested.has(o)) nested.set(o, new Set());
+    nested.get(item).add(o); nested.get(o).add(item);
+  }
+}
+function releaseNested(item, st) {
+  const ex = nested.get(item);
+  if (!ex || !ex.size) return;
+  const here = fp(item, st.x, st.y, st.rot);
+  for (const o of [...ex]) {
+    if (o.parent && overlaps(here, whereIs(o))) continue;
+    ex.delete(o);
+    const back = nested.get(o); if (back) back.delete(item);
+  }
 }
 
 /**
@@ -604,6 +636,7 @@ export function release(handId, velocity) {
   if (!h) return false;
   const st = ensure(h.item);
   st.rail = null;                 // the next carry picks its own doorway
+  st.doorKey = st.doorSaid = null; // and may be told about a door again
   if (velocity) {
     const v = Math.min(MAX_V, Math.hypot(velocity[0], velocity[1]));
     const n = Math.hypot(velocity[0], velocity[1]) || 1;
@@ -672,7 +705,9 @@ function frame() {
       item.position.z = z0;                               // whatever held it up is gone: it is on the floor now
     }
     const spec = FURNITURE[item.userData.kind];
+    const isNew = !state.has(item);
     const st = ensure(item);
+    if (isNew) noteNested(item);                          // overlapping as found: allowed until moved apart
     // Where the piece was according to physics, not according to the item: a mouse drag and the rotate
     // button write item.position/rotation themselves, so by the time this runs those already hold the
     // new value and the difference would always be zero. st still holds last frame's.
@@ -738,9 +773,16 @@ function frame() {
         if (assistThroughDoor(item, st, walls, dt, tx - st.x, ty - st.y, trot)) stats.assisted++;
         else {
           const door = doorReason(item, st, walls, tx - st.x, ty - st.y);
-          if (door) sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
-          else if (hit.kind === 'rotate') {
-            sayBlocked(item, { reason: cantTurn(item, hit.by) });
+          // Quiet unless someone is really trying to get it through a doorway: held, pushing into the same
+          // door for DOOR_SAY_MS, and said once per carry. A click or a nudge near a door says nothing,
+          // and a turn that doesn't fit just doesn't happen.
+          if (door && held) {
+            if (st.doorKey !== door.door) { st.doorKey = door.door; st.doorT = now; }
+            if (now - st.doorT > DOOR_SAY_MS && st.doorSaid !== door.door) {
+              st.doorSaid = door.door;
+              sayBlocked(item, { reason: door.text, door: door.door, across: door.across, turnable: door.turnable });
+            }
+          } else if (hit.kind === 'rotate') {
             // A hand still asking for the turn gets to keep asking - that is the door beat. A piece
             // nobody is holding has been told no, so stop wanting it: the target rotation would sit
             // there unreachable and say the same sentence every 1.2 s for the rest of the session.
@@ -762,6 +804,7 @@ function frame() {
     item.position.y = st.y;
     item.rotation.z = st.rot;
     st.wroteX = st.x; st.wroteY = st.y; st.wroteRot = st.rot;
+    releaseNested(item, st);
     carry(item, px, py, pr, st);
   }
   for (const item of state.keys()) if (!live.has(item)) state.delete(item);
@@ -774,9 +817,9 @@ function frame() {
   }
   if (new URLSearchParams(location.search).get('physics') === 'off') physics.enabled = false;
   if (new URLSearchParams(location.search).get('jambslide') === 'off') physics.jambSlide = false;
-  if (new URLSearchParams(location.search).get('doorrail') === 'off') physics.doorRail = false;
+  if (new URLSearchParams(location.search).get('doorrail') === 'on') physics.doorRail = true;
   if (new URLSearchParams(location.search).get('neighbourstate') === 'off') physics.neighbourState = false;
-  if (new URLSearchParams(location.search).get('pushaside') === 'off') physics.pushAside = false;
+  if (new URLSearchParams(location.search).get('pushaside') === 'on') physics.pushAside = true;
   window.walkin.physics = physics;
   // the wall list is per floor and cheap, but drop it when the house or floor changes
   let lastFloor = null;

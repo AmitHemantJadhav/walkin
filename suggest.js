@@ -15,7 +15,7 @@ import * as THREE from 'three';
 export const PRICE_NOTE = 'illustrative mid-market retail estimates, Nov 2026, not quotes';
 const MID = { sofa: 1299, armchair: 649, queen: 899, king: 1199, table: 899, desk: 499, chair: 179, nightstand: 229,
   sidetable: 149, coffeetable: 399, tvstand: 449, tv: 599, bookcase: 299, floorlamp: 159, rug: 349, ruground: 299,
-  plant: 89, plantsmall: 39, plantfern: 35, plantsucculent: 29, cactus: 45, cactustall: 69 };
+  plant: 89, plantsmall: 39, plantfern: 35, plantsucculent: 29, cactus: 45, cactustall: 69, pouf: 129, console: 349 };
 const TIER_MULT = { budget: 0.45, mid: 1, premium: 2.4 };
 export const TIERS = ['budget', 'mid', 'premium'];
 const round9 = (x) => Math.max(9, Math.round(x / 10) * 10 - 1);            // $1,299 style
@@ -33,10 +33,10 @@ function paletteFor(listing, light) {
   const st = String((listing && listing.style) || '').toLowerCase();
   const year = Number(listing && listing.year_built) || null;
   if (/bungalow|craftsman|victorian|tudor|colonial|cottage|farmhouse|ranch|spanish|mission/.test(st) || (year && year < 1950)) {
-    return { palette: 'cozy', why: `a ${year ? `${year} ` : ''}${listing.style || 'period home'}, so warm wood and soft fabrics` };
+    return { palette: 'cozy', why: `a ${year ? `${year} ` : ''}${listing.style || 'period home'}, so a warm, classic set` };
   }
-  if (/modern|contemporary|minimal|loft/.test(st)) return { palette: 'modern', why: `a ${listing.style.toLowerCase()} home, so clean lines` };
-  if (light === 'bright') return { palette: 'scandi', why: 'a bright room, so light oak and pale linen' };
+  if (/modern|contemporary|minimal|loft/.test(st)) return { palette: 'modern', why: `a ${listing.style.toLowerCase()} home, so a simple, modern set` };
+  if (light === 'bright') return { palette: 'scandi', why: 'a bright room, so a light, soft set' };
   return { palette: 'modern', why: 'a simple, modern set' };
 }
 
@@ -202,7 +202,9 @@ export async function suggestRoom({ room, tier, budget } = {}) {
   // the order they land: rug first, then the big piece, then the rest
   const order = [...items].sort((a, b) => ((w.FURNITURE[b.userData.kind] || {}).flat ? 1 : 0) - ((w.FURNITURE[a.userData.kind] || {}).flat ? 1 : 0)
     || (w.FURNITURE[b.userData.kind].w * w.FURNITURE[b.userData.kind].d) - (w.FURNITURE[a.userData.kind].w * w.FURNITURE[a.userData.kind].d));
-  dropIn(order);
+  if (!w.feel) dropIn(order);
+  // the soft layer: a throw on the sofa and the coffee table styled (no new priced pieces, so the total holds)
+  if (w.styling) w.styling.styleRoom({ room: r.id, add: ['throw', 'coffee_table'] }).catch(() => {});                            // feel.js animates every arrival; this is the fallback
 
   const lamp = light === 'low' && items.some((it) => it.userData.kind === 'floorlamp') ? ' and a floor lamp because it is a darker room' : '';
   const say = `It's ${pick.why}${lamp}. About ${usd(total)} for the ${label}`

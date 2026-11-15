@@ -839,6 +839,34 @@ function chooseFace(where, description) {
   return null;
 }
 
+/**
+ * A gallery wall: three framed pieces in a row on one wall, a larger one in the middle, above the sofa when there
+ * is one. Each starts as a drawn print and sharpens when its image arrives (the image model is ~2 a minute, so
+ * the three come in one after another). Used by styling.js; returns how many went up.
+ */
+export function hangGallery({ theme = 'warm neutral', wall = 'above the sofa' } = {}) {
+  const w = W();
+  if (!w || !w.current) return { ok: false, reason: 'the viewer is not ready' };
+  const t = String(theme || 'warm neutral');
+  const choice = chooseFace(wall, t) || chooseFace('', t);
+  if (!choice) return { ok: false, reason: 'No wall in front of the user to hang a gallery on.' };
+  const mid = { w: 0.6, h: 0.8 }, side = { w: 0.45, h: 0.6 };
+  const vc = choice.anchored ? choice.v + mid.h / 2 : EYE;
+  const gap = 0.12, off = mid.w / 2 + gap + side.w / 2;
+  const pieces = [
+    { du: 0, ...mid, description: `${t} abstract painting, soft brushwork` },
+    { du: -off, ...side, description: `${t} botanical print, pressed leaves` },
+    { du: off, ...side, description: `${t} minimal line drawing` },
+  ];
+  let hung = 0;
+  for (const p of pieces) {
+    const g = hangOn(choice.face, { description: p.description, width_m: p.w, height_m: p.h, frame: 'oak', matte: 0.05,
+      u: choice.u + p.du, v: vc });
+    if (g) hung++;
+  }
+  return { ok: hung > 0, hung, say: hung ? `${hung} framed pieces ${choice.above ? `above the ${choice.above}` : 'on the wall'}` : null };
+}
+
 /** hang_picture: a framed picture on the wall the user means, real size, clear of doors and windows. */
 export function hangPicture({ description, wall, width_m, height_m, frame } = {}) {
   const w = W();
@@ -1277,6 +1305,6 @@ const rules = `- Paint or wallpaper on a wall ("paint this wall sage green", "st
   const w = window.walkin;
   if (!w || !w.scene) { if (tries < 600) setTimeout(() => start(tries + 1), 200); return; }
   w.scene.add(decorGroup);
-  w.decor = { pictures, hangPicture, decorateRoom, renovateHouse, removeDecor, patternTile, setWallFinish, generateImage, imageStats,
+  w.decor = { pictures, hangPicture, hangGallery, decorateRoom, renovateHouse, removeDecor, patternTile, setWallFinish, generateImage, imageStats,
     themes: () => THEMES.map((t) => t.name) };
 })();

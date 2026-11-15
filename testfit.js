@@ -29,6 +29,8 @@ const PULL_OUT = 0.3;              // and for pushing it back
 const PITCH = DESK.w;              // desks along a row, touching
 const CROSS_EVERY = 6;             // a cross aisle after this many desks
 const CROSS_AISLE = 1.2;
+const MIN_EXIT_W = 0.7;            // narrower than this is a duct or a cupboard, not a way out
+const MIN_ASIDE = 1.0;             // free floor a bench block needs beside it, so corridors stay empty
 const DAYLIGHT_M = 7.5;            // "near a window" for the daylight count (WELL / LEED use 7.5 m)
 const SQFT = 0.09290304;
 const CODE_PER_PERSON = 150 * SQFT;    // IBC business occupancy, gross
@@ -242,7 +244,11 @@ function layoutDesks(g, frame, aisle, extraBlocked) {
     let placedInBlock = 0;
     let u = u0 + DESK.w / 2 + 0.1, n = 0;
     while (u + DESK.w / 2 <= u1 + 1e-6) {
-      for (const facing of [-1, 1]) {                   // the pair: one desk faces -v, the other +v
+      // an aisle's width of free floor on at least one side of the block, or this is a corridor and a
+      // desk does not belong in it however well the rectangle fits
+      const beside = isFree({ u0: u - DESK.w / 2, u1: u + DESK.w / 2, v0: v + half, v1: v + half + MIN_ASIDE })
+                  || isFree({ u0: u - DESK.w / 2, u1: u + DESK.w / 2, v0: v - half - MIN_ASIDE, v1: v - half });
+      for (const facing of beside ? [-1, 1] : []) {    // the pair: one desk faces -v, the other +v
         const centre = v + (DESK.d / 2) * facing;
         const r = stationRect(u, centre, facing);
         if (isFree(r)) { stations.push({ u, v: centre, facing, rect: r }); placedInBlock++; }
@@ -300,18 +306,39 @@ function egressField(g, exits, blockedRects, frame) {
   return dist;
 }
 
-/** Doorways with no floor on one side are exits: they lead out of what was scanned. */
+/**
+ * Which doors are exits. A door with no floor beyond it leads out of what was scanned. In a suite the
+ * scan usually runs on into the building's corridor, so the better tell is that the far side is a
+ * corridor: free floor only a couple of metres wide, where the near side is a room. Failing both,
+ * the two widest doors - entrances are cut wider than the doors between offices.
+ */
 function exitDoors(g, w) {
   const out = [];
-  for (const d of doorways(w)) {
-    const sides = [1, -1].map((s) => {
-      let n = 0;
-      for (const k of [0.4, 0.7, 1.0]) { const [ix, iy] = g.cell(d.cx + d.nx * s * k, d.cy + d.ny * s * k); if (ix >= 0 && iy >= 0 && ix < g.nx && iy < g.ny && g.floor[g.at(ix, iy)]) n++; }
-      return n;
-    });
-    if ((sides[0] === 0) !== (sides[1] === 0)) {
-      const s = sides[0] ? 1 : -1;                     // the side that has floor is inside
-      out.push({ x: d.cx + d.nx * s * 0.4, y: d.cy + d.ny * s * 0.4, width: d.width, door: d });
+  const floorAt = (x, y) => { const [ix, iy] = g.cell(x, y); return ix >= 0 && iy >= 0 && ix < g.nx && iy < g.ny && !!g.floor[g.at(ix, iy)]; };
+  // free span along the wall direction, measured `k` metres past the door on side `s`
+  const spanAt = (d, s, k) => {
+    const px = d.cx + d.nx * s * k, py = d.cy + d.ny * s * k;
+    let a = 0, b = 0;
+    for (let t = 0; t < 6; t += CELL) { if (!g.isFree(px + d.ux * t, py + d.uy * t)) break; a = t; }
+    for (let t = 0; t < 6; t += CELL) { if (!g.isFree(px - d.ux * t, py - d.uy * t)) break; b = t; }
+    return a + b;
+  };
+  const all = doorways(w).filter((d) => d.width >= MIN_EXIT_W).map((d) => {
+    const floor = [1, -1].map((s) => [0.4, 0.7, 1.0].filter((k) => floorAt(d.cx + d.nx * s * k, d.cy + d.ny * s * k)).length);
+    const span = [1, -1].map((s) => Math.min(spanAt(d, s, 1.5), spanAt(d, s, 2.5)));
+    return { d, floor, span };
+  });
+  for (const { d, floor, span } of all) {
+    let inside = null;
+    if ((floor[0] === 0) !== (floor[1] === 0)) inside = floor[0] ? 1 : -1;               // nothing beyond
+    else if (span[0] < 3.0 && span[1] >= 3.0) inside = -1;                                  // corridor on side +1
+    else if (span[1] < 3.0 && span[0] >= 3.0) inside = 1;
+    if (inside) out.push({ x: d.cx + d.nx * inside * 0.4, y: d.cy + d.ny * inside * 0.4, width: d.width, door: d, why: floor[0] === 0 || floor[1] === 0 ? 'edge of scan' : 'corridor' });
+  }
+  if (!out.length) {
+    for (const { d, span } of all.slice().sort((a, b) => b.d.width - a.d.width).slice(0, 2)) {
+      const inside = span[0] >= span[1] ? 1 : -1;
+      out.push({ x: d.cx + d.nx * inside * 0.4, y: d.cy + d.ny * inside * 0.4, width: d.width, door: d, why: 'widest door' });
     }
   }
   return out;
@@ -365,11 +392,14 @@ function ribbon(points, floorZ, color, width = 0.25) {
 }
 
 function label(text, x, y, z, scale = 1.2) {
-  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const c = document.createElement('canvas'); c.width = 1024; c.height = 256;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = 'rgba(20,20,24,0.78)'; ctx.fillRect(0, 0, 512, 128);
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 54px -apple-system, Helvetica, Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, 256, 64);
+  ctx.fillStyle = 'rgba(20,20,24,0.78)'; ctx.fillRect(0, 0, 1024, 256);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // shrink to fit: "8-seat meeting room 2" is longer than the canvas at the size that reads from afar
+  let px = 108;
+  do { ctx.font = `bold ${px}px -apple-system, Helvetica, Arial`; px -= 6; } while (ctx.measureText(text).width > 980 && px > 40);
+  ctx.fillText(text, 512, 128);
   const tex = new THREE.CanvasTexture(c);
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
   sp.scale.set(scale, scale / 4, 1); sp.position.set(x, y, z); sp.renderOrder = 20;
@@ -461,16 +491,18 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   const area = g.freeCount * CELL * CELL;
   const near = stations.filter((s) => s.window <= DAYLIGHT_M).length;
   const lit = isFinite(worst?.toExit) ? worst.toExit : null;
-  lastFit = { stations, g, frame, exits, floorZ, aisle };
+  lastFit = { stations, g, frame, exits, floorZ, aisle, worst };
+  w.testFitLast = lastFit;                               // read-only: where the desks and exits are
   const say = `${stations.length} seats${people && benching > people ? ` (room for ${benching} at benching density)` : ''}, ` +
     `${near} of them within ${DAYLIGHT_M} m of a window. ${Math.round(area)} m² of usable floor: ` +
     `${Math.floor(area / CODE_PER_PERSON)} people by code at 150 square feet each, ${Math.floor(area / TYPICAL_PER_PERSON)} at 100. ` +
     (lit != null ? `Longest walk to an exit ${lit.toFixed(0)} m through ${exits.length} exit${exits.length === 1 ? '' : 's'}.` : `No exit door found on this floor.`);
+  const exitWhy = exits.map((e) => `${e.width.toFixed(2)} m (${e.why})`).join(', ');
   hud(`Test fit · ${stations.length} seats · aisles ${aisle} m\n${near} within ${DAYLIGHT_M} m of a window · ${wins.length} windows\n${Math.round(area)} m² usable · code ${Math.floor(area / CODE_PER_PERSON)} · typical ${Math.floor(area / TYPICAL_PER_PERSON)}` +
     (lit != null ? `\nlongest walk to exit ${lit.toFixed(0)} m` : '') + (zones.length ? `\n${zones.length} zone${zones.length === 1 ? '' : 's'}: ${zones.map((z) => z.name).join(', ')}` : ''));
   return { ok: true, ms: Math.round(performance.now() - t0), seats: stations.length, benching_max: benching, near_window: near,
     usable_m2: Math.round(area), code_occupancy: Math.floor(area / CODE_PER_PERSON), typical_occupancy: Math.floor(area / TYPICAL_PER_PERSON),
-    windows: wins.length, exits: exits.length, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle, say };
+    windows: wins.length, exits: exits.length, exit_doors: exitWhy, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle, say };
 }
 
 function clearGroup() {
@@ -591,6 +623,10 @@ function drawZone(z, frame, floorZ) {
     new THREE.MeshBasicMaterial({ color: z.type === 'meeting' ? 0x8fd3ff : z.type === 'kitchen' ? 0xffd27f : 0xc8f08f, transparent: true, opacity: 0.12, depthWrite: false, side: THREE.DoubleSide }));
   box.position.set(cx, cy, floorZ + H / 2); box.rotation.z = frame.ang; box.renderOrder = 3;
   g.add(box);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(z.size[0], z.size[1]),
+    new THREE.MeshBasicMaterial({ color: box.material.color, transparent: true, opacity: 0.28, depthWrite: false }));
+  plate.position.set(cx, cy, floorZ + 0.015); plate.rotation.z = frame.ang; plate.renderOrder = 1;
+  g.add(plate);
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry), new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 }));
   edges.position.copy(box.position); edges.rotation.copy(box.rotation); edges.renderOrder = 3;
   g.add(edges);
@@ -618,7 +654,7 @@ function drawZone(z, frame, floorZ) {
   } else {
     put('chair', 0, 0);
   }
-  g.add(label(z.name, cx, cy, floorZ + H + 0.2, Math.max(2.0, z.size[0] * 0.6)));
+  g.add(label(z.name, cx, cy, floorZ + H + 0.35, Math.max(3.2, z.size[0] * 0.9)));
   return g;
 }
 

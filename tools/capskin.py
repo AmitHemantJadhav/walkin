@@ -165,15 +165,22 @@ def ask_swatch(api, crop, hint):
         + (f' For context, the piece is {hint}.' if hint else ''))
     req = {'contents': [{'role': 'user', 'parts': [
         {'inlineData': {'mimeType': 'image/png', 'data': base64.b64encode(buf.getvalue()).decode()}},
-        {'text': prompt}]},
-    ]}
-    d = api.generate(req)
-    for part in (d.get('candidates') or [{}])[0].get('content', {}).get('parts', []):
-        if 'inlineData' in part:
-            try:
-                return Image.open(io.BytesIO(base64.b64decode(part['inlineData']['data']))).convert('RGB')
-            except Exception:
-                return None
+        {'text': prompt}]}],
+        # ask for an image, not a description of one: 4 of 9 first answers were text
+        'generationConfig': {'responseModalities': ['IMAGE']}}
+    for attempt in range(2):
+        d = api.generate(req)
+        parts = (d.get('candidates') or [{}])[0].get('content', {}).get('parts', [])
+        for part in parts:
+            if 'inlineData' in part:
+                try:
+                    return Image.open(io.BytesIO(base64.b64decode(part['inlineData']['data']))).convert('RGB')
+                except Exception:
+                    return None
+        text = ' '.join(p.get('text', '') for p in parts)[:90]
+        fin = (d.get('candidates') or [{}])[0].get('finishReason', '')
+        print(f'    no image ({fin or "text"}: {text!r}); asking once more', flush=True)
+        req['contents'][0]['parts'][1]['text'] = prompt + ' Reply with the image only.'
     return None
 
 
@@ -239,7 +246,11 @@ def run(model, force=False, dry=False, max_pieces=None):
         if y0 + size > atlas.height or x0 + size > atlas.width:
             print(f'  p{p["i"]}: atlas {atlas.size} has no room for its square {p["capSquare"]}; rerun meshsharp')
             continue
-        crop, cover = material_crop(atlas, (x0, y0, size))
+        # Show the model the scan's own texels (meshsharp keeps them in furniture-tex-orig/), not the
+        # sharpened atlas: shown meshsharp's borrowed grain, it faithfully continued the strokes.
+        orig = os.path.join(base, 'furniture-tex-orig', p['tex'])
+        source = Image.open(orig).convert('RGB') if os.path.exists(orig) else atlas
+        crop, cover = material_crop(source, (x0, y0, size) if source is atlas else (0, 0, 0))
         if crop is None:
             print(f'  p{p["i"]}: no clean patch of real texture to continue; keeping the mirrored square')
             continue

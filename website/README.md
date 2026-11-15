@@ -4,7 +4,9 @@
 through La Mirada's front door, ending on the real 360 photo inside, where the play button opens the demo video.
 three.js draws the frames and blends each into the next. GSAP ScrollTrigger turns the scroll into a frame position.
 
-Run it: any static server from the repo root, e.g. `python3 -m http.server 8080`, then open `/website/`.
+Run it: `python3 -m http.server 8080 -b 127.0.0.1 -d website`, then open http://localhost:8080/. Serve only `website/`
+and only on localhost: run from the repo root, http.server would also serve `.env` and `data/` to anyone on the network
+(it doesn't hide dotfiles the way serve.py does). three.js and GSAP come from CDNs, so the folder is all the page needs.
 
 - `index.html`, `style.css`, `main.js`: the page (three.js and GSAP from CDNs)
 - `frames/f_000.jpg` … `f_299.jpg`: the rendered fly-down, 1920×1080 (made for a laptop screen). The page decodes only the frames near the scroll position

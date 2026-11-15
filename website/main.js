@@ -37,8 +37,7 @@ function keepWindow(center, dir) {          // decode ahead in the direction of 
     if ((i < lo - 4 || i > hi + 4) && i !== shownA && i !== shownB) { bm.close(); bitmaps.delete(i); }
   }
 }
-async function loadAll() {
-  await fetchFrame(0);
+async function loadAll() {                    // frame 0 is already in (fetched before the page shows)
   let done = 1;
   const queue = Array.from({ length: N - 1 }, (_, k) => k + 1);
   const worker = async () => {

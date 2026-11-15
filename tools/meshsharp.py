@@ -287,6 +287,8 @@ def tile_caps(model, meta, base, rewritten=()):
         Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(path, quality=88, optimize=True)
         p['capTile'] = True
         p['capTileM'] = round(L, 2)
+        p['capSquare'] = [0, H2 - TILE, TILE]               # x, y, size of the material square
+        p['capSkin'] = False                                 # a fresh square: capskin has not seen it
         n_done += 1
         print(f"p{p['i']:<3} caps on their own material: {p['capped']} faces over {L:.1f} m, atlas now {W}x{H2}")
     if n_done:

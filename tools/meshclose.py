@@ -101,6 +101,11 @@ def cap_loop(loop, pos, centroid):
     return out
 
 
+MIN_CAP_EXTENT = 0.45   # m: a hole shorter than this is a gap in a surface, not a missing side
+MAX_CAP_RMS = 0.03      # of the extent: a loop further off its own plane than this has no plane to cap on
+MAX_CAP_NZ = 0.5        # |normal z| above this is a horizontal loop: an underside or a skirt outline
+
+
 def close(V, F, facing=-0.5):
     """Cap the holes in (V, F).
 
@@ -125,6 +130,23 @@ def close(V, F, facing=-0.5):
 
     tris = []
     for L in loops:
+        # Only a hole that is a missing *side* gets a cap: big, and flat enough that its cap lies where
+        # the side would have been. The scan also leaves hundreds of small ragged holes in the surfaces
+        # it did see - a table top has 120 loops - and capping those on their best-fit plane put slabs
+        # across the top at odd angles, which read as torn triangles. A 5 cm hole shows the inside of
+        # the piece through it; a 30 cm slab across the top shows on every screenshot.
+        P = pos[L]
+        c = P.mean(axis=0)
+        _, sv, vt = np.linalg.svd(P - c, full_matrices=False)
+        extent = 2 * sv[0] / np.sqrt(len(P))                      # about the loop's long axis, m
+        rms = float(np.sqrt(np.mean(((P - c) @ vt[2]) ** 2)))      # off its plane, m
+        if extent < MIN_CAP_EXTENT or rms > MAX_CAP_RMS * extent:
+            continue
+        # and upright: a missing back or side is a vertical plane. The horizontal loops are the
+        # undersides, which nobody sees, and the outline of a seat skirt, whose cap came out through
+        # the seat front as a slab you could see from across the room.
+        if abs(vt[2][2]) > MAX_CAP_NZ:
+            continue
         got = cap_loop(L, pos, centroid)
         if not got:
             continue

@@ -22,9 +22,25 @@ import os
 import sys
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv(dotenv_path='.env')
+
+def env(name):
+    """Same places prep_house.py looks: the process environment, then ./.env, then ../.env."""
+    v = os.environ.get(name)
+    if v:
+        return v
+    for path in ('.env', os.path.join('..', '.env')):
+        try:
+            with open(path) as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if ln.startswith(name + '='):
+                        return ln.split('=', 1)[1].strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return None
+
+
 Q = """query($id: ID!) { model(id: $id) { id name
   geocoordinates { latitude longitude rotation { x y z w } source } } }"""
 
@@ -38,12 +54,15 @@ def bearing_of_y(q):
 
 
 def main():
-    key, tok = os.environ.get('MATTERPORT_API_KEY'), os.environ.get('MATTERPORT_API_TOKEN')
+    key, tok = env('MATTERPORT_API_KEY'), env('MATTERPORT_API_TOKEN')
     if not (key and tok):
         sys.exit('MATTERPORT_API_KEY / MATTERPORT_API_TOKEN not set')
     models = sys.argv[1:] or [os.path.basename(os.path.dirname(p)) for p in glob.glob('data/*/house.json')
                                if not os.path.basename(os.path.dirname(p)).startswith('fixture')]
     for sid in models:
+        if not os.path.isdir(os.path.join('data', sid)):
+            print(f'{sid}: not prepped - run prep_house.py {sid} first')
+            continue
         r = requests.post('https://api.matterport.com/api/models/graph', auth=(key, tok),
                           json={'query': Q, 'variables': {'id': sid}}, timeout=30)
         m = ((r.json().get('data') or {}).get('model')) or {}
@@ -51,7 +70,11 @@ def main():
         if not g or not g.get('rotation'):
             print(f'{sid}: no geocoordinates (status {r.status_code})')
             continue
-        out = dict(model=sid, lat=g['latitude'], lon=g['longitude'], bearingY=round(bearing_of_y(g['rotation']), 2),
+        rot = g['rotation']
+        if abs(rot.get('x', 0)) > 0.01 or abs(rot.get('y', 0)) > 0.01:
+            print(f'{sid}: rotation is not purely about Z (x={rot["x"]:.3f}, y={rot["y"]:.3f}) - the model is tilted, '
+                  'check the sun lands on the right wall')
+        out = dict(model=sid, lat=g['latitude'], lon=g['longitude'], bearingY=round(bearing_of_y(rot), 2),
                    rotation=g['rotation'], source=g.get('source'))
         with open(os.path.join('data', sid, 'geo.json'), 'w') as f:
             json.dump(out, f, indent=1)

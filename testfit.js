@@ -363,16 +363,26 @@ function exitDoors(g, w) {
     for (let t = 0; t < 6; t += CELL) { if (!g.isFree(px - d.ux * t, py - d.uy * t)) break; b = t; }
     return a + b;
   };
+  // free run straight out from the door on side `s`
+  const runAt = (d, s) => { let r = 0; for (let t = 0.3; t < 8; t += CELL) { if (!g.isFree(d.cx + d.nx * s * t, d.cy + d.ny * s * t)) break; r = t; } return r; };
+  // A corridor is narrow one way and long the other: it either runs along the wall (wide span, short
+  // run) or away from the door (narrow span, long run). A 2.5 x 4 m private office or a WC fails both,
+  // which matters: with span alone their doors counted as exits and shortened the longest walk (Amit).
+  const isCorridor = (d, s) => {
+    const span = Math.min(spanAt(d, s, 1.5), spanAt(d, s, 2.5)), run = runAt(d, s);
+    return (spanAt(d, s, 1.5) >= 5 && run < 3) || (span < 3 && run >= 5);
+  };
   const all = doorways(w).filter((d) => d.width >= MIN_EXIT_W).map((d) => {
     const floor = [1, -1].map((s) => [0.4, 0.7, 1.0].filter((k) => floorAt(d.cx + d.nx * s * k, d.cy + d.ny * s * k)).length);
     const span = [1, -1].map((s) => Math.min(spanAt(d, s, 1.5), spanAt(d, s, 2.5)));
-    return { d, floor, span };
+    const corridor = [1, -1].map((s) => isCorridor(d, s));
+    return { d, floor, span, corridor };
   });
-  for (const { d, floor, span } of all) {
+  for (const { d, floor, span, corridor } of all) {
     let inside = null;
     if ((floor[0] === 0) !== (floor[1] === 0)) inside = floor[0] ? 1 : -1;               // nothing beyond
-    else if (span[0] < 3.0 && span[1] >= 3.0) inside = -1;                                  // corridor on side +1
-    else if (span[1] < 3.0 && span[0] >= 3.0) inside = 1;
+    else if (corridor[0] && !corridor[1]) inside = -1;                                      // corridor on side +1
+    else if (corridor[1] && !corridor[0]) inside = 1;
     if (inside) out.push({ x: d.cx + d.nx * inside * 0.4, y: d.cy + d.ny * inside * 0.4, width: d.width, door: d, why: floor[0] === 0 || floor[1] === 0 ? 'edge of scan' : 'corridor' });
   }
   if (!out.length) {
@@ -456,7 +466,7 @@ export function clearTestFit() {
     // Only what we made ourselves is disposed. The instanced desks and chairs share their geometry and
     // materials with the GLB cached by furniture.js's load(); disposing those would make the next real
     // desk re-upload them (Amit, #133).
-    group.traverse((o) => { if (o.userData.ours) { o.geometry && o.geometry.dispose(); o.material && o.material.dispose && o.material.dispose(); } });
+    disposeOurs(group);
     if (group.parent) group.parent.remove(group);
     group = null;
   }
@@ -549,8 +559,22 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
     windows: wins.length, exits: exits.length, exit_doors: exitWhy, longest_walk_to_exit_m: lit == null ? null : Math.round(lit), aisle_m: aisle, say };
 }
 
+/** Let go of everything this file made, and nothing it borrowed from the GLB cache. */
+function disposeOurs(root) {
+  root.traverse((o) => {
+    if (o.isInstancedMesh) o.dispose();                           // the instance buffers, not the shared geometry
+    if (!o.userData.ours) return;
+    if (o.geometry) o.geometry.dispose();
+    if (o.material) {
+      if (o.material.map) o.material.map.dispose();                // a label's canvas texture
+      o.material.dispose && o.material.dispose();
+    }
+  });
+}
+
 function clearGroup() {
   if (!group) return;
+  disposeOurs(group);                                               // "seat 150" then "seat 100" must not pile up ribbons and labels (Amit)
   for (const o of [...group.children]) group.remove(o);
 }
 

@@ -133,7 +133,7 @@ let shadowTex;
 const shadows = new Set();
 let shadowOpacity = 0.45;
 
-function shadowTexture() {
+export function shadowTexture() {
   if (!shadowTex) {
     const c = document.createElement('canvas');
     c.width = c.height = 128;

@@ -16,7 +16,7 @@
 // Exposed as walkin.testFit / walkin.testFitZones / walkin.clearTestFit, and registered as voice tools
 // on walkin.agent at load. Talks to the viewer only through window.walkin.
 import * as THREE from 'three';
-import { FURNITURE, buildFurniture, fitToSpec, load } from './furniture.js';
+import { FURNITURE, buildFurniture, fitToSpec, load, shadowTexture } from './furniture.js';
 import { footprint, DOOR_CLEAR } from './fit.js';
 
 const CELL = 0.15;                 // raster cell, metres: a chair leg is bigger than this
@@ -396,6 +396,84 @@ function exitDoors(g, w) {
 }
 
 // ------------------------------------------------------------------ drawing
+//
+// The kit's desk and chair are low-poly with one flat colour each, and 150 of them read as Lego.
+// What makes a desk read as a desk from across a floor is not polygons: it is wood grain that
+// catches the environment light, a monitor and keyboard on top, a soft shadow underneath, and
+// chairs that are not all parked at exactly the same angle. All of that is done here with
+// procedural textures and instanced boxes - no new assets, nothing to download at the venue.
+
+let woodTex = null, screenTex = null;
+function wood() {
+  if (woodTex) return woodTex;
+  const c = document.createElement('canvas'); c.width = 512; c.height = 512;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b8905f'; g.fillRect(0, 0, 512, 512);
+  // grain: long wobbling streaks in three browns, denser towards one edge like a sawn board
+  for (let i = 0; i < 260; i++) {
+    const y = (i / 260) * 512 + (Math.sin(i * 12.9898) * 43758.5453 % 1) * 6;
+    const tone = ['#a97d4f', '#c29b6c', '#9c7047', '#b5895a'][i % 4];
+    g.strokeStyle = tone; g.globalAlpha = 0.22 + 0.25 * Math.abs(Math.sin(i * 0.7));
+    g.lineWidth = 0.6 + 2.2 * Math.abs(Math.sin(i * 1.3));
+    g.beginPath();
+    for (let x = 0; x <= 512; x += 16) g.lineTo(x, y + Math.sin(x / 61 + i) * 2.4 + Math.sin(x / 17 + i * 3) * 0.7);
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+  woodTex = new THREE.CanvasTexture(c);
+  woodTex.colorSpace = THREE.SRGBColorSpace;
+  woodTex.wrapS = woodTex.wrapT = THREE.RepeatWrapping;
+  woodTex.anisotropy = 8;
+  return woodTex;
+}
+function screen() {
+  if (screenTex) return screenTex;
+  const c = document.createElement('canvas'); c.width = 256; c.height = 160;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 256, 160);
+  grad.addColorStop(0, '#2a3340'); grad.addColorStop(1, '#141a22');
+  g.fillStyle = grad; g.fillRect(0, 0, 256, 160);
+  g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(18, 20, 150, 110);   // a window, dimly
+  g.fillStyle = 'rgba(255,255,255,0.16)'; g.fillRect(18, 20, 150, 12);
+  g.fillStyle = 'rgba(120,170,255,0.25)'; g.fillRect(180, 20, 58, 110);
+  screenTex = new THREE.CanvasTexture(c);
+  screenTex.colorSpace = THREE.SRGBColorSpace;
+  return screenTex;
+}
+
+/** Box-project UVs in metres onto a geometry, so a wood texture lands as grain and not as one swatch. */
+function boxUV(geometry, metresPerRepeat = 0.7) {
+  const geo = geometry.index ? geometry.toNonIndexed() : geometry.clone();
+  const pos = geo.getAttribute('position');
+  const uv = new Float32Array(pos.count * 2);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i += 3) {
+    a.fromBufferAttribute(pos, i); b.fromBufferAttribute(pos, i + 1); c.fromBufferAttribute(pos, i + 2);
+    n.subVectors(b, a).cross(c.clone().sub(a));
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    for (let k = 0; k < 3; k++) {
+      const v = [a, b, c][k];
+      let u, w;
+      if (ay >= ax && ay >= az) { u = v.x; w = v.z; }          // the top: grain runs along the desk
+      else if (ax >= az) { u = v.z; w = v.y; } else { u = v.x; w = v.y; }
+      uv[(i + k) * 2] = u / metresPerRepeat; uv[(i + k) * 2 + 1] = w / metresPerRepeat;
+    }
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+
+/** Nicer materials for the kit's office pieces: real-looking wood, dark metal, matte fabric, all env-lit. */
+function dressed(mesh, kind) {
+  const name = (mesh.material.name || '');
+  if (kind === 'desk') {
+    if (/metal/.test(name)) return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x3a3a3f, metalness: 0.85, roughness: 0.35 }) };
+    return { geometry: boxUV(mesh.geometry), material: new THREE.MeshStandardMaterial({ map: wood(), color: 0xffffff, roughness: 0.55, metalness: 0, envMapIntensity: 0.9 }) };
+  }
+  if (/fabric/.test(name)) return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x33343a, roughness: 0.95, metalness: 0 }) };
+  return { geometry: mesh.geometry, material: new THREE.MeshStandardMaterial({ color: 0x1e1f23, metalness: 0.75, roughness: 0.4 }) };
+}
+
 async function instanced(kind, poses, floorZ) {
   const spec = FURNITURE[kind];
   const src = await load(spec.model);
@@ -407,9 +485,11 @@ async function instanced(kind, poses, floorZ) {
   const out = new THREE.Group();
   const M = new THREE.Matrix4(), P = new THREE.Matrix4();
   for (const m of parts) {
-    const im = new THREE.InstancedMesh(m.geometry, m.material, poses.length);
+    const d = dressed(m, kind);
+    const im = new THREE.InstancedMesh(d.geometry, d.material, poses.length);
     im.renderOrder = 2;
     im.frustumCulled = false;
+    im.userData.ours = d.geometry !== m.geometry;        // box-projected copies are ours to dispose; shared ones are not
     for (let i = 0; i < poses.length; i++) {
       const p = poses[i];
       P.makeRotationZ(p.rot).setPosition(p.x, p.y, floorZ);
@@ -420,6 +500,41 @@ async function instanced(kind, poses, floorZ) {
     out.add(im);
   }
   return out;
+}
+
+/** What sits on a desk: a monitor on a stand, a keyboard, a mouse. Boxes, instanced per desk. */
+function deskTop(poses, floorZ) {
+  const H = DESK.h;
+  const parts = [
+    { geo: new THREE.BoxGeometry(0.22, 0.17, 0.012).translate(0, 0.14, H + 0.006), mat: new THREE.MeshStandardMaterial({ color: 0x202226, metalness: 0.6, roughness: 0.4 }) },   // stand base
+    { geo: new THREE.BoxGeometry(0.035, 0.035, 0.26).translate(0, 0.19, H + 0.13), mat: new THREE.MeshStandardMaterial({ color: 0x202226, metalness: 0.6, roughness: 0.4 }) },    // neck
+    { geo: new THREE.BoxGeometry(0.56, 0.028, 0.33).translate(0, 0.19, H + 0.31).applyMatrix4(new THREE.Matrix4().makeRotationX(-0.09)), mat: new THREE.MeshStandardMaterial({ color: 0x0f1013, roughness: 0.5 }) }, // bezel
+    { geo: new THREE.PlaneGeometry(0.52, 0.29).applyMatrix4(new THREE.Matrix4().makeRotationX(Math.PI / 2 - 0.09)).translate(0, 0.174, H + 0.31), mat: new THREE.MeshStandardMaterial({ map: screen(), emissive: 0x9fb4d0, emissiveMap: screen(), emissiveIntensity: 0.55, roughness: 0.25 }) }, // screen
+    { geo: new THREE.BoxGeometry(0.42, 0.14, 0.018).translate(0, -0.1, H + 0.009), mat: new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.8 }) },   // keyboard
+    { geo: new THREE.BoxGeometry(0.06, 0.1, 0.03).translate(0.3, -0.1, H + 0.015), mat: new THREE.MeshStandardMaterial({ color: 0x2b2d33, roughness: 0.6 }) },    // mouse
+  ];
+  const out = new THREE.Group();
+  const M = new THREE.Matrix4();
+  for (const p of parts) {
+    const im = new THREE.InstancedMesh(p.geo, p.mat, poses.length);
+    im.renderOrder = 2; im.frustumCulled = false; im.userData.ours = true;
+    for (let i = 0; i < poses.length; i++) { M.makeRotationZ(poses[i].rot).setPosition(poses[i].x, poses[i].y, floorZ); im.setMatrixAt(i, M); }
+    im.instanceMatrix.needsUpdate = true;
+    out.add(im);
+  }
+  return out;
+}
+
+/** A soft contact shadow under each station, the same blob the catalog furniture uses. */
+function shadows(poses, floorZ) {
+  const geo = new THREE.PlaneGeometry(DESK.w + 0.5, DESK.d + CHAIR_ZONE + 0.5).translate(0, -0.3, 0);
+  const mat = new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, opacity: 0.42, depthWrite: false });
+  const im = new THREE.InstancedMesh(geo, mat, poses.length);
+  im.renderOrder = 1; im.frustumCulled = false; im.userData.ours = true;
+  const M = new THREE.Matrix4();
+  for (let i = 0; i < poses.length; i++) { M.makeRotationZ(poses[i].rot).setPosition(poses[i].x, poses[i].y, floorZ + 0.012); im.setMatrixAt(i, M); }
+  im.instanceMatrix.needsUpdate = true;
+  return im;
 }
 
 function ribbon(points, floorZ, color, width = 0.25) {
@@ -543,11 +658,16 @@ export async function testFit({ people = null, aisle = 1.2 } = {}) {
   clearGroup();
   const grp = ensureGroup(w);
   const deskPoses = drawn.map((s) => ({ x: s.x, y: s.y, rot: s.rot }));
-  const chairPoses = drawn.map((s) => {
-    const [cx, cy] = frame.toWorld(s.u, s.v + (DESK.d / 2 + CHAIR.d / 2 + 0.05) * s.facing);
-    return { x: cx, y: cy, rot: s.rot + Math.PI };
+  const chairPoses = drawn.map((s, i) => {
+    // nobody parks a chair square: a few degrees and a few centimetres, fixed per seat so it does not jitter between runs
+    const j1 = Math.sin(i * 12.9898) * 43758.5453, j2 = Math.sin(i * 78.233) * 43758.5453;
+    const dj = (j1 - Math.floor(j1)) - 0.5, du = (j2 - Math.floor(j2)) - 0.5;
+    const [cx, cy] = frame.toWorld(s.u + du * 0.08, s.v + (DESK.d / 2 + CHAIR.d / 2 + 0.05 + Math.abs(dj) * 0.12) * s.facing);
+    return { x: cx, y: cy, rot: s.rot + Math.PI + dj * 0.35 };
   });
+  grp.add(shadows(deskPoses, floorZ));
   grp.add(await instanced('desk', deskPoses, floorZ));
+  grp.add(deskTop(deskPoses, floorZ));
   grp.add(await instanced('chair', chairPoses, floorZ));
   for (const z of zones) grp.add(z.draw(frame, floorZ));
   if (worst) grp.add(ribbon(tracePath(g, field, worst.chair), floorZ, 0x3cb371));

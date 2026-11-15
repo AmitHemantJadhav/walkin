@@ -1052,6 +1052,7 @@ async function restartHands(mode) {
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
 async function toggleHands() {
+  keepAwake(); // hands on means nobody will touch the screen for a while
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
@@ -1235,9 +1236,37 @@ async function eyesMode() {
   document.body.classList.add('eyes'); // ui.css: no info card or camera preview; the dock and sun stay, for your hands
   await goFullscreen();
 }
+// Keep the screen on: in a headset nobody touches the phone, and iOS dimmed and locked it within seconds (Amit,
+// from the Home Screen app). The Screen Wake Lock API where it works (iOS 16.4+ in Safari; Home Screen apps only
+// from iOS 18.4), and a tiny silent looping video as well, which iOS has always treated as "media playing, stay
+// awake". Both are re-armed when the page comes back to the front. Needs a tap the first time (iOS media rule).
+// 2 s of black, 16x16, silent (ffmpeg, 3 KB), inline: iOS only plays video files from servers that do HTTP Range
+// requests, and serve.py does not
+const AWAKE_MP4 = 'data:video/mp4;base64,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';
+const awake = { lock: null, video: null };
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && !awake.lock && document.visibilityState === 'visible') {
+      awake.lock = await navigator.wakeLock.request('screen');
+      awake.lock.addEventListener('release', () => { awake.lock = null; });
+    }
+  } catch {}
+  if (!awake.video) {
+    const v = awake.video = document.createElement('video');
+    v.src = AWAKE_MP4; v.muted = true; v.loop = true; v.playsInline = true;
+    v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+    v.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.01;left:0;top:0;pointer-events:none;z-index:-1';
+    document.body.appendChild(v);
+  }
+  try { await awake.video.play(); } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && awake.video) keepAwake(); });
+addEventListener('pointerdown', keepAwake, { once: true, capture: true }); // the first touch anywhere
+
 // Full screen: Android and iPad do it from the tap. iPhone Safari has no fullscreen for a page - the way there is
 // "Add to Home Screen" (manifest.json + apple-mobile-web-app-capable): opened from the icon, there is no URL bar.
 async function goFullscreen() {
+  keepAwake();
   const d = document.documentElement;
   try { await (d.requestFullscreen?.() || d.webkitRequestFullscreen?.()); } catch {}
   try { await screen.orientation?.lock?.('landscape'); } catch {}

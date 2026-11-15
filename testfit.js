@@ -22,7 +22,7 @@ import { footprint, DOOR_CLEAR } from './fit.js';
 const CELL = 0.15;                 // raster cell, metres: a chair leg is bigger than this
 const FLOOR_BAND = 0.12;           // a face this close to floorZ is floor
 const BLOCK_LO = 0.30, BLOCK_HI = 2.0;   // anything crossing this band stands in the way of a desk
-const DESK = FURNITURE.desk;       // 1.4 x 0.7 x 0.74
+const DESK = FURNITURE.desk;       // 1.6 x 0.8 x 0.74 (a standard office desk, and the hero model's proportions)
 const CHAIR = FURNITURE.chair;     // 0.45 x 0.5 x 0.9
 const CHAIR_ZONE = 0.6;            // floor behind a desk for the chair
 const PULL_OUT = 0.3;              // and for pushing it back

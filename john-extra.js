@@ -202,10 +202,12 @@ const ROUND = /\b(round|circular|cylinder|cylindrical|drum|barrel|pouf|pouffe|ot
 /** What a description becomes: { catalog: kind } or { proc, spec }. */
 export function matchObject(description, dims = {}) {
   const t = ` ${lower(description).replace(/[^a-z0-9' -]+/g, ' ')} `;
-  for (const [re, proc, spec] of PROCEDURAL) {
-    if (re.test(t)) return { proc, spec: { ...spec, ...sizeFrom(dims, spec) } };
-  }
   const F = W().FURNITURE;
+  for (const [re, proc, spec] of PROCEDURAL) {
+    if (!re.test(t)) continue;
+    if (F[proc] && F[proc].hero) return { catalog: proc };   // the catalog has a real model of it now (#138)
+    return { proc, spec: { ...spec, ...sizeFrom(dims, spec) } };
+  }
   const bare = t.trim();
   if (F[bare] && !F[bare].real) return { catalog: bare };          // a catalog key as is ("plantfern")
   for (const [re, k] of CATALOG) if (re.test(t) && F[k]) return { catalog: k };

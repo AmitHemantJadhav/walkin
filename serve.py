@@ -67,6 +67,28 @@ REVALIDATED = ("/data/",)                  # re-prepped houses must show up at o
 
 
 # ------------------------------------------------------------------ quota: rate limits, stats, disk cache
+def turn_has_unsigned_call(contents):
+    """Did OpenRouter answer a function call in the CURRENT turn (so Gemini would reject the next round)?
+
+    Only the current turn counts (Gemini validates thought signatures there, not in earlier turns), and only a
+    model message with no signed call at all: Gemini signs just the first call of a parallel set, so
+    plant_preview + place_object has an unsigned second part by design. Counting that, and every earlier
+    turn, sent the whole rest of a session to OpenRouter after one parallel call (e2e, Nov 15).
+    """
+    start = 0
+    for i, c in enumerate(contents):          # the turn starts at the last user message with text in it
+        if isinstance(c, dict) and c.get("role") == "user" and any(
+                isinstance(p, dict) and "text" in p for p in c.get("parts") or []):
+            start = i
+    for c in contents[start:]:
+        if not (isinstance(c, dict) and c.get("role") == "model"):
+            continue
+        parts = [p for p in c.get("parts") or [] if isinstance(p, dict)]
+        if any(p.get("functionCall") for p in parts) and not any(p.get("thoughtSignature") for p in parts):
+            return True
+    return False
+
+
 def _env_num(name, default):
     try:
         return float(os.environ.get(name) or default)
@@ -358,9 +380,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # thoughtSignature, and Gemini rejects the next round with 400 "missing thought_signature", so once a
             # turn has such a call it finishes on OpenRouter. And after Gemini fails (free-tier quota 429, 5xx),
             # skip it for a minute instead of paying its timeout on every round.
-            unsigned = any(isinstance(p, dict) and p.get("functionCall") and not p.get("thoughtSignature")
-                           for c in req.get("contents") or [] if isinstance(c, dict) and c.get("role") == "model"
-                           for p in c.get("parts") or [])
+            unsigned = turn_has_unsigned_call(req.get("contents") or [])
             if unsigned or time.time() < GEMINI_COOL.get(kind, 0):
                 return self._openrouter(kind, model, req, body)
         def fallback():

@@ -18,6 +18,10 @@ Rules:
 - Use metres (add feet only if asked). Sizes and rooms come from the scan, so quote them exactly; never invent facts.
 - Call describe_house before answering questions about rooms, sizes, what is placed, or the listing.
 - "this wall", "here", "this room" mean what the user points at or the room they stand in: see pointer and current_room in describe_house.
+- A question is not a request: "will a king bed fit in the master?", "how big is this room?", "is there space for a desk?"
+  are answered from describe_house (room sizes) and the catalog sizes, without placing or changing anything,
+  unless the user asks you to put it there.
+- "it", "that" mean the piece last placed, moved or pointed at, never a fixed part of the house (fireplace, window, door).
 - Act first, then confirm briefly what you did and whether it fits. If a tool says a feature is unavailable, say so plainly.
 - Plant questions ("what plant should go here?"): call light_here, pick one plant that suits that light, call plant_preview,
   then place_object with the closest catalog kind (plant for a tall floor plant; plantsmall, plantfern or plantsucculent
@@ -27,6 +31,12 @@ Rules:
   "under $2,000"): call suggest_room, then say in two short sentences why it suits the room (the house's style and the
   light) and the room total from its say field. Prices are estimates from our catalogue: say "about", never quote a brand.
 - After stage_house, mention the estimated cost to furnish (estimated_cost_usd) next to the listing price if it is known.`;
+// Tool modules (furniture-tools.js, decor.js, …) add their own tools and a few lines of rules:
+//   (window.walkinTools = window.walkinTools || []).push({ declarations: [...], run: { name: fn }, rules: '...' })
+// They are merged into TOOLS / RUN / the system prompt when the agent starts, and live.js gets the same set.
+let EXTRA_RULES = '';
+const systemText = () => SYSTEM + EXTRA_RULES +
+  '\n- Never say you cannot do something a tool can do. For a bigger request (a theme, "make it cosy"), chain several tools.';
 
 const TOOLS = [{
   functionDeclarations: [
@@ -624,7 +634,7 @@ async function relay(url, body, waitMs) {
 
 async function gemini(contents) {
   const body = {
-    systemInstruction: { parts: [{ text: SYSTEM }] }, contents, tools: TOOLS,
+    systemInstruction: { parts: [{ text: systemText() }] }, contents, tools: TOOLS,
     generationConfig: { temperature: 0.4, maxOutputTokens: 1024 }, // room for thinking tokens plus a short answer
   };
   let data;
@@ -747,7 +757,16 @@ async function ask(text) {
     return say(lastSay ? spoken(lastSay.say) : 'Done.');
   } catch (e) {
     console.error('[agent]', e);
+    // the model failed (rate limit, timeout) AFTER tools already changed the house: say what was done, not "busy"
+    const start = history.findIndex((c, i) => i >= mark && c.role === 'user');
+    const done = (start >= 0 ? history.slice(start) : []).flatMap((c) => c.parts || []).map((p) => p.functionResponse)
+      .filter((r) => r && r.response && r.response.ok !== false && !/^(describe_house|list_furniture|light_here|estimate_cost)$/.test(r.name));
     history.length = mark; // drop the failed turn so the next question starts clean
+    if (done.length) {
+      const said = done.map((r) => r.response.say).filter(Boolean).pop();
+      await filler;
+      return say(said ? spoken(said) : "Done, have a look. Tell me if you'd like anything changed.");
+    }
     return say(friendlyError(e));
   } finally {
     clearTimeout(slow);
@@ -945,10 +964,22 @@ function buildUI() {
   }
   buildUI();
   loadListing(window.walkin.house.model);
+  const register = (m) => {
+    if (!m || !Array.isArray(m.declarations)) return;
+    for (const d of m.declarations) {
+      const i = TOOLS[0].functionDeclarations.findIndex((x) => x.name === d.name);
+      if (i >= 0) TOOLS[0].functionDeclarations[i] = d; else TOOLS[0].functionDeclarations.push(d);
+    }
+    Object.assign(RUN, m.run || {});
+    if (m.rules) EXTRA_RULES += '\n' + m.rules.trim();
+  };
+  const queued = window.walkinTools || [];
+  queued.forEach(register);
+  window.walkinTools = { push: register }; // modules loading later register at once
   window.walkin.agent = { ask, describeHouse, history, tools: RUN, speak, lightHere, isSpeaking: () => talking > 0,
     isBusy: () => busy, runTool,
     // for live.js (Gemini Live voice): the same instructions and tools as the typed pipeline
-    system: SYSTEM, declarations: TOOLS[0].functionDeclarations };
+    get system() { return systemText(); }, declarations: TOOLS[0].functionDeclarations };
   window.walkin.say = say;
   window.walkin.onTalk = onTalk; // called by the pinch-hold menu (A5)
 

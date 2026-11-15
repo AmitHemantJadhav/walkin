@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8">
+<title>Walk-In e2e</title>
+<!-- The demo pipelines end to end, with the REAL Gemini model (typed John, Live voice token + a real Live session,
+     staging, walls, plants, physics door, own furniture, real hands). ~6-8 min because of the rate limits.
+       set -a; . ./.env; set +a; RELAY_CACHE=0 python3 serve.py 8033
+       http://localhost:8033/tools/e2e.html          (?m=<model>  ?only=3a,3f,6  ?tts=1  ?save=1 downloads the table as JPEG)
+     Keep the tab in front: a background tab gets no frames, so physics and the agent's screenshots stall.
+     Results: the table below, and window.__e2e (JSON) once window.__e2e.done is true. -->
+<style>
+  body { font: 13px/1.4 -apple-system, Helvetica, sans-serif; margin: 12px; color: #111; background: #fafafa; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  #status { margin: 4px 0 10px; font-weight: 600; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 4px 6px; vertical-align: top; text-align: left; }
+  th { background: #f0f0f0; }
+  tr.pass { background: #e6f6ea; } tr.fail { background: #fde8e8; } tr.missing { background: #fff4d6; }
+  td:nth-child(5) { max-width: 420px; }
+  #app { width: 960px; height: 540px; border: 1px solid #ccc; margin-top: 10px; }
+  body.done #app { display: none; }
+  #json { white-space: pre-wrap; font: 11px ui-monospace, monospace; max-height: 300px; overflow: auto; background: #fff; border: 1px solid #ddd; }
+</style>
+<h1>Walk-In end-to-end (real Gemini) <button onclick="saveE2EImage()">Save JPEG</button></h1>
+<div id="status">starting…</div>
+<table id="results"><thead><tr><th>#</th><th>result</th><th>step / command</th><th>tools John called</th><th>John said</th><th>time</th><th>check</th></tr></thead><tbody></tbody></table>
+<iframe id="app" allow="camera; microphone; autoplay"></iframe>
+<details><summary>window.__e2e</summary><pre id="json"></pre></details>
+<script type="module" src="e2e.js"></script>

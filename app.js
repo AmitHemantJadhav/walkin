@@ -34,7 +34,9 @@ const stereo = new StereoEffect(renderer);
 stereo.setSize(innerWidth, innerHeight);
 
 // Adaptive resolution state (A1). Declared here, before any event handler that touches it (see tickPerf below).
-const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(0.75, MAX_PR);
+// Never below 1x: at 0.75x everything on an iPhone went soft (the radial menu, labels, hands). Below 1x the hand
+// detection rate backs off instead (see tickPerf).
+const MAX_PR = Math.min(devicePixelRatio, 2), MIN_PR = Math.min(1, MAX_PR);
 // Hand detection blocks the main thread each time it runs, so its rate backs off too (after resolution reaches 1x).
 // 30 Hz = the camera's own rate, so the top step costs nothing on a laptop.
 const HAND_HZ_MAX = 30, HAND_HZ_MIN = 15;
@@ -474,6 +476,26 @@ async function refreshImages() {
 const furniture = new THREE.Group();
 scene.add(furniture);
 let selected = null;
+// A piece's world box, like Box3.setFromObject, but without its contact shadow: realfurniture.js puts each
+// own-furniture piece's floor blob (1.25x the footprint, #135) inside the piece, and counting it spread the
+// selection box out on the floor and grew the grab reach. Catalog blobs live in their own group already.
+const _pieceB = new THREE.Box3();
+function pieceBox(o, box) {
+  box.makeEmpty();
+  o.updateWorldMatrix(true, false);
+  (function add(n) {
+    if (n.userData.shadow) return;
+    n.updateWorldMatrix(false, false);
+    const g = n.geometry;
+    if (g) {
+      if (n.boundingBox !== undefined) { if (n.boundingBox === null) n.computeBoundingBox(); _pieceB.copy(n.boundingBox); }
+      else { if (g.boundingBox === null) g.computeBoundingBox(); _pieceB.copy(g.boundingBox); }
+      box.union(_pieceB.applyMatrix4(n.matrixWorld));
+    }
+    for (const c of n.children) add(c);
+  })(o);
+  return box;
+}
 const selBox = new THREE.Box3Helper(new THREE.Box3(), 0x3ccf8e);
 selBox.visible = false;
 selBox.renderOrder = 30;
@@ -510,8 +532,9 @@ function checkFit() {
   if (!selected) { selBox.visible = false; el.textContent = ''; return; }
   const spec = FURNITURE[selected.userData.kind];
   const room = roomAt(selected.position.x, selected.position.y, selected.userData.floor);
-  const ok = !!room && footprint(selected).every(([x, y]) => pointInPoly(x, y, room.poly));
-  selBox.box.setFromObject(selected);
+  // a rug just has to be in the room: it goes under furniture and tucks up to the walls, it is never "too big"
+  const ok = !!room && (spec.flat || footprint(selected).every(([x, y]) => pointInPoly(x, y, room.poly)));
+  pieceBox(selected, selBox.box);
   selBox.material.color.set(ok ? 0x3ccf8e : 0xff5a5f);
   selBox.visible = true;
   el.className = ok ? 'ok' : 'bad';
@@ -653,9 +676,9 @@ async function toggleVR(force) {
   vr = force ?? !vr;
   document.body.classList.toggle('vr', vr);
   if (vr) {
+    document.body.classList.remove('eyes'); $('bEyes')?.classList.remove('on');
     if (!gyro.on) await toggleGyro();
-    try { await document.documentElement.requestFullscreen?.(); } catch {}
-    try { await screen.orientation?.lock?.('landscape'); } catch {}
+    await goFullscreen();
   } else {
     try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
   }
@@ -750,7 +773,15 @@ let handRay = null; // walkin.handRay: {origin, dir, side} of the active hand (p
 let handCam = 'user'; // handheld: front camera sees your hand; in the headset we switch to the back camera
 // A8: 'real' = your hands cut out of the camera (realhands.js); 'skeleton' = 3D joints. Debug shows the skeleton too.
 let handStyle = 'real';
-const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 0.6 });
+// Headset (back camera at your eyes): passthrough, the camera mapped by angle, so the hand is at its real size and
+// place. Handheld: the camera is not where your eyes are, so the view shows the middle of the camera like the preview.
+// ?handmap=crop forces the crop everywhere. No shrink by default: a shrunk hand is no longer where your hand is.
+const HAND_MAP = params.get('handmap') === 'crop' ? 'crop' : 'angle';
+// reach (hands.js): the back camera's view spans the whole screen, so a hand reaches every edge; ?handmap=true is
+// the strict by-angle passthrough, where the hand only shows in a window in the middle of the view
+const HAND_REACH = params.get('handmap') !== 'true';
+const realHands = createRealHands($('handcam'), { scale: Number(params.get('handscale')) || 1,
+  seg: params.get('handseg') === '1' }); // skin-colour cut-out, experimental: ?handseg=1
 function setHandStyle(s) {
   handStyle = s === 'skeleton' ? 'skeleton' : 'real';
   if (handStyle !== 'real') realHands.clear();
@@ -808,7 +839,7 @@ function nearestFurniture(f) { // the piece whose footprint is closest to floor 
   let best = null, bestD = GRAB_RADIUS;
   for (const o of furniture.children) {
     if (!o.userData?.kind || o.visible === false) continue;
-    _gbox.setFromObject(o);
+    pieceBox(o, _gbox);
     const d = Math.hypot(Math.max(_gbox.min.x - f.x, 0, f.x - _gbox.max.x), Math.max(_gbox.min.y - f.y, 0, f.y - _gbox.max.y));
     if (d < bestD) { bestD = d; best = o; }
   }
@@ -846,6 +877,52 @@ function holdMenu(h, now) {
   }
 }
 
+// Hands on the on-screen controls (the dock, the ⋯ menu, the sun slider): point at one and it lights up, pinch to
+// press it, pinch on a slider and move to drag it. Not in the side-by-side headset view, where the HTML is hidden.
+const UI_SEL = 'button, input[type=range], select, [role=menuitem]';
+const uiDrag = {};
+let uiHover = null;
+const UI_MAGNET = 36; // px: a hand this close to a control counts as on it (a hand is not a mouse)
+function uiAt(h) {
+  if (vr) return null;
+  const px = h.x * innerWidth, py = h.y * innerHeight;
+  const el = document.elementFromPoint(px, py);
+  const c = el && el !== renderer.domElement ? el.closest(UI_SEL) : null;
+  if (c) return c.disabled ? null : c;
+  let best = null, bestD = UI_MAGNET; // nothing exactly under the hand: the nearest visible control, if close
+  for (const b of document.querySelectorAll('#bar button, #sunpanel button, #sunpanel input[type=range], .pop:not([hidden]) button')) {
+    if (b.disabled) continue;
+    const r = b.getBoundingClientRect();
+    if (!r.width) continue;
+    const d = Math.hypot(Math.max(r.left - px, 0, px - r.right), Math.max(r.top - py, 0, py - r.bottom));
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+function uiSlide(el, h) {
+  const r = el.getBoundingClientRect();
+  const t = THREE.MathUtils.clamp((h.x * innerWidth - r.left) / r.width, 0, 1);
+  const min = el.min === '' ? 0 : +el.min, max = el.max === '' ? 100 : +el.max, step = +el.step || 1;
+  const v = min + Math.round((t * (max - min)) / step) * step;
+  if (+el.value !== v) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+}
+function uiHand(h) { // true when this hand is on the controls this frame (so it neither grabs nor opens the ring)
+  const drag = uiDrag[h.side];
+  if (drag) {
+    if (h.pinch) uiSlide(drag, h);
+    else { drag.dispatchEvent(new Event('change', { bubbles: true })); delete uiDrag[h.side]; }
+    return true;
+  }
+  if (grabs[h.side] || radial.side === h.side || (h.pinch && prevPinch[h.side])) return false;
+  const el = uiAt(h);
+  if (!el) return false;
+  if (h.pinch) { // pinch started on a control
+    if (el.matches('input[type=range]')) { uiDrag[h.side] = el; uiSlide(el, h); }
+    else el.click();
+  }
+  return true;
+}
+
 function onHands(list, cam) {
   perf.hands++;
   handsList = list;
@@ -857,6 +934,8 @@ function onHands(list, cam) {
   for (const side of Object.keys(prevPinch)) if (!present.has(side)) delete prevPinch[side];
   for (const side of Object.keys(aims)) if (!present.has(side)) delete aims[side];
   for (const side of Object.keys(holds)) if (!present.has(side)) delete holds[side];
+  for (const side of Object.keys(uiDrag)) if (!present.has(side)) delete uiDrag[side];
+  let hover = null;
   if (radial.side && !present.has(radial.side)) radial.cancel(); // lost the hand: never pick by accident
 
   const act = list.find((h) => h.pinch) || list[0];
@@ -880,6 +959,13 @@ function onHands(list, cam) {
     cur.material.color.set(h.pinch ? 0xffc400 : puckReady ? 0x3dff8a : 0x00e5ff);
     cur.scale.setScalar(h.pinch ? 0.7 : 1);
 
+    if (uiHand(h)) { // on a button or slider: that is what the pinch is for
+      hover = hover || uiDrag[h.side] || uiAt(h);
+      cur.visible = false;
+      delete holds[h.side];
+      prevPinch[h.side] = h.pinch;
+      continue;
+    }
     if (h.pinch && !prevPinch[h.side]) {
       // pinch started: grab the piece you point at; a held aim at a puck (300 ms) means teleport; otherwise grab
       // the nearest piece within 0.4 m, or the selected piece if it's close
@@ -904,6 +990,12 @@ function onHands(list, cam) {
     }
     if (h.pinch) holdMenu(h, now);
     prevPinch[h.side] = h.pinch;
+  }
+
+  if (hover !== uiHover) {
+    uiHover?.classList.remove('hand-hover');
+    hover?.classList.add('hand-hover');
+    uiHover = hover;
   }
 
   // both hands on the same piece: twist to rotate it, move both to carry it
@@ -952,11 +1044,16 @@ async function restartHands(mode) {
   const { startHands } = await import(`./hands.js?v=${Date.now()}`); // never use a cached copy
   handsApi = await startHands({ video: $('handcam'), facingMode: mode, onHands, maxHz: HAND_HZ_MAX,
     onFrame: (cam) => { if (handStyle === 'real' && handsList.length) realHands.snap(cam); }, // same frame as the landmarks
+    // the back camera sees what is in front of the phone, so its hand is drawn where it really is (passthrough):
+    // in the headset and with the phone held at your eyes. The front camera faces you: the zoomed crop.
+    viewFov: HAND_MAP === 'angle' && mode === 'environment' ? () => camera.fov : null,
+    reach: HAND_REACH,
     aspect: () => (vr ? innerWidth / 2 : innerWidth) / innerHeight }); // one eye in the headset
   showCamPreview(mode);
   resetPerfCap(); // loading the hand model stalls a few frames; don't let that pin the resolution low
 }
 async function toggleHands() {
+  keepAwake(); // hands on means nobody will touch the screen for a while
   const btn = $('bHands');
   if (handsApi) {
     handsApi.stop(); handsApi = null; handsList = []; handRay = null;
@@ -981,7 +1078,7 @@ async function toggleHands() {
 }
 async function toggleCam() {
   handCam = handCam === 'user' ? 'environment' : 'user';
-  $('bCam').textContent = handCam === 'user' ? '📷 Front' : '📷 Back';
+  if ($('bCam')) $('bCam').textContent = handCam === 'user' ? '📷 Front' : '📷 Back';
   if (handsApi && !vr) await restartHands(handCam);
 }
 
@@ -1057,7 +1154,8 @@ const fpsAlways = params.has('fps');
 // `node tools/fps-report.mjs <server log>` reads them back. ?fpsreport=off stops it.
 const fpsReport = { on: params.get('fpsreport') !== 'off', sid: Math.random().toString(36).slice(2, 7), s: [] };
 function reportFps(fps, handHz) {
-  if (!fpsReport.on || !vr || !handsApi) { fpsReport.s.length = 0; return; }
+  const eyes = document.body.classList.contains('eyes');
+  if (!fpsReport.on || !(vr || eyes) || !handsApi) { fpsReport.s.length = 0; return; }
   fpsReport.s.push(fps);
   if (fpsReport.s.length < 10) return;
   const s = fpsReport.s.sort((a, b) => a - b);
@@ -1065,7 +1163,7 @@ function reportFps(fps, handHz) {
   const ua = navigator.userAgent;
   const px = renderer.getDrawingBufferSize(new THREE.Vector2());
   const q = new URLSearchParams({
-    fpsreport: 1, sid: fpsReport.sid,
+    fpsreport: 1, sid: fpsReport.sid, mode: vr ? 'headset' : 'eyes',
     dev: /iPhone|iPad/.test(ua) ? 'ios' : /Android/.test(ua) ? 'android' : 'desktop',
     scr: `${screen.width}x${screen.height}@${devicePixelRatio}`,
     med: s[5].toFixed(0), min: s[0].toFixed(0), pr: perf.pr, px: `${px.x}x${px.y}`,
@@ -1115,12 +1213,121 @@ document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click
 $('bRotate').onclick = () => rotateSelected(45);
 $('bDelete').onclick = deleteSelected;
 $('bGyro').onclick = toggleGyro;
-$('bVR').onclick = () => toggleVR();
+if ($('bVR')) $('bVR').onclick = () => toggleVR(); // the Headset button is gone (tapped by mistake); ?a1=1 still enters it
 $('exitvr').onclick = () => toggleVR(false);
 $('bHands').onclick = toggleHands;
-$('bCam').onclick = toggleCam;
+if ($('bCam')) $('bCam').onclick = toggleCam;
+// "At eyes": the phone held up at your eyes like a window, full screen (no lenses needed): look around with the
+// gyro, hands seen by the back camera and drawn where they really are. One tap, since iOS needs a tap for motion.
+async function eyesMode() {
+  const b = $('bEyes');
+  if (b && b.classList.contains('on') && document.body.classList.contains('eyes')) {             // second tap: back to the normal handheld setup
+    b.classList.remove('on');
+    document.body.classList.remove('eyes');
+    try { if (document.fullscreenElement) await document.exitFullscreen(); } catch {}
+    if (handCam !== 'user') await toggleCam();
+    return;
+  }
+  if (vr) await toggleVR(false);
+  if (!gyro.on) await toggleGyro();
+  if (handCam !== 'environment') { handCam = 'environment'; if ($('bCam')) $('bCam').textContent = '📷 Back'; }
+  if (handsApi) { if (handsApi.facingMode !== 'environment') await restartHands('environment'); }
+  else await toggleHands();
+  if (b) b.classList.add('on');
+  document.body.classList.add('eyes'); // ui.css: no info card or camera preview; the dock and sun stay, for your hands
+  await goFullscreen();
+}
+// Keep the screen on: in a headset nobody touches the phone, and iOS dimmed and locked it within seconds (Amit,
+// from the Home Screen app). The Screen Wake Lock API where it works (iOS 16.4+ in Safari; Home Screen apps only
+// from iOS 18.4), and a tiny silent looping video as well, which iOS has always treated as "media playing, stay
+// awake". Both are re-armed when the page comes back to the front. Needs a tap the first time (iOS media rule).
+// 2 s of black, 16x16, silent (ffmpeg, 3 KB), inline: iOS only plays video files from servers that do HTTP Range
+// requests, and serve.py does not
+const AWAKE_MP4 = 'data:video/mp4;base64,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';
+const awake = { lock: null, video: null };
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && !awake.lock && document.visibilityState === 'visible') {
+      awake.lock = await navigator.wakeLock.request('screen');
+      awake.lock.addEventListener('release', () => { awake.lock = null; });
+    }
+  } catch {}
+  if (!awake.video) {
+    const v = awake.video = document.createElement('video');
+    v.src = AWAKE_MP4; v.muted = true; v.loop = true; v.playsInline = true;
+    v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+    v.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0.01;left:0;top:0;pointer-events:none;z-index:-1';
+    document.body.appendChild(v);
+  }
+  try { await awake.video.play(); } catch {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && awake.video) keepAwake(); });
+addEventListener('pointerdown', keepAwake, { once: true, capture: true }); // the first touch anywhere
+
+// Full screen: Android and iPad do it from the tap. iPhone Safari has no fullscreen for a page - the way there is
+// "Add to Home Screen" (manifest.json + apple-mobile-web-app-capable): opened from the icon, there is no URL bar.
+async function goFullscreen() {
+  keepAwake();
+  const d = document.documentElement;
+  try { await (d.requestFullscreen?.() || d.webkitRequestFullscreen?.()); } catch {}
+  try { await screen.orientation?.lock?.('landscape'); } catch {}
+  const standalone = navigator.standalone || matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches;
+  if (!document.fullscreenElement && !document.webkitFullscreenElement && !standalone && /iPhone|iPod/.test(navigator.userAgent)) {
+    let seen = false; try { seen = localStorage.getItem('walkin.a2hs') === '1'; localStorage.setItem('walkin.a2hs', '1'); } catch {}
+    if (!seen) window.walkin?.say?.('For full screen on iPhone: Share, then Add to Home Screen, and open Walk-In from the icon.');
+  }
+}
+if ($('bEyes')) $('bEyes').onclick = () => eyesMode();
+
+// At eyes is the default on a phone (Amit): the first tap anywhere - usually "Walk in" - turns it on, since iOS
+// only allows motion and the camera from a tap. ?eyes=off keeps the handheld setup; ?eyes=1 does it on a laptop.
+const PHONE_UA = navigator.maxTouchPoints > 1 && /iPhone|iPad|Android/i.test(navigator.userAgent);
+if ((PHONE_UA || params.get('eyes') === '1') && params.get('eyes') !== 'off' && !params.has('resume') && !params.has('a1')) {
+  addEventListener('pointerdown', (e) => {
+    if (e.target.closest && e.target.closest('#bEyes')) return;          // that button does it itself
+    if (!document.body.classList.contains('eyes') && !vr) eyesMode();
+  }, { once: true, capture: true });
+}
+
+// The house and the office in one session: "John, take me to the office". A property is a page load, so this
+// reloads into the other one with resume=eyes, and At eyes comes straight back with no tap: iOS answers a repeat
+// motion-permission request at once when it was granted earlier in the session, and the camera needs no tap.
+const SPACES = { house: { m: 'zvKHR9DHNjJ', name: 'the house on La Mirada' }, office: { m: 'WhqAmKQ3YYP', name: 'the Suite 300 office' } };
+function openSpace({ space = '' } = {}) {
+  const key = /office|work|suite|commercial/i.test(space) ? 'office' : /house|home|mirada|resid/i.test(space) ? 'house' : null;
+  if (!key) return { ok: false, reason: 'Which one: the house or the office?' };
+  const sp = SPACES[key];
+  if (MODEL === sp.m) return { ok: true, say: `You are already in ${sp.name}.` };
+  const p = new URLSearchParams(location.search);
+  p.set('m', sp.m);
+  if (document.body.classList.contains('eyes')) p.set('resume', 'eyes'); else p.delete('resume');
+  const t0 = performance.now();
+  (function go() { // let John finish his sentence first (up to 8 s)
+    const talking = window.walkin?.agent?.isSpeaking?.() || window.walkin?.live?.isSpeaking?.();
+    if (performance.now() - t0 < 2500 || (talking && performance.now() - t0 < 8000)) { setTimeout(go, 250); return; }
+    location.search = p.toString();
+  })();
+  return { ok: true, going_to: sp.name, say: `Taking you to ${sp.name}.`, note: 'The view reloads in a moment. Say one short sentence, nothing else.' };
+}
+(window.walkinTools = window.walkinTools || []).push({
+  declarations: [{ name: 'open_space',
+    description: 'Go to the other property: "house" (the La Mirada home) or "office" (Suite 300, an empty office floor for test fits). Use for "take me to the office", "show me the office space", "back to the house". A room inside this house is go_to, not this.',
+    parameters: { type: 'object', properties: { space: { type: 'string', enum: ['house', 'office'] } }, required: ['space'] } }],
+  run: { open_space: openSpace },
+  rules: '- "Take me to the office (space)", "show me the office", "back to the house": call open_space at once, then say one short sentence; the view reloads.',
+});
+if (params.get('resume') === 'eyes') {
+  const p = new URLSearchParams(location.search); p.delete('resume');
+  history.replaceState(null, '', `${location.pathname}?${p}`);           // a manual reload starts normally
+  setTimeout(async () => {
+    await eyesMode();
+    // if this browser does want a fresh tap for motion after all, the next touch brings it back
+    if (!gyro.on) addEventListener('pointerdown', () => { if (!gyro.on) toggleGyro(); }, { once: true });
+  }, 300);
+}
 if ($('bHandStyle')) $('bHandStyle').onclick = () => setHandStyle(handStyle === 'real' ? 'skeleton' : 'real');
-$('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+if ($('bDebug')) $('bDebug').onclick = () => { debug = !debug; $('bDebug').classList.toggle('on', debug); updateDebug(); };
+if (params.has('debug')) { debug = true; updateDebug(); } // the Debug button is gone from the menu: ?debug=1
 // A1 in one tap: ?a1=1 covers the page with "tap to start"; that tap does 🥽 then ✋ (headset, back camera, hands),
 // so whoever tests only opens the link, taps once and wears the phone for 30 s. The fps report above sends the
 // numbers to the server log. The tap is the user gesture iOS needs for motion access and the camera.
@@ -1197,7 +1404,7 @@ function frame() {
   for (const fn of beforeRender) {
     try { fn(dt); } catch (e) { console.warn('beforeRender callback dropped:', e); beforeRender.delete(fn); }
   }
-  if (selected && selBox.visible) selBox.box.setFromObject(selected);
+  if (selected && selBox.visible) pieceBox(selected, selBox.box);
   if (vr) stereo.render(scene, camera); else renderer.render(scene, camera);
   tickPerf();
 }

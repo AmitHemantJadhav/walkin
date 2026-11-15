@@ -5,25 +5,30 @@
 // app.js owns the gesture (when a hold starts, ends, moves) and the actions; this file only draws and picks.
 import * as THREE from 'three';
 
-const RING = 0.14;  // ring radius, as a fraction of the screen height
+const RING = 0.23;  // ring radius, as a fraction of the screen height (0.14 crowded six bigger tiles)
 const DEAD = 0.045; // hand closer than this to where you pinched = nothing picked (let go to cancel)
-const SIZE = 0.085; // one option's size, fraction of the screen height
+const SIZE = 0.15;  // one option's size, fraction of the screen height: 0.085 made the labels ~5 px tall on a phone
 const DIST = 0.55;  // metres in front of the camera (about where your hands are drawn)
 
 function tile(icon, label) {
+  // 256 px, drawn at the device's sharpness, with mipmaps and anisotropy so it stays crisp at any size
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = 256;
   const x = c.getContext('2d');
-  x.fillStyle = 'rgba(18,18,22,0.8)';
-  x.beginPath(); x.arc(64, 64, 61, 0, Math.PI * 2); x.fill();
-  x.lineWidth = 4; x.strokeStyle = 'rgba(255,255,255,0.9)'; x.stroke();
+  x.fillStyle = 'rgba(14,14,18,0.9)';
+  x.beginPath(); x.arc(128, 128, 122, 0, Math.PI * 2); x.fill();
+  x.lineWidth = 7; x.strokeStyle = 'rgba(255,255,255,0.95)'; x.stroke();
   x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillStyle = '#fff';
-  x.font = '50px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif';
-  x.fillText(icon, 64, 52);
-  x.font = '600 19px system-ui,-apple-system,sans-serif';
-  x.fillText(label, 64, 99);
+  x.font = '96px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",system-ui,sans-serif';
+  x.fillText(icon, 128, label ? 100 : 128);
+  if (label) {
+    let px = 46;
+    do x.font = `700 ${px}px system-ui,-apple-system,sans-serif`; while (x.measureText(label).width > 210 && --px > 24);
+    x.fillText(label, 128, 196);
+  }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
   return t;
 }
 function sprite(map) {
@@ -56,7 +61,7 @@ export function createRadial({ scene, camera, toWorld, aspect, items }) {
       const ang = -Math.PI / 2 + (i * 2 * Math.PI) / slots.length;
       toWorld(cx + (RING * Math.cos(ang)) / a, cy + RING * Math.sin(ang), DIST, s.position);
       s.scale.setScalar(h * SIZE * (st.hot === i ? 1.3 : 1));
-      s.material.color.setScalar(st.hot === i || st.hot == null ? 1 : 0.6);
+      s.material.color.setScalar(st.hot === i || st.hot == null ? 1 : 0.85); // 0.6 read as blurred on a phone
     });
     toWorld(cx, cy, DIST, centre.position);
     centre.scale.setScalar(h * SIZE * 0.45);

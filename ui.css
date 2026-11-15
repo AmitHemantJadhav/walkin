@@ -54,11 +54,15 @@ body { -webkit-font-smoothing: antialiased; }
 .panel button:focus-visible, .glass button:focus-visible { outline: 2px solid var(--glass-edge); outline-offset: 2px; }
 
 /* ------------------------------------------------------------------ the dock */
+/* a vertical column at the bottom left (Amit: across the bottom it sat in the middle of the view) */
 #bar.dock {
-  left: 50%;
+  left: var(--gap);
   bottom: var(--gap);
-  transform: translateX(-50%);
+  transform: none;
+  transform-origin: 0 100%;
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
   flex-wrap: nowrap;
   gap: 2px;
   padding: 6px;
@@ -67,28 +71,32 @@ body { -webkit-font-smoothing: antialiased; }
   transition: opacity .3s var(--ease), transform .3s var(--ease);
   z-index: 5;
 }
-#bar.dock.idle { opacity: .35; transform: translateX(-50%) scale(.94); }
+#bar.dock.idle { opacity: .35; transform: scale(.94); }
+#bar.dock .dock-btn { text-align: left; }
 #bar.dock .dock-btn[aria-expanded="true"] { background: var(--glass-press); }
 
 /* ------------------------------------------------------------------ popovers above the dock */
 .pop {
   position: fixed;
-  left: 50%;
-  bottom: calc(var(--gap) + 66px);
-  transform: translateX(-50%) translateY(6px) scale(.98);
+  left: calc(var(--gap) + 132px);
+  bottom: var(--gap);
+  transform: translateX(-6px) scale(.98);
+  transform-origin: 0 100%;
   opacity: 0;
   padding: 10px;
   border-radius: 24px;
-  max-width: calc(100vw - 32px);
+  max-width: calc(100vw - 164px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
   z-index: 6;
   transition: opacity .22s var(--ease), transform .22s var(--ease);
   pointer-events: none;
 }
 .pop[hidden] { display: block; visibility: hidden; }
-.pop.open { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); pointer-events: auto; visibility: visible; }
+.pop.open { opacity: 1; transform: none; pointer-events: auto; visibility: visible; }
 .pop-title { font: 600 13px/1 system-ui, sans-serif; color: var(--muted); padding: 4px 8px 8px; letter-spacing: .02em; }
 .pop-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
-#morePop .pop-grid { grid-template-columns: repeat(5, auto); }
+#morePop .pop-grid { grid-template-columns: repeat(2, auto); }
 .pop-grid button { padding: 10px 12px; border-radius: 16px; font-size: 13.5px; text-align: center; }
 
 /* ------------------------------------------------------------------ info card (top left) */
@@ -137,7 +145,6 @@ body { -webkit-font-smoothing: antialiased; }
 @media (max-width: 1200px) {
   /* the Ask panel sits above the dock instead of beside it */
   #agent.panel { left: 50%; transform: translateX(-50%); bottom: calc(var(--gap) + 66px); }
-  .pop { bottom: calc(var(--gap) + 66px); }
   body.pop-open #agent.panel { opacity: 0; pointer-events: none; }
 }
 @media (max-width: 430px) {
@@ -149,6 +156,15 @@ body { -webkit-font-smoothing: antialiased; }
 
 /* ------------------------------------------------------------------ headset: no DOM UI (it can't render in stereo) */
 body.vr #bar, body.vr .pop, body.vr #agent, body.vr #info, body.vr #debug { display: none !important; }
+
+/* At eyes (phone held up, hands from the back camera): nothing in the corners. The dock and the sun slider stay,
+   because your hands can press them (app.js uiHand); the one your hand points at lights up. */
+body.eyes #info, body.eyes #handcam, body.eyes #debug { display: none !important; }
+.hand-hover { outline: 3px solid #00e5ff !important; outline-offset: 2px; box-shadow: 0 0 18px rgba(0,229,255,.65) !important; }
+input[type=range].hand-hover { outline-offset: 6px; }
+/* bigger targets for a hand at your eyes */
+body.eyes #bar.dock, body.eyes #bar.dock.idle { opacity: 1; transform: scale(1.25); transform-origin: 0 100%; }
+body.eyes .pop { left: calc(var(--gap) + 170px); }
 
 @media (prefers-reduced-motion: reduce) {
   #bar.dock, .pop, .panel button, .glass button { transition: none; }

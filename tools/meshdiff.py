@@ -15,6 +15,9 @@ import time
 
 import numpy as np
 
+import meshclose
+import meshquality
+
 
 def load_obj(path, want_uv=False):
     """Vertices and triangles of an OBJ, with UVs and the material each face uses if asked.
@@ -181,20 +184,48 @@ def bake_colours(V, F, T, Ftf, Fmat, mats, pak, verts_wanted):
 # a 1024 px sheet and a 10 cm ornament gets 64 — the first version sized the sheet from the source texels
 # instead, and gave that ornament 1413 x 1546 and 357 KB, which is most of where 8.2 MB of atlases went.
 PX_PER_M = 512
+SLIVER = 8          # longest edge over thickness: above this a triangle is a bridge, not a surface
 ATLAS_MIN, ATLAS_MAX = 64, 1024
 
 
+def _uv_islands(fis, Ftf):
+    """Faces that share a UV vertex belong to the same island.
+
+    Matterport's UV layout is fragmented - a piece's triangles are scattered across the whole sheet,
+    so the bounding box of its UVs is the entire texture and cropping it crops nothing. Islands are
+    the unit that is actually compact: on this house a piece has 281-1652 of them, median 24 px.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    rows, cols = [], []
+    vt2f = {}
+    for k, f in enumerate(fis):
+        for c in Ftf[f]:
+            vt2f.setdefault(int(c), []).append(k)
+    for lst in vt2f.values():
+        first = lst[0]
+        for a in lst[1:]:
+            rows.append(first)
+            cols.append(a)
+    if not rows:
+        return np.arange(len(fis), dtype=np.int64), len(fis)   # no shared UV vertex: each face alone
+    m = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(fis), len(fis)))
+    ncomp, lab = connected_components(m, directed=False)
+    return lab, ncomp
+
+
 def build_atlas(piece_tris, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=ATLAS_MAX, pad=2):
-    """One small texture per piece, holding only the parts of the MatterPak's textures it actually uses.
+    """One small texture per piece, holding only the parts of the MatterPak's textures it really uses.
 
-    Baking a colour per vertex was the first attempt and it is only as sharp as the mesh is dense — which
-    varies from 33 to 399 vertices per square metre across this house, so a sofa the scanner saw well looks
-    right and one in a bedroom corner turns to mush. The texels exist; the mesh just has nowhere to put them.
+    Baking a colour per vertex was the first attempt and it is only as sharp as the mesh is dense -
+    33 to 399 vertices per square metre across this house - so the texels existed but the mesh had
+    nowhere to put them.
 
-    So instead: for each texture a piece touches, take the bounding box of the UVs that use it, crop that
-    region at source resolution, and shelf-pack the crops into one image. UVs are rewritten into atlas
-    space, so the piece still draws in a single call. A sofa typically touches 3 textures and uses a small
-    part of each, so its atlas is a few hundred pixels across rather than 3 × 2048².
+    The second attempt cropped the UV *bounding box* per material, which was worse than it looked:
+    Matterport scatters a piece's triangles over the whole sheet, so that box was the entire 2048x2048
+    texture, four of them got rescaled by 0.13 to fit one sheet, and the furniture was drawn at 44-82
+    px per metre when the data holds about 316. This packs per UV island instead, which is the unit
+    that is genuinely small, and gets the full resolution the MatterPak has.
     """
     from PIL import Image
     groups = {}
@@ -212,26 +243,31 @@ def build_atlas(piece_tris, Ff, Tf, Ftf, Fmat, mats, pak, cache, max_side=ATLAS_
         im = cache[name]
         if im is None:
             continue
-        uv = Tf[np.asarray([Ftf[f] for f in fis], np.int32).reshape(-1)]
-        u0, v0 = np.clip(uv.min(axis=0), 0, 1)
-        u1, v1 = np.clip(uv.max(axis=0), 0, 1)
         W, H = im.width, im.height
-        # v is bottom-up in OBJ and top-down in an image
-        x0 = max(0, int(u0 * W) - pad); x1 = min(W, int(np.ceil(u1 * W)) + pad)
-        y0 = max(0, int((1 - v1) * H) - pad); y1 = min(H, int(np.ceil((1 - v0) * H)) + pad)
-        if x1 - x0 < 2 or y1 - y0 < 2:
-            continue
-        crops.append(dict(mi=mi, fis=fis, box=(x0, y0, x1, y1),
-                          w=x1 - x0, h=y1 - y0, img=im.crop((x0, y0, x1, y1)),
-                          uv0=(x0 / W, 1 - y1 / H), uv1=(x1 / W, 1 - y0 / H)))
+        fis = np.asarray(fis)
+        lab, ncomp = _uv_islands(fis, Ftf)
+        for c in range(ncomp):
+            sel = fis[lab == c]
+            if not len(sel):
+                continue
+            uv = Tf[np.asarray([Ftf[f] for f in sel], np.int32).reshape(-1)]
+            u0, v0 = np.clip(uv.min(axis=0), 0, 1)
+            u1, v1 = np.clip(uv.max(axis=0), 0, 1)
+            # v is bottom-up in OBJ and top-down in an image
+            x0 = max(0, int(u0 * W) - pad); x1 = min(W, int(np.ceil(u1 * W)) + pad)
+            y0 = max(0, int((1 - v1) * H) - pad); y1 = min(H, int(np.ceil((1 - v0) * H)) + pad)
+            if x1 - x0 < 2 or y1 - y0 < 2:
+                continue
+            crops.append(dict(mi=mi, fis=list(sel), box=(x0, y0, x1, y1),
+                              w=x1 - x0, h=y1 - y0, img=im.crop((x0, y0, x1, y1)),
+                              uv0=(x0 / W, 1 - y1 / H), uv1=(x1 / W, 1 - y0 / H)))
     if not crops:
         return None
 
     # shelf pack, tallest first, into a square-ish sheet
     crops.sort(key=lambda c: -c['h'])
     total = sum(c['w'] * c['h'] for c in crops)
-    sheet_w = max(c['w'] for c in crops)
-    sheet_w = min(max(sheet_w, int(np.sqrt(total) * 1.15)), max_side)
+    sheet_w = max(max(c['w'] for c in crops), int(np.sqrt(total) * 1.15))
     x = y = shelf = 0
     for c in crops:
         if x + c['w'] > sheet_w and x > 0:
@@ -263,7 +299,95 @@ def atlas_uv(uv, crops_by_face, fi, sheet):
     return (px / sw, 1 - py / sh)
 
 
-def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
+
+# Per-house flap settings. Four different rules failed to tell a flap from a real part across both
+# houses - edge length gutted the piano, sliver aspect holed the sofa, grazing angle does not separate
+# at all (even the worst 1% of triangles had a camera 74 degrees off normal), and compactness has the
+# small patches reading *more* compact than the big ones, 0.50 against 0.44. The patch-area rule works
+# and does not travel. So it is tuned per house by eye, and a house nobody has checked gets nothing.
+TUNED = {
+    'zvKHR9DHNjJ': dict(flap_frac=0.003),   # La Mirada, the demo house: swept room by room,
+                                            # sofa and piano both verified by eye. Clear win.   # La Mirada, the demo house: swept room by room, sofa and
+                                            # piano both verified. Clear win.
+}
+
+FLAP_FOLD = 40      # degrees: above this the surface is not continuing, it is folding over
+
+
+def drop_flaps(Vf, Ff, idx, lab, n, fold_deg, frac, floor_m2=0.0010):
+    """Remove the torn flaps photogrammetry leaves hanging off a piece.
+
+    Strip the texture off the living room sofa and its geometry is visibly ragged - shards and thin
+    flaps standing proud of the arms and the front edge. Textured, they catch the light as pale
+    streaks lying across the upholstery, which was the most visible defect left on any piece.
+
+    They defeat per-triangle tests, because a flap is a *cluster*, not one bad triangle: cutting on
+    edge length gutted the piano's front, and cutting on sliver aspect punched holes in that sofa.
+    So segment each piece instead - join neighbouring triangles only where the surface stays smooth
+    - and drop whole patches too small to be real.
+
+    The threshold has to be a fraction of the piece, not an absolute area. At a flat 200 cm2 this
+    took 34% of La Mirada's triangles and improved it, but 43% of Gale Street's, whose mesh is
+    sparser, and left its sofa and armchairs full of holes. A share of the piece's own surface
+    adapts; the floor just stops it running away on a tiny piece.
+
+    OFF BY DEFAULT, and that is a deliberate call rather than laziness. At 0.3% it is a clear,
+    visible win on La Mirada - the sofa's torn front edge and arm flaps go and the piano keeps its
+    front - and it is still a regression on Gale Street's sofa at the same setting. Three different
+    geometry filters have now helped one house and hurt another, so this one does not get to run
+    unasked. Pass flap_frac to turn it on for a house somebody has actually looked at.
+    """
+    from collections import defaultdict
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    out = np.zeros(len(Ff), bool)
+    dropped = 0
+    kept = 0
+    for i in range(n):
+        tri = idx[lab == i]
+        F = Ff[tri]
+        T = Vf[F]
+        nrm = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        ln = np.linalg.norm(nrm, axis=1)
+        ok = ln > 1e-12
+        nrm = nrm / np.maximum(ln, 1e-12)[:, None]
+        area = ln / 2
+        total = float(area.sum())
+
+        emap = defaultdict(list)
+        for k, f in enumerate(F):
+            for a in range(3):
+                e = (min(f[a], f[(a + 1) % 3]), max(f[a], f[(a + 1) % 3]))
+                emap[e].append(k)
+        cth = np.cos(np.radians(fold_deg))
+        rows, cols = [], []
+        for fs in emap.values():
+            if len(fs) == 2 and ok[fs[0]] and ok[fs[1]] and float(np.dot(nrm[fs[0]], nrm[fs[1]])) >= cth:
+                rows.append(fs[0])
+                cols.append(fs[1])
+        if rows:
+            m = coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(len(F), len(F)))
+            ncomp, cl = connected_components(m, directed=False)
+            sizes = np.zeros(ncomp)
+            np.add.at(sizes, cl, area)
+            limit = max(frac * total, floor_m2)
+            bad = np.isin(cl, np.where(sizes < limit)[0])
+        else:
+            bad = np.zeros(len(F), bool)
+        out[tri[~bad]] = True
+        dropped += int(bad.sum())
+        kept += len(tri)
+    print(f'dropped {dropped:,} triangles in flaps under {frac*100:.1f}% of their own piece '
+          f'({100*dropped/max(kept,1):.1f}% of kept)')
+    return out
+
+
+def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False, max_edge=0.12, flap_frac=None):
+    if flap_frac is None:
+        flap_frac = TUNED.get(model, {}).get('flap_frac', 0.0)
+        if flap_frac:
+            print(f'{model} is tuned: dropping flaps under {flap_frac*100:.1f}% of a piece')
     full, empty = paths(model)
     t0 = time.time()
     Vf, Ff, Tf, Ftf, Fmat, mats = load_obj(full, want_uv=True)
@@ -284,7 +408,50 @@ def run(model, cut=0.20, min_tris=80, min_size=0.18, export=False):
     print(f'{keep.sum():,} triangles are more than {cut*100:.0f} cm off the empty house '
           f'({100*keep.mean():.1f}%)')
 
+    # Photogrammetry bridges gaps it could not see into, and those bridges come out as single long
+    # triangles that stick off a piece as spikes - the piano's silhouette was torn by them. On this
+    # house the median kept triangle has a 6.5 cm longest edge and the 99th percentile is 35 cm, so
+    # the tail is a different population, not the top of a smooth distribution.
+    # Photogrammetry bridges gaps it could not see into, and those bridges come out as long thin
+    # triangles that stick off a piece as spikes - they tore the piano's silhouette. Cutting on edge
+    # length alone is wrong: a flat panel is legitimately a few big triangles, and a 20 cm limit
+    # punched the whole front out of that same piano. A spike is long *and* thin, so measure the
+    # triangle's thickness (twice its area over its longest edge) and drop only the slivers.
+    if max_edge:
+        T = Vf[Ff]
+        elong = np.stack([np.linalg.norm(T[:, 1] - T[:, 0], axis=1),
+                          np.linalg.norm(T[:, 2] - T[:, 1], axis=1),
+                          np.linalg.norm(T[:, 0] - T[:, 2], axis=1)], axis=1).max(axis=1)
+        area = np.linalg.norm(np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0]), axis=1) / 2
+        thick = 2 * area / np.maximum(elong, 1e-9)
+        before = int(keep.sum())
+        keep &= ~((elong > max_edge) & (elong / np.maximum(thick, 1e-9) > SLIVER))
+        print(f'dropped {before - int(keep.sum()):,} spikes longer than {max_edge*100:.0f} cm and '
+              f'{SLIVER}x thinner than they are long '
+              f'({100*(before-int(keep.sum()))/max(before,1):.1f}%)')
+
+    # The spikes that survive are the ones under 12 cm. Cutting them everywhere holed the sofa's seat
+    # (an interior sliver is still surface); a spike that hangs off the piece's open edge is not. So a
+    # second pass takes the thin triangles (6 cm, 6x) that own a boundary edge of what is kept, and
+    # repeats, since removing one exposes the next in the chain. Three rounds took the sectional's
+    # base spikes and nothing from its seat.
+    if max_edge:
+        for _ in range(3):
+            kept = np.flatnonzero(keep)
+            E = np.sort(Ff[kept][:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+            _, inv, cnt = np.unique(E, axis=0, return_inverse=True, return_counts=True)
+            open_edge = (cnt[inv] == 1).reshape(-1, 3).any(axis=1)
+            thin = (elong[kept] > 0.06) & (elong[kept] / np.maximum(thick[kept], 1e-9) > 6)
+            drop = kept[open_edge & thin]
+            if not len(drop):
+                break
+            keep[drop] = False
+        print(f'then dropped the thin triangles on open edges: {len(Ff) - int((~keep).sum()) - 0:,} kept')
+
     idx, lab, n = components(Ff, keep)
+    if flap_frac:
+        keep = drop_flaps(Vf, Ff, idx, lab, n, FLAP_FOLD, flap_frac)
+        idx, lab, n = components(Ff, keep)
     print(f'{n} connected components')
 
     house = json.load(open(os.path.join('data', model, 'house.json')))
@@ -352,7 +519,7 @@ def _room_of(x, y, house):
     return None
 
 
-def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors=()):
+def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floors=(), close_holes=True):
     """One binary of geometry plus a JSON index and a small texture per piece."""
     pak = os.path.join('data', model, 'pak')
     out_dir = os.path.join('data', model)
@@ -406,6 +573,34 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         uv = np.asarray(uv_list, np.float32)
         idx = np.asarray(idx_list, np.uint32)
 
+        # The scanner only saw the sides it could see, so a piece against a wall has no back and
+        # turning it shows the inside of its front. Cap the holes on their own planes and give the new
+        # faces a UV that lands on a typical pixel of this piece's atlas, so a capped sofa reads as
+        # that sofa's fabric. Caps are new vertices: nothing already built here is disturbed.
+        # Make the whole piece wind the same way, so the viewer can draw it front-faces-only. That is
+        # worth 4.09 ms of GPU fill at the worst scan point in this house against 0.14 ms - at close
+        # range furniture covers most of the screen and DoubleSide shades every pixel of it twice.
+        idx = meshclose.orient(pos.astype(np.float64), idx)
+
+        # Measure the piece as scanned, before any caps go on: a flat lid meeting a crumpled rim
+        # reads as a huge fold angle and would hide the thing we actually want to know.
+        captured, fold, _, _ = meshquality.measure(pos.astype(np.float64), idx)
+        if close_holes:
+            # Cap everything, not just the undersides. A cap used to be a flat colour and read as a
+            # pasted-on slab, which is why it was limited to holes facing the floor. tools/capskin.py
+            # now gives the caps the piece's own material, so closing the back is worth doing: a
+            # piece can be turned round and show a back instead of the inside of its own front.
+            cap_pos, cap_idx, open_before, open_after = meshclose.close(pos, idx, facing=1.0)
+        else:
+            cap_pos, cap_idx, open_before, open_after = None, (), 0, 0
+        if close_holes and len(cap_idx):
+            flat = meshclose.representative_uv(built['image'] if built else None)
+            idx = np.vstack([idx, cap_idx + len(pos)]).astype(np.uint32)
+            pos = np.vstack([pos, cap_pos]).astype(np.float32)
+            uv = np.vstack([uv, np.tile(flat, (len(cap_pos), 1))]).astype(np.float32)
+        else:
+            open_after = open_before
+
         tex_name = None
         if built:
             tex_name = f'p{i}.jpg'
@@ -424,6 +619,12 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
             room=_room_of(float((lo[0] + hi[0]) / 2), float((lo[1] + hi[1]) / 2), house),
             floor=(min(floors, key=lambda f: abs(f[1] - float(lo[2])))[0] if floors else None),
             tex=tex_name,
+            capped=int(len(cap_idx)) if close_holes else 0,
+            capVerts=int(len(cap_pos)) if (close_holes and cap_pos is not None) else 0,
+            openEdge=round(float(open_after) / max(int(len(idx)) * 1.5, 1), 4),
+            fold=(None if fold != fold else round(float(fold), 1)),
+            captured=(None if captured != captured else round(float(captured), 3)),
+            closed=bool(close_holes and open_after == 0),
             pos=[offset, len(parts[0])],
             uv=[offset + len(parts[0]), len(parts[1])],
             idx=[offset + len(parts[0]) + len(parts[1]), len(parts[2])],
@@ -432,12 +633,20 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
         blobs += parts
         index.append(rec)
 
+    # fold is not comparable between houses: La Mirada's median is 30 degrees and Gale Street's is
+    # 35, so a fixed cut drops a third of one house and three fifths of the other. Rank each piece
+    # inside its own house instead, and a caller can ask for "the worst quarter" and mean it anywhere.
+    folds = sorted(r['fold'] for r in index if r['fold'] is not None)
+    for r in index:
+        r['foldRank'] = (None if r['fold'] is None or not folds
+                         else round(sum(1 for f in folds if f < r['fold']) / len(folds), 3))
+
     bin_path = os.path.join(out_dir, 'furniture.bin')
     with open(bin_path, 'wb') as f:
         for b in blobs:
             f.write(b)
     meta = dict(model=model, built=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                cut=cut, floorZ=round(float(floor_z), 3), textured=True, pieces=index)
+                cut=cut, floorZ=round(float(floor_z), 3), textured=True, oriented=True, pieces=index)
     with open(os.path.join(out_dir, 'furniture.json'), 'w') as f:
         json.dump(meta, f)
     mb = os.path.getsize(bin_path) / 1e6
@@ -445,6 +654,11 @@ def write(model, pieces, Vf, Ff, Tf, Ftf, Fmat, mats, floor_z, house, cut, floor
     print(f'wrote {bin_path} ({mb:.1f} MB) + {tex_bytes/1e6:.1f} MB of textures, {len(index)} pieces')
     print(f'  {sum(1 for r in index if r["room"])}/{len(index)} inside a room on the floor plan')
     print(f'  {sum(1 for r in index if r["tex"])}/{len(index)} have a texture')
+    if close_holes:
+        caps = sum(r['capped'] for r in index)
+        tris = sum(r['tris'] for r in index)
+        print(f'  closed {sum(1 for r in index if r["closed"])}/{len(index)} pieces, '
+              f'+{caps} cap triangles ({100*caps/max(tris-caps,1):.0f}% more)')
     return pieces
 
 

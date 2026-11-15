@@ -105,6 +105,13 @@ export async function panoLuminance(wall, height, nu = 24, nv = 16, normal = nul
   tex.minFilter = tex.magFilter = THREE.LinearFilter;
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
-  tex.userData.scale = 1.5;      // walls.js multiplies lightMapIntensity back up by this
+  // The map is laid out over the whole wall, so it reads walls.js's second uv set (uv1, 0..1 over the wall).
+  // Without this three.js samples it with the tiled uv (0..len/tile), the clamp smears the edge texels over
+  // everything past the first tile, and the paint comes out streaky.
+  tex.channel = 1;
+  // walls.js multiplies lightMapIntensity back up by this. MeshBasicMaterial scales a light map by 1/PI
+  // (three r155+), which left every painted wall about a third as bright as its colour: sage green came out
+  // dark olive. Put the PI back here so an evenly lit wall shows its real colour.
+  tex.userData.scale = 1.5 * Math.PI;
   return tex;
 }

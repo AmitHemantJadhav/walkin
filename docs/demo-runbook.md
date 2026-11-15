@@ -335,6 +335,7 @@ Other houses, measured the same way on today's `main`:
 | furniture won't move | `walkin.physics.enabled = false` |
 | furniture flies away when you carry it with your hands | add `&dgain=0` to the URL — that turns off hand-depth push/pull (#50) |
 | everything looks wrong | `walkin.clearLayout()` then `⌂ Stage room` |
+| John's voice is odd, talks over you, or the conversation stalls | `&live=off` — drops back to the pipeline we have been rehearsing all along: speech-to-text, a text model, then a separate voice. Live is **on by default** and it is the newest thing in the demo, so this is the first switch to reach for |
 | the walk between scan points looks wrong | `&a6=off` — plain cross-fade for every move, the way it behaved before A6. `&a6=round` only swaps the wall proxy back and **still blinks** on long jumps, so `off` is the only full rollback |
 | John answers but has no voice | expected — there is no ElevenLabs key, so `/api/tts` 404s and he falls back to the **browser voice**. Verified on the live tunnel; the doorway sentence is spoken. Don't "fix" the 404 by removing the fallback |
 | John goes quiet after a `git pull` | restart `serve.py`. It is read once at startup, so a pull leaves the old process serving and `/api/health` 404s. `preflight` names this one |

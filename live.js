@@ -8,11 +8,15 @@
 //   walkin.live.start({ firstText })   -> Promise<void>, resolves when the conversation ends
 //   walkin.live.stop()
 //   walkin.live.prime()                -> call inside a tap: iOS only plays audio from a context started in a gesture
+// When Live fails (quota "Resource has been exhausted", 429 on /api/live-token, a dropped socket, a hung connect)
+// start() resolves false, or { fallback: true, text } when the session died mid-turn with words John never answered,
+// and Live is switched off for a while, so voice.js answers through the classic pipeline instead of going silent.
 // URL: ?live=off disables it, ?voice=<name> picks a Gemini voice (Charon, Puck, Kore, Achird, Sulafat, …).
 
 const params = new URLSearchParams(location.search);
-const IDLE_MS = 9000;             // nobody spoke for this long: end the conversation, back to "Hey John" (short, so a
-                                  // presenter talking to the room isn't taken as more conversation for long)
+// nobody spoke for this long: end the conversation, back to waiting for "John". 30 s so a demo can carry on without
+// saying the name each time (Amit); "thanks John" / "bye" ends it at once. ?idle=<seconds> to change.
+const IDLE_MS = (Number(params.get('idle')) || 30) * 1000;
 const CONNECT_MS = 6000;          // venue Wi-Fi: give up on a connection that hangs
 const BYE = /\b(bye|goodbye|that'?s all|that'?s it|thanks?,? john|thank you,? john|cheers,? john|stop listening|we'?re done|perfect,? thanks)\b/i;
 const IN_RATE = 16000, OUT_RATE = 24000;
@@ -28,14 +32,26 @@ Before any action that takes a moment (wallpaper, staging, plants), first say th
 there is never dead air.`;
 
 let sdk = null, healthLive = null, connecting = null;
+let downUntil = 0, downWhy = '';                 // Live failed: skip it until then (quota resets slowly; a blip quickly)
+const QUOTA = /exhaust|quota|429|rate.?limit|resource|billing|too many/i;
+function markDown(why) {
+  const quota = QUOTA.test(String(why || ''));
+  downUntil = Date.now() + (quota ? 10 * 60e3 : 60e3);
+  downWhy = String(why || 'error');
+  console.info(`[live] off for ${quota ? '10 min' : '1 min'}: ${downWhy}`);
+  emit({ kind: 'state', state: 'down', reason: downWhy, quota });
+}
 let session = null, micStream = null, micCtx = null, micNode = null, playCtx = null;
 let playing = [], nextAt = 0, idleTimer = 0, ending = false, resolveEnd = null, active = false;
+let pending = '', answered = false;              // words of the turn in flight, and whether John answered them yet
 
-const emit = (detail) => window.dispatchEvent(new CustomEvent('walkin:live', { detail }));
+let speakingNow = false; // for app.js: wait for John to finish before switching house and office
+const emit = (detail) => { if (detail.kind === 'speaking') speakingNow = !!detail.on; window.dispatchEvent(new CustomEvent('walkin:live', { detail })); };
 
 // ------------------------------------------------------------------ availability
 async function available() {
   if (params.get('live') === 'off') return false;
+  if (Date.now() < downUntil) return false;
   if (healthLive === null) {
     try { healthLive = !!(await (await fetch('/api/health')).json()).live; } catch (e) { healthLive = false; }
   }
@@ -182,24 +198,26 @@ function touch() {                               // someone said something: push
 
 let userLine = '', johnLine = '', saidBye = false;
 function onMessage(m) {
-  if (m.toolCall) { touch(); onToolCall(m.toolCall); }
+  if (m.toolCall) { touch(); answered = true; onToolCall(m.toolCall); }
   const sc = m.serverContent;
   if (!sc) return;
   if (sc.interrupted) { stopPlayback(); johnLine = ''; }
   if (sc.inputTranscription && sc.inputTranscription.text) {
     touch();
     userLine = (userLine + sc.inputTranscription.text).replace(/\s+/g, ' ');
+    pending = userLine; answered = false;
     if (BYE.test(userLine)) saidBye = true;
     emit({ kind: 'user', text: userLine.trim() });
   }
   for (const p of (sc.modelTurn && sc.modelTurn.parts) || []) {
-    if (p.inlineData && p.inlineData.data) { touch(); playChunk(p.inlineData.data); }
+    if (p.inlineData && p.inlineData.data) { touch(); answered = true; playChunk(p.inlineData.data); }
   }
   if (sc.outputTranscription && sc.outputTranscription.text) {
     johnLine = (johnLine + sc.outputTranscription.text).replace(/\s+/g, ' ');
     emit({ kind: 'john', text: johnLine.trim() });
   }
   if (sc.turnComplete) {
+    pending = '';
     userLine = ''; johnLine = '';
     emit({ kind: 'turn' });
     if (saidBye) {                               // let the goodbye finish playing, then hang up
@@ -232,7 +250,7 @@ async function start({ firstText = '' } = {}) {
   try {
     const tok = await fetch('/api/live-token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const t = await tok.json().catch(() => ({}));
-    if (!tok.ok || !t.token) throw new Error((t.error && (t.error.message || t.error)) || `live-token ${tok.status}`);
+    if (!tok.ok || !t.token) throw new Error(`live-token ${tok.status}: ${(t.error && (t.error.message || t.error)) || 'no token'}`);
     sdk = sdk || await import('./vendor/genai/genai.mjs');
     const ai = new sdk.GoogleGenAI({ apiKey: t.token, httpOptions: { apiVersion: t.apiVersion || 'v1beta' } });
     const agent = window.walkin.agent;
@@ -250,8 +268,14 @@ async function start({ firstText = '' } = {}) {
       },
       callbacks: {
         onmessage: onMessage,
-        onerror: (e) => { console.warn('[live] error', e && (e.message || e)); stop('error'); },
-        onclose: (e) => { if (!ending) { console.info('[live] closed', e && (e.reason || e.code)); stop('closed'); } },
+        onerror: (e) => { console.warn('[live] error', e && (e.message || e)); fail((e && (e.message || e)) || 'error'); },
+        onclose: (e) => {
+          if (ending) return;
+          const why = (e && (e.reason || e.code)) || 'closed';
+          console.info('[live] closed', why);
+          // 1000 is a normal close; anything else (1011 "Resource has been exhausted", 1006 dropped) is a failure
+          if (e && e.code && e.code !== 1000) fail(why); else stop('closed');
+        },
       },
     });
     session = await withTimeout(connecting, CONNECT_MS, 'connecting to Gemini Live timed out');
@@ -262,6 +286,7 @@ async function start({ firstText = '' } = {}) {
     }
     emit({ kind: 'state', state: 'live' });
     touch();
+    pending = firstText; answered = false;
     if (firstText) {                             // what was said after "Hey John" is the first turn: send it now,
       emit({ kind: 'user', text: firstText });   // don't make it wait for the microphone to come up
       session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: firstText }] }], turnComplete: true });
@@ -277,6 +302,7 @@ async function start({ firstText = '' } = {}) {
   } catch (e) {
     if (connecting) connecting.then((late) => { if (late !== session) { try { late.close(); } catch (err) { /* gone */ } } }).catch(() => {});
     console.warn('[live] could not start:', e && (e.message || e));
+    markDown(e && (e.message || e));
     emit({ kind: 'state', state: 'failed', reason: String(e && e.message || e) });
     cleanup();
     active = false;
@@ -293,7 +319,14 @@ function cleanup() {
   session = null;
 }
 
-function stop(why = 'stop') {
+/** The session broke: switch Live off for a while and hand back what John still owed an answer to. */
+function fail(why) {
+  if (!active || ending) return;
+  markDown(why);
+  stop('error', !answered && pending.trim() ? { fallback: true, text: pending.trim(), why: String(why) } : { fallback: true, why: String(why) });
+}
+
+function stop(why = 'stop', result = true) {
   if (!active || ending) return;
   ending = true;
   cleanup();
@@ -301,10 +334,11 @@ function stop(why = 'stop') {
   active = false;
   emit({ kind: 'state', state: 'ended', why });
   const r = resolveEnd; resolveEnd = null;
-  r && r(true);
+  r && r(result);
 }
 
 (function attach(tries = 0) {
   if (!window.walkin || !window.walkin.agent) { if (tries < 600) setTimeout(() => attach(tries + 1), 200); return; }
-  window.walkin.live = { available, start, stop, prime, sayExact, isActive: () => active, _onMessage: onMessage, _upperTypes: upperTypes };
+  window.walkin.live = { available, start, stop, prime, sayExact, isActive: () => active, isSpeaking: () => speakingNow, _onMessage: onMessage, _upperTypes: upperTypes,
+    markDown, down: () => (Date.now() < downUntil ? downWhy : null), _fail: fail };
 })();

@@ -12,13 +12,15 @@
 //
 // Exposed as walkin.realFurniture(). Talks to the viewer only through window.walkin.
 import * as THREE from 'three';
-import { FURNITURE, buildFurniture } from './furniture.js';
+import { FURNITURE, buildFurniture, shadowTexture } from './furniture.js';
 import { localToModel } from './lighting.js';
 
 const W = 1024, H = 512;                 // detection resolution: enough for a 25 cm object at 4 m
 const DIFF = 35;                         // per-channel difference that counts as "something is here"
 const MIN_PX = 1200;                     // smaller than this is clutter, not furniture
-const MAX_REACH = 12;                    // metres: beyond this the floor ray is too grazing to trust
+const MAX_REACH = 12;
+const PHONE = navigator.maxTouchPoints > 1 && /iPhone|iPad|Android/i.test(navigator.userAgent);
+const OPEN_EDGE_OK = 0.02;       // open-edge share a piece can have and still be drawn front-faces-only                    // metres: beyond this the floor ray is too grazing to trust
 
 const a = document.createElement('canvas'); a.width = W; a.height = H;
 const actx = a.getContext('2d', { willReadFrequently: true });
@@ -433,10 +435,18 @@ function checkSwap() {
 const meshMade = [];
 
 /** Load the pieces `tools/meshdiff.py` found. `walkin.meshFurniture()`. */
-export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {}) {
+export async function meshFurniture({ room = null, max = 40, minSize = 0.3,
+                                     maxFold = null, maxCaptured = null, worst = null,
+                                     model = null, into = null } = {}) {
   const w = window.walkin;
   if (!w || !w.house) return { ok: false, say: 'the viewer is not ready' };
-  const base = location.pathname.replace(/[^/]*$/, '') + `data/${w.house.model}/`;
+  // `model` loads another house's pieces into this one - your own sofa, cut from your own scan,
+  // standing in the house you are thinking of buying. `into` is [x, y] in this house's frame for
+  // the first piece's footprint centre; without it the pieces land where they stood at home,
+  // which means nothing here.
+  const foreign = !!(model && model !== w.house.model);
+  let row = null;                     // where foreign pieces line up
+  const base = location.pathname.replace(/[^/]*$/, '') + `data/${model || w.house.model}/`;
   let meta, buf;
   try {
     const [a, b] = await Promise.all([fetch(base + 'furniture.json'), fetch(base + 'furniture.bin')]);
@@ -453,10 +463,22 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
   // is most of the time.
   const maxAniso = w.renderer ? Math.min(8, w.renderer.capabilities.getMaxAnisotropy()) : 1;
   const placed = [];
+  const skipped = [];
   for (const p of meta.pieces) {
     if (placed.length >= max) break;
     if (Math.max(p.size[0], p.size[1]) < minSize) continue;
     if (room && p.room !== room) continue;
+    // Photogrammetry reconstructs a bed well and a dining chair badly, and tools/meshquality.py
+    // measures the difference: fold is the mean angle between neighbouring triangles (a flat table
+    // top should be near zero), captured is surface area over hull area (above 1 means the surface
+    // wanders past its own hull, which is noise, not detail). Neither is on by default - a caller
+    // that wants only the pieces that hold up asks for it.
+    // `worst` is the one to reach for: 0.25 drops the quarter of this house that reconstructed
+    // least well. fold itself is not comparable between houses - La Mirada's median is 30 degrees
+    // and Gale Street's is 35, so a fixed cut takes a third of one and three fifths of the other.
+    if (worst != null && p.foldRank != null && p.foldRank >= 1 - worst) { skipped.push(p.i); continue; }
+    if (maxFold != null && p.fold != null && p.fold > maxFold) { skipped.push(p.i); continue; }
+    if (maxCaptured != null && p.captured != null && p.captured > maxCaptured) { skipped.push(p.i); continue; }
 
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(buf, p.pos[0], p.pos[1] / 4), 3));
@@ -474,7 +496,19 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
     // well, mush on anything in a far corner.
     let map = null;
     if (p.tex) {
-      map = texLoader.load(base + 'furniture-tex/' + p.tex);
+      // A phone gets the atlases at half size: forty of them at up to 1024x1536 are ~160 MB of GPU
+      // texture with mips, and the upload stutters the first frames each piece is seen. Half is
+      // 40 MB and still ~125 px/m, which at arm's length is what the screen can show anyway.
+      map = texLoader.load(base + 'furniture-tex/' + p.tex, (tex) => {
+        const im = tex.image;
+        if (!PHONE || !im || Math.max(im.width, im.height) <= 768) return;
+        // A canvas, not an ImageBitmap: WebGL ignores flipY for ImageBitmap sources, so every atlas
+        // would have sampled upside down on exactly the devices we demo on (Amit, #135). Synchronous
+        // too, so the full-size upload never happens.
+        const c = document.createElement('canvas'); c.width = im.width >> 1; c.height = im.height >> 1;
+        const g2 = c.getContext('2d'); g2.imageSmoothingQuality = 'high'; g2.drawImage(im, 0, 0, c.width, c.height);
+        tex.image = c; tex.needsUpdate = true;
+      });
       map.colorSpace = THREE.SRGBColorSpace;
       map.anisotropy = maxAniso;
       map.generateMipmaps = true;
@@ -482,16 +516,44 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
       map.magFilter = THREE.LinearFilter;
       map.flipY = true;
     }
-    const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({
-      map, vertexColors: !map && !!p.col,
-      roughness: 0.85, metalness: 0, side: THREE.DoubleSide }));
+    // Unlit. The MatterPak texture already holds the room's light - it is a photograph of the piece -
+    // and lighting it again (MeshStandardMaterial under the scene's ambient + environment) washed
+    // the contrast out of every texel, which read as blur. Drawn as scanned, the tufting on the sofa
+    // is tufting again. The sun's shadow is still cast (that is the geometry, not the material).
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      map, vertexColors: !map && !!p.col, toneMapped: false, side: THREE.FrontSide }));
+    // The inside of the shell, seen through the gaps the scan left, used to show at full brightness
+    // as bright brown flags on the seat. Drawn as a second pass, dark, a gap reads as the shadowed
+    // inside of a piece, which is what it is.
+    const inner = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      map, vertexColors: !map && !!p.col, toneMapped: false, side: THREE.BackSide, color: 0x8a8a8a }));
+    inner.renderOrder = 2;
+    inner.userData.inner = true;
     mesh.renderOrder = 2;
+    mesh.castShadow = true;                // the sun (sun.js) throws its shadow like any catalog piece
     const grp = new THREE.Group();
     grp.add(mesh);
+    grp.add(inner);
     // meshdiff wrote each piece about its own footprint centre at its lowest point, so it stands at the
     // height it was measured at. Using the current pano's floor instead would put every piece on the
     // storey you happen to be standing on, and drop the upstairs furniture into the hall (Amit, #108).
-    grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
+    if (foreign) {
+      // a row of pieces, side by side: from `into`, or 2 m in front of the viewer (never on the
+      // viewer's own spot, which put every piece inside the camera), each one past the last
+      const cur = w.current || {};
+      const fz = cur.floorZ ?? floorZ;
+      if (!row) {
+        const yaw = (w.view && w.view.yaw) || 0, at = cur.pos || [0, 0];
+        row = { x: into ? into[0] : at[0] + Math.cos(yaw) * 2, y: into ? into[1] : at[1] + Math.sin(yaw) * 2,
+                sx: -Math.sin(yaw), sy: Math.cos(yaw), next: 0 };
+      }
+      const half = Math.max(p.size[0], p.size[1]) / 2;
+      const off = row.next ? row.next + half : 0;
+      grp.position.set(row.x + row.sx * off, row.y + row.sy * off, fz);
+      row.next = off + half + 0.3;       // 30 cm between pieces
+    } else {
+      grp.position.set(p.at[0], p.at[1], p.at.length > 2 ? p.at[2] : floorZ);
+    }
     const kind = `mesh${++seq}`;
     FURNITURE[kind] = { name: p.room ? `${p.room.toLowerCase()} piece` : 'piece the home already had',
                         real: true, mesh: true,
@@ -499,16 +561,49 @@ export async function meshFurniture({ room = null, max = 40, minSize = 0.3 } = {
     grp.userData.kind = kind;
     grp.userData.real = true;
     grp.userData.meshPiece = true;
+    grp.userData.i = p.i;
     grp.userData.z0 = grp.position.z;
+    grp.userData.floor = foreign ? (w.current && w.current.floor) : (p.floor || (w.current && w.current.floor));
+    // The scanner rarely sees a piece's feet, so most pieces' lowest point is 5-25 cm above the floor
+    // (the sofa's is 19 cm) and they are drawn at that height, which is right in place - the photo's
+    // own sofa is under them - and reads as hovering the moment they move. The piece keeps its true
+    // height (dropping it would sink it into its photo twin); what says "on the floor" is the contact
+    // shadow, so it gets the catalog's blob, on the floor itself, sized to its footprint. Wall-hung
+    // things (a mirror 1.2 m up) get none.
+    const gap = foreign ? 0 : (p.floorGap ?? 0);
+    if (gap < 0.5) {
+      const sh = new THREE.Mesh(new THREE.PlaneGeometry(p.size[0] * 1.25, p.size[1] * 1.25),
+        new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: 0.42 }));
+      // floorGap is against the house's median floor; the floor under this piece can sit a few cm
+      // above that (the living room's is +4 cm), and the occluder would hide a blob laid below it.
+      // So the blob goes on whichever is higher, the median floor or the nearest scan point's, +3 cm.
+      const pieceFloor = grp.position.z - Math.max(0, gap);
+      // the floor of the nearest scan point on this piece's storey and within 30 cm of its own floor:
+      // 7axUS8XrcSc's scan-point floors run from -0.9 to 0 m, and a piece by a step must not borrow
+      // the wrong level (Amit, #135)
+      let near = { d: Infinity, z: null };
+      for (const q of w.house.panos || []) {
+        if (!q.pos || q.floorZ == null) continue;
+        if (grp.userData.floor && q.floor && q.floor !== grp.userData.floor) continue;
+        if (Math.abs(q.floorZ - pieceFloor) > 0.3) continue;
+        const dd = Math.hypot(q.pos[0] - grp.position.x, q.pos[1] - grp.position.y);
+        if (dd < near.d) near = { d: dd, z: q.floorZ };
+      }
+      sh.position.z = Math.max(pieceFloor, near.z ?? floorZ) - grp.position.z + 0.03;
+      sh.renderOrder = 1;
+      sh.userData.shadow = true;
+      grp.add(sh);
+    }
     // physics finds a piece's walls and its neighbours by floor, so a piece upstairs must not collide
     // with a wall downstairs. meshdiff works this out from the piece's own height.
-    grp.userData.floor = p.floor || (w.current && w.current.floor);
+    grp.userData.floor = foreign ? (w.current && w.current.floor) : (p.floor || (w.current && w.current.floor));
     w.furniture.add(grp);
     meshMade.push(grp);
     placed.push({ kind, room: p.room, size: p.size, tris: p.tris });
   }
   return { ok: true, ms: Math.round(performance.now() - t0), built: meta.built,
            available: meta.pieces.length, placed: placed.length, items: placed,
+           skipped: skipped.length, skippedPieces: skipped,
            say: placed.length ? `I put back ${placed.length} pieces of the home's own furniture, as real objects.`
                               : 'I found no mesh furniture to place.' };
 }

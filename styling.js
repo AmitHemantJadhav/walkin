@@ -77,8 +77,11 @@ async function settled(item) {
   const hero = (spec.heroBy && spec.heroBy[item.userData.style]) || spec.hero;
   for (let i = 0; i < 30 && hero && item.userData.model !== hero; i++) await new Promise((r) => setTimeout(r, 100));
 }
+function dispose(g) {
+  g.traverse((n) => { if (n.isMesh && n.geometry) n.geometry.dispose(); });   // materials are shared and cached: kept
+}
 function clearStyling(item, what) {
-  for (const c of [...item.children]) if (c.userData.styling === what) item.remove(c);
+  for (const c of [...item.children]) if (c.userData.styling === what) { item.remove(c); dispose(c); }
 }
 
 // ------------------------------------------------------------------ the pieces
@@ -214,6 +217,7 @@ function removeCurtains(room) {
     const g = curtainGroups[i];
     if (room && g.userData.room !== room.id) continue;
     g.parent && g.parent.remove(g);
+    dispose(g);
     curtainGroups.splice(i, 1);
   }
 }
@@ -305,7 +309,10 @@ export function clearStyle(roomName) {
   const w = W();
   const r = roomName ? w.house.rooms.find((x) => lower(x.label).includes(lower(roomName))) : w.roomAt(w.current.pos[0], w.current.pos[1], w.current.floor);
   removeCurtains(r);
-  for (const o of w.furniture.children) for (const c of [...o.children]) if (c.userData.styling) o.remove(c);
+  for (const o of w.furniture.children) {
+    if (r && w.roomAt(o.position.x, o.position.y, o.userData.floor) !== r) continue;   // only the room asked for
+    for (const c of [...o.children]) if (c.userData.styling) { o.remove(c); dispose(c); }
+  }
   return { ok: true };
 }
 
